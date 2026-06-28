@@ -10,11 +10,27 @@ struct SettingsView: View {
     @AppStorage(AppSettings.Keys.searchIntervalMiles)
     private var searchIntervalMiles = AppSettings.searchIntervalMilesDefault
 
+    @AppStorage(AppSettings.Keys.routeStyle)
+    private var routeStyle = AppSettings.routeStyleDefault
+
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    Picker("Route style", selection: $routeStyle) {
+                        ForEach(RouteStyle.allCases) { style in
+                            Label(style.rawValue, systemImage: style.systemImage)
+                                .tag(style)
+                        }
+                    }
+                } header: {
+                    Text("Route Style")
+                } footer: {
+                    Text(routeStyle.detail)
+                }
+
                 Section {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {

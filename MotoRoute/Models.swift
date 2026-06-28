@@ -52,6 +52,44 @@ enum StopCategory: String, CaseIterable, Identifiable {
     }
 }
 
+/// How the planner should bias route calculation. Riders often prefer twisty
+/// back roads over the fastest stretch of interstate, so MotoRoute can avoid
+/// highways and, for scenic rides, tolls — favoring quieter, more scenic roads.
+enum RouteStyle: String, CaseIterable, Identifiable {
+    case fastest = "Fastest"
+    case avoidHighways = "Avoid Highways"
+    case scenic = "Scenic"
+
+    var id: String { rawValue }
+
+    var systemImage: String {
+        switch self {
+        case .fastest:       return "bolt.fill"
+        case .avoidHighways: return "road.lanes"
+        case .scenic:        return "mountain.2.fill"
+        }
+    }
+
+    /// A short, rider-facing description of what the style does.
+    var detail: String {
+        switch self {
+        case .fastest:       return "The quickest route, highways included."
+        case .avoidHighways: return "Stays off highways where possible."
+        case .scenic:        return "Favors quiet back roads, avoiding highways and tolls."
+        }
+    }
+
+    /// Whether the routing request should avoid highways.
+    var avoidsHighways: Bool { self != .fastest }
+
+    /// Whether the routing request should also avoid tolls (scenic rides favor
+    /// quiet roads, which usually means steering clear of toll plazas too).
+    var avoidsTolls: Bool { self == .scenic }
+
+    /// Whether to fetch alternate routes and pick the most scenic one.
+    var prefersAlternates: Bool { self == .scenic }
+}
+
 /// A recommended stop found near the route corridor.
 struct SuggestedStop: Identifiable {
     let id = UUID()

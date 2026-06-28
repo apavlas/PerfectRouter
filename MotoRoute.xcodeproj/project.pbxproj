@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 70;
+	objectVersion = 110;
 	objects = {
 
 /* Begin PBXContainerItemProxy section */
@@ -22,7 +22,7 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		CF3743E02FD8C83300F8F1DE /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+		CF3743E02FD8C83300F8F1DE /* Exceptions for "MotoRoute" folder in "MotoRoute" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
@@ -32,24 +32,31 @@
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		AA0000000000000000000001 /* MotoRoute */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (CF3743E02FD8C83300F8F1DE /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = MotoRoute; sourceTree = "<group>"; };
-		BB0000000000000000000002 /* MotoRouteTests */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = MotoRouteTests; sourceTree = "<group>"; };
+		AA0000000000000000000001 /* MotoRoute */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				CF3743E02FD8C83300F8F1DE /* Exceptions for "MotoRoute" folder in "MotoRoute" target */,
+			);
+			path = MotoRoute;
+			sourceTree = "<group>";
+		};
+		BB0000000000000000000002 /* MotoRouteTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = MotoRouteTests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		AA0000000000000000000002 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
 			files = (
 			);
-			runOnlyForDeploymentPostprocessing = 0;
 		};
 		BB0000000000000000000005 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
 			files = (
 			);
-			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
 
@@ -85,14 +92,10 @@
 			);
 			buildRules = (
 			);
-			dependencies = (
-			);
 			fileSystemSynchronizedGroups = (
 				AA0000000000000000000001 /* MotoRoute */,
 			);
 			name = MotoRoute;
-			packageProductDependencies = (
-			);
 			productName = MotoRoute;
 			productReference = AA0000000000000000000005 /* MotoRoute.app */;
 			productType = "com.apple.product-type.application";
@@ -114,8 +117,6 @@
 				BB0000000000000000000002 /* MotoRouteTests */,
 			);
 			name = MotoRouteTests;
-			packageProductDependencies = (
-			);
 			productName = MotoRouteTests;
 			productReference = BB0000000000000000000001 /* MotoRouteTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
@@ -140,7 +141,6 @@
 				};
 			};
 			buildConfigurationList = AA000000000000000000000B /* Build configuration list for PBXProject "MotoRoute" */;
-			compatibilityVersion = "Xcode 15.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -149,6 +149,7 @@
 			);
 			mainGroup = AA0000000000000000000003;
 			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 110;
 			productRefGroup = AA0000000000000000000004 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -162,34 +163,26 @@
 /* Begin PBXResourcesBuildPhase section */
 		AA0000000000000000000009 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
 			files = (
 			);
-			runOnlyForDeploymentPostprocessing = 0;
 		};
 		BB0000000000000000000006 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
 			files = (
 			);
-			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		AA0000000000000000000008 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
 			files = (
 			);
-			runOnlyForDeploymentPostprocessing = 0;
 		};
 		BB0000000000000000000004 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
 			files = (
 			);
-			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
@@ -202,7 +195,7 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
-		AA000000000000000000000C /* Debug */ = {
+		AA000000000000000000000C /* Debug configuration for PBXProject "MotoRoute" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -258,7 +251,7 @@
 			};
 			name = Debug;
 		};
-		AA000000000000000000000D /* Release */ = {
+		AA000000000000000000000D /* Release configuration for PBXProject "MotoRoute" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -307,7 +300,7 @@
 			};
 			name = Release;
 		};
-		AA000000000000000000000E /* Debug */ = {
+		AA000000000000000000000E /* Debug configuration for PBXNativeTarget "MotoRoute" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -321,6 +314,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = MotoRoute/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = MotoRoute;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.travel";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "MotoRoute uses your location to plot routes from where you are and to recommend fuel and rest stops along the way.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -342,7 +336,7 @@
 			};
 			name = Debug;
 		};
-		AA000000000000000000000F /* Release */ = {
+		AA000000000000000000000F /* Release configuration for PBXNativeTarget "MotoRoute" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -356,6 +350,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = MotoRoute/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = MotoRoute;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.travel";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "MotoRoute uses your location to plot routes from where you are and to recommend fuel and rest stops along the way.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -377,7 +372,7 @@
 			};
 			name = Release;
 		};
-		BB0000000000000000000008 /* Debug */ = {
+		BB0000000000000000000008 /* Debug configuration for PBXNativeTarget "MotoRouteTests" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
@@ -395,7 +390,7 @@
 			};
 			name = Debug;
 		};
-		BB0000000000000000000009 /* Release */ = {
+		BB0000000000000000000009 /* Release configuration for PBXNativeTarget "MotoRouteTests" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
@@ -419,28 +414,25 @@
 		AA0000000000000000000007 /* Build configuration list for PBXNativeTarget "MotoRoute" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				AA000000000000000000000E /* Debug */,
-				AA000000000000000000000F /* Release */,
+				AA000000000000000000000E /* Debug configuration for PBXNativeTarget "MotoRoute" */,
+				AA000000000000000000000F /* Release configuration for PBXNativeTarget "MotoRoute" */,
 			);
-			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
 		AA000000000000000000000B /* Build configuration list for PBXProject "MotoRoute" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				AA000000000000000000000C /* Debug */,
-				AA000000000000000000000D /* Release */,
+				AA000000000000000000000C /* Debug configuration for PBXProject "MotoRoute" */,
+				AA000000000000000000000D /* Release configuration for PBXProject "MotoRoute" */,
 			);
-			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
 		BB0000000000000000000007 /* Build configuration list for PBXNativeTarget "MotoRouteTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				BB0000000000000000000008 /* Debug */,
-				BB0000000000000000000009 /* Release */,
+				BB0000000000000000000008 /* Debug configuration for PBXNativeTarget "MotoRouteTests" */,
+				BB0000000000000000000009 /* Release configuration for PBXNativeTarget "MotoRouteTests" */,
 			);
-			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */

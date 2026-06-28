@@ -12,17 +12,26 @@ enum AppSettings {
     enum Keys {
         static let defaultFuelRangeMiles = "settings.defaultFuelRangeMiles"
         static let searchIntervalMiles = "settings.searchIntervalMiles"
+        static let routeStyle = "settings.routeStyle"
     }
 
     static let defaultFuelRangeMilesDefault = 100.0
     static let searchIntervalMilesDefault = 25.0
+    static let routeStyleDefault = RouteStyle.fastest
 
     /// Registers default values so first-launch reads are sensible.
     static func registerDefaults() {
         UserDefaults.standard.register(defaults: [
             Keys.defaultFuelRangeMiles: defaultFuelRangeMilesDefault,
             Keys.searchIntervalMiles: searchIntervalMilesDefault,
+            Keys.routeStyle: routeStyleDefault.rawValue,
         ])
+    }
+
+    /// The rider's preferred route style, used to seed new sessions.
+    static var defaultRouteStyle: RouteStyle {
+        let raw = UserDefaults.standard.string(forKey: Keys.routeStyle)
+        return raw.flatMap(RouteStyle.init(rawValue:)) ?? routeStyleDefault
     }
 
     static var defaultFuelRangeMeters: CLLocationDistance {

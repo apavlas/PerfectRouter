@@ -1,3 +1,4 @@
+import Contacts
 import Foundation
 import MapKit
 import Observation
@@ -30,6 +31,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// Rider's fuel range in meters (default ~100 miles).
     var fuelRangeMeters: CLLocationDistance = 160_900
 
+    /// How routes are biased — fastest, avoiding highways, or scenic back roads.
+    var routeStyle: RouteStyle = .fastest
+
     private var suggestionService = StopSuggestionService()
 
     /// Rides the rider has saved on this device, most recent first.
@@ -50,6 +54,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         savedRoutes = savedRouteStore.load()
         // Seed session defaults from the rider's saved preferences.
         fuelRangeMeters = AppSettings.defaultFuelRangeMeters
+        routeStyle = AppSettings.defaultRouteStyle
         suggestionService.sampleIntervalMeters = AppSettings.searchIntervalMeters
         // If already authorized from a previous launch, begin tracking now.
         startTrackingIfAuthorized()
@@ -80,6 +85,12 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// adjustment isn't overwritten.
     func applySettings() {
         suggestionService.sampleIntervalMeters = AppSettings.searchIntervalMeters
+        // Pick up a route style changed in Settings and re-plan if it differs.
+        let newStyle = AppSettings.defaultRouteStyle
+        if newStyle != routeStyle {
+            routeStyle = newStyle
+            Task { await recalculateRoute() }
+        }
     }
 
     func requestLocationPermission() {
@@ -156,6 +167,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     private let weatherService = RouteWeatherService()
 
+    /// Posts a local rain warning so the rider is alerted after they've put the
+    /// phone away. Mirrors the on-screen `rainWarning`.
+    private let weatherNotifier = WeatherNotificationService()
+
     /// A rider-facing rain warning, or `nil` when rain is unlikely / unknown.
     var rainWarning: String? {
         guard let forecast = rainForecast, forecast.maxChance >= Self.rainChanceThreshold else {
@@ -227,6 +242,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
         guard waypoints.count >= 2 else {
             legs = []
+            await weatherNotifier.updateRainWarning(nil)
             return
         }
 
@@ -240,10 +256,15 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             request.source = MKMapItem(placemark: MKPlacemark(coordinate: waypoints[i].coordinate))
             request.destination = MKMapItem(placemark: MKPlacemark(coordinate: waypoints[i + 1].coordinate))
             request.transportType = .automobile
+            // Bias the route to the rider's chosen style.
+            request.highwayPreference = routeStyle.avoidsHighways ? .avoid : .any
+            request.tollPreference = routeStyle.avoidsTolls ? .avoid : .any
+            // Scenic rides ask for alternates so we can pick the most scenic one.
+            request.requestsAlternateRoutes = routeStyle.prefersAlternates
 
             do {
                 let response = try await MKDirections(request: request).calculate()
-                guard let route = response.routes.first else {
+                guard let route = Self.preferredRoute(from: response.routes, style: routeStyle) else {
                     errorMessage = "No route found between \(waypoints[i].name) and \(waypoints[i + 1].name)."
                     legs = []
                     return
@@ -264,6 +285,26 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         await refreshWeather()
     }
 
+    /// Changes the route style, remembers it as the rider's new default, and
+    /// re-plans the current ride so the change is reflected immediately.
+    func setRouteStyle(_ style: RouteStyle) {
+        guard style != routeStyle else { return }
+        routeStyle = style
+        UserDefaults.standard.set(style.rawValue, forKey: AppSettings.Keys.routeStyle)
+        Task { await recalculateRoute() }
+    }
+
+    /// Picks which of MapKit's returned routes to use for a leg. For scenic
+    /// rides we prefer a route that avoids highways, and among those the longest
+    /// — back-roads detours tend to be the more scenic option. Otherwise we take
+    /// MapKit's top recommendation.
+    nonisolated static func preferredRoute(from routes: [MKRoute], style: RouteStyle) -> MKRoute? {
+        guard style.prefersAlternates else { return routes.first }
+        let withoutHighways = routes.filter { !$0.hasHighways }
+        let candidates = withoutHighways.isEmpty ? routes : withoutHighways
+        return candidates.max(by: { $0.distance < $1.distance }) ?? routes.first
+    }
+
     // MARK: - Weather
 
     /// Checks the route for rain at the rider's expected time of passing.
@@ -271,11 +312,15 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     func refreshWeather() async {
         guard !legs.isEmpty else {
             rainForecast = nil
+            await weatherNotifier.updateRainWarning(nil)
             return
         }
         isCheckingWeather = true
         defer { isCheckingWeather = false }
         rainForecast = await weatherService.rainForecast(alongLegs: legs, departure: Date())
+        // Surface the same warning shown on screen as a local notification so
+        // the rider is alerted even if they've stopped looking at the app.
+        await weatherNotifier.updateRainWarning(rainWarning)
     }
 
     // MARK: - Gas stations & automatic fuel planning
@@ -517,5 +562,23 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         request.region = region
         let response = try? await MKLocalSearch(request: request).start()
         return response?.mapItems ?? []
+    }
+
+    // MARK: - Contacts
+
+    /// Forward-geocodes a postal address picked from the rider's contacts and
+    /// adds it as a waypoint. Surfaces an error (rather than failing silently)
+    /// when the address can't be located. Returns the added waypoint, or `nil`.
+    @discardableResult
+    func addWaypoint(named name: String, at postalAddress: CNPostalAddress) async -> Waypoint? {
+        let placemarks = try? await CLGeocoder().geocodePostalAddress(postalAddress)
+        guard let coordinate = placemarks?.first?.location?.coordinate,
+              coordinate.isValidLocation else {
+            errorMessage = "Couldn't find a location for \(name)."
+            return nil
+        }
+        let waypoint = Waypoint(name: name, coordinate: coordinate)
+        addWaypoint(waypoint)
+        return waypoint
     }
 }

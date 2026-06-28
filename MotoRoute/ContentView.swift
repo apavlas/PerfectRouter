@@ -1,5 +1,6 @@
 import SwiftUI
 import MapKit
+import Contacts
 
 struct ContentView: View {
     @State private var viewModel = RoutePlannerViewModel()
@@ -18,7 +19,7 @@ struct ContentView: View {
     @State private var saveRouteName = ""
     @State private var showingSettings = false
     @State private var showingHistory = false
-    @State private var showingMapsChooser = false
+    @State private var showingContactPicker = false
 
     var body: some View {
         // MapReader exposes a proxy that converts a pressed screen point into a
@@ -156,6 +157,7 @@ struct ContentView: View {
         NavigationStack {
             List {
                 searchSection
+                routeStyleSection
                 rideSummarySection
                 fuelRangeSection
                 if viewModel.selectedCategory != .gas && !viewModel.legs.isEmpty {
@@ -289,6 +291,12 @@ struct ContentView: View {
                     .filter { $0.placemark.coordinate.isValidLocation }
             }
 
+            Button {
+                showingContactPicker = true
+            } label: {
+                Label("Choose from Contacts", systemImage: "person.crop.circle")
+            }
+
             ForEach(searchResults.prefix(6), id: \.self) { item in
                 Button {
                     addSearchResult(item)
@@ -308,6 +316,35 @@ struct ContentView: View {
                 }
                 .buttonStyle(.plain)
             }
+        }
+        // The contact picker presents itself modally, so it lives invisibly in
+        // the background rather than as a `.sheet` (which made it flash and
+        // dismiss on the first tap).
+        .background {
+            ContactAddressPicker(isPresented: $showingContactPicker) { name, address in
+                addContactAddress(named: name, at: address)
+            }
+        }
+    }
+
+    /// Lets the rider bias routing toward scenic back roads or away from
+    /// highways. Changing the style re-plans the current ride immediately.
+    private var routeStyleSection: some View {
+        Section {
+            Picker("Route style", selection: Binding(
+                get: { viewModel.routeStyle },
+                set: { viewModel.setRouteStyle($0) }
+            )) {
+                ForEach(RouteStyle.allCases) { style in
+                    Label(style.rawValue, systemImage: style.systemImage)
+                        .tag(style)
+                }
+            }
+            .pickerStyle(.menu)
+        } header: {
+            Text("Route Style")
+        } footer: {
+            Text(viewModel.routeStyle.detail)
         }
     }
 
@@ -338,10 +375,28 @@ struct ContentView: View {
                     Label("Checking weather along your route…", systemImage: "cloud.sun.fill")
                         .foregroundStyle(.secondary)
                 }
+                // Primary, one-tap hand-off. Apple Maps is CarPlay-native, so
+                // its turn-by-turn guidance automatically continues on the car
+                // display once the rider connects to CarPlay.
                 Button {
-                    handleOpenInMaps()
+                    launchAppleMaps()
                 } label: {
-                    Label("Open in Maps", systemImage: "location.north.line.fill")
+                    Label("Navigate", systemImage: "car.fill")
+                        .frame(maxWidth: .infinity)
+                        .font(.headline)
+                }
+                .buttonStyle(.borderedProminent)
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+
+                // Optional alternative, only when Google Maps is installed.
+                // (Google Maps drives its own CarPlay support in its app.)
+                if NavigationLauncher.isGoogleMapsAvailable {
+                    Button {
+                        launchGoogleMaps()
+                    } label: {
+                        Label("Open in Google Maps", systemImage: "location.north.line.fill")
+                    }
                 }
             }
             if let here = viewModel.currentLocation,
@@ -357,22 +412,6 @@ struct ContentView: View {
             if let error = viewModel.errorMessage {
                 Text(error).foregroundStyle(.red)
             }
-        }
-        .confirmationDialog("Open route in", isPresented: $showingMapsChooser, titleVisibility: .visible) {
-            Button("Apple Maps") { launchAppleMaps() }
-            Button("Google Maps") { launchGoogleMaps() }
-            Button("Cancel", role: .cancel) { }
-        }
-    }
-
-    /// Hands off to a navigation app. If Google Maps is installed the rider can
-    /// choose; otherwise Apple Maps opens. The ride is logged only when a
-    /// navigation app is actually launched (not if the rider cancels).
-    private func handleOpenInMaps() {
-        if NavigationLauncher.isGoogleMapsAvailable {
-            showingMapsChooser = true
-        } else {
-            launchAppleMaps()
         }
     }
 
@@ -550,6 +589,16 @@ struct ContentView: View {
         searchResults = []
         searchText = ""
         recenter(on: waypoint.coordinate, spanDelta: 0.3)
+    }
+
+    /// Geocodes a postal address chosen from Contacts and adds it as a waypoint,
+    /// framing it on the map once it resolves.
+    private func addContactAddress(named name: String, at address: CNPostalAddress) {
+        Task {
+            if let waypoint = await viewModel.addWaypoint(named: name, at: address) {
+                recenter(on: waypoint.coordinate, spanDelta: 0.3)
+            }
+        }
     }
 
     /// Recenters the map on a coordinate, ignoring invalid / NaN coordinates
