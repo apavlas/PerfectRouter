@@ -40,6 +40,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     private(set) var savedRoutes: [SavedRoute] = []
     private let savedRouteStore = SavedRouteStore()
 
+    /// Named groups of riders this device shares rides with.
+    private(set) var riderGroups: [RiderGroup] = []
+    private let riderGroupStore = RiderGroupStore()
+
     /// History of rides the rider has sent to navigation.
     private let rideLogStore = RideLogStore()
 
@@ -52,6 +56,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters
         savedRoutes = savedRouteStore.load()
+        riderGroups = riderGroupStore.load()
         // Seed session defaults from the rider's saved preferences.
         fuelRangeMeters = AppSettings.defaultFuelRangeMeters
         routeStyle = AppSettings.defaultRouteStyle
@@ -551,6 +556,64 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     func deleteSavedRoutes(at offsets: IndexSet) {
         savedRoutes.remove(atOffsets: offsets)
         savedRouteStore.save(savedRoutes)
+    }
+
+    // MARK: - Rider groups
+
+    /// Creates a new, empty rider group with the given name (falling back to a
+    /// default) and persists it. Returns the created group.
+    @discardableResult
+    func createRiderGroup(name: String) -> RiderGroup {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let group = RiderGroup(name: trimmed.isEmpty ? "New Group" : trimmed)
+        riderGroups.append(group)
+        riderGroupStore.save(riderGroups)
+        return group
+    }
+
+    func deleteRiderGroups(at offsets: IndexSet) {
+        riderGroups.remove(atOffsets: offsets)
+        riderGroupStore.save(riderGroups)
+    }
+
+    /// Renames the group with the given id, ignoring blank names.
+    func renameRiderGroup(id: UUID, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let index = riderGroups.firstIndex(where: { $0.id == id }) else { return }
+        riderGroups[index].name = trimmed
+        riderGroupStore.save(riderGroups)
+    }
+
+    /// Adds a rider to the group with the given id, skipping exact duplicate
+    /// phone numbers so the same person isn't messaged twice.
+    func addRider(_ rider: Rider, toGroup id: UUID) {
+        guard let index = riderGroups.firstIndex(where: { $0.id == id }) else { return }
+        let normalized = rider.phoneNumber.filter(\.isNumber)
+        let alreadyPresent = riderGroups[index].riders.contains {
+            $0.phoneNumber.filter(\.isNumber) == normalized
+        }
+        guard !alreadyPresent else { return }
+        riderGroups[index].riders.append(rider)
+        riderGroupStore.save(riderGroups)
+    }
+
+    func removeRiders(at offsets: IndexSet, fromGroup id: UUID) {
+        guard let index = riderGroups.firstIndex(where: { $0.id == id }) else { return }
+        riderGroups[index].riders.remove(atOffsets: offsets)
+        riderGroupStore.save(riderGroups)
+    }
+
+    /// The current state of a group by id (groups can be edited while a detail
+    /// view is open), or `nil` if it has since been deleted.
+    func riderGroup(id: UUID) -> RiderGroup? {
+        riderGroups.first { $0.id == id }
+    }
+
+    /// The body for a Messages invite: the route summary plus the deep link.
+    func rideInviteMessage() -> String {
+        let route = sharedRoute
+        guard let url = route.shareURL else { return route.shareMessage }
+        return "\(route.shareMessage)\n\(url.absoluteString)"
     }
 
     // MARK: - Search (for adding waypoints by name)

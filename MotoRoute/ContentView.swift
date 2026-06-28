@@ -3,6 +3,11 @@ import MapKit
 import Contacts
 
 struct ContentView: View {
+    /// Becomes `true` once the launch splash has faded, signaling that it's a
+    /// good time to ask for location permission (so the system alert doesn't
+    /// pop up over the splash animation). Defaults to `true` for previews.
+    var readyForPermissions = true
+
     @State private var viewModel = RoutePlannerViewModel()
     @State private var cameraPosition: MapCameraPosition = .userLocation(
         fallback: .region(MKCoordinateRegion(
@@ -20,6 +25,8 @@ struct ContentView: View {
     @State private var showingSettings = false
     @State private var showingHistory = false
     @State private var showingContactPicker = false
+    @State private var showingShareRide = false
+    @State private var showingRiderGroups = false
 
     var body: some View {
         // MapReader exposes a proxy that converts a pressed screen point into a
@@ -104,8 +111,13 @@ struct ContentView: View {
         .onMapCameraChange { context in
             visibleRegion = context.region
         }
-        .onAppear {
-            viewModel.requestLocationPermission()
+        .onChange(of: readyForPermissions, initial: true) { _, ready in
+            // Wait for the splash to clear before prompting for location.
+            // Riders already authorized from a previous launch keep tracking
+            // (started in the view model's init) regardless of this prompt.
+            if ready {
+                viewModel.requestLocationPermission()
+            }
         }
         .onOpenURL { url in
             if viewModel.importRoute(from: url),
@@ -182,6 +194,11 @@ struct ContentView: View {
                         } label: {
                             Label("Ride History", systemImage: "clock.arrow.circlepath")
                         }
+                        Button {
+                            showingRiderGroups = true
+                        } label: {
+                            Label("Rider Groups", systemImage: "person.2")
+                        }
                     } label: {
                         Image(systemName: "ellipsis.circle")
                     }
@@ -195,15 +212,11 @@ struct ContentView: View {
                             Label("Save Route", systemImage: "bookmark")
                         }
                     }
-                    if let url = viewModel.sharedRoute.shareURL {
-                        ToolbarItem(placement: .topBarTrailing) {
-                            ShareLink(
-                                item: url,
-                                subject: Text("MotoRoute Ride"),
-                                message: Text(viewModel.sharedRoute.shareMessage)
-                            ) {
-                                Label("Share Route", systemImage: "square.and.arrow.up")
-                            }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            showingShareRide = true
+                        } label: {
+                            Label("Share Route", systemImage: "square.and.arrow.up")
                         }
                     }
                 }

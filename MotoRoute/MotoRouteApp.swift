@@ -12,7 +12,10 @@ struct MotoRouteApp: App {
     var body: some Scene {
         WindowGroup {
             ZStack {
-                ContentView()
+                // Defer the location permission prompt until the splash has
+                // faded, so the system alert doesn't appear over the launch
+                // animation.
+                ContentView(readyForPermissions: !showSplash)
 
                 if showSplash {
                     SplashScreenView()
