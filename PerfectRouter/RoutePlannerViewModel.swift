@@ -458,7 +458,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         SharedRoute(waypoints: waypoints, suggestedStops: suggestedStops)
     }
 
-    /// Loads a ride received from another rider via a `motoroute://` link,
+    /// Loads a ride received from another rider via a `perfectrouter://` link,
     /// replacing the current waypoints. The sender's suggested stops are
     /// preserved as-is; if none were shared, fresh ones are generated.
     /// Returns `false` if the URL isn't a valid shared route.

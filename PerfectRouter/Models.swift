@@ -53,7 +53,7 @@ enum StopCategory: String, CaseIterable, Identifiable {
 }
 
 /// How the planner should bias route calculation. Riders often prefer twisty
-/// back roads over the fastest stretch of interstate, so MotoRoute can avoid
+/// back roads over the fastest stretch of interstate, so PerfectRouter can avoid
 /// highways and, for scenic rides, tolls — favoring quieter, more scenic roads.
 enum RouteStyle: String, CaseIterable, Identifiable {
     case fastest = "Fastest"

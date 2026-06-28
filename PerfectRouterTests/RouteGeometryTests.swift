@@ -1,6 +1,6 @@
 import XCTest
 import CoreLocation
-@testable import MotoRoute
+@testable import PerfectRouter
 
 /// Unit tests for the pure distance-along-route projection. Uses simple
 /// equatorial west-to-east lines so expected distances are easy to reason about.

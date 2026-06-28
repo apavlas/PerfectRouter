@@ -2,7 +2,7 @@ import Foundation
 import MapKit
 import UIKit
 
-/// Hands a planned ride off to a turn-by-turn navigation app. MotoRoute plans
+/// Hands a planned ride off to a turn-by-turn navigation app. PerfectRouter plans
 /// the ride; the actual guidance is delegated to Apple or Google Maps.
 enum NavigationLauncher {
 

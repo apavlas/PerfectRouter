@@ -13,7 +13,7 @@ import MessageUI
 struct MessageComposer: UIViewControllerRepresentable {
     /// Phone numbers to pre-address the message to.
     let recipients: [String]
-    /// The message body (route summary plus the `motoroute://` link).
+    /// The message body (route summary plus the `perfectrouter://` link).
     let body: String
     /// Called when the composer is dismissed (sent, cancelled, or failed).
     var onFinish: () -> Void

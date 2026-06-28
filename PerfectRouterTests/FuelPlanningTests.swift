@@ -1,6 +1,6 @@
 import XCTest
 import CoreLocation
-@testable import MotoRoute
+@testable import PerfectRouter
 
 /// Unit tests for the pure fuel-stop planner. These exercise the greedy
 /// selection logic (comfort window, hard-range fallback, and fuel gaps)

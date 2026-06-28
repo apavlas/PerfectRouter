@@ -12,37 +12,37 @@
 			containerPortal = AA000000000000000000000A /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = AA0000000000000000000006;
-			remoteInfo = MotoRoute;
+			remoteInfo = PerfectRouter;
 		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		AA0000000000000000000005 /* MotoRoute.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MotoRoute.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		BB0000000000000000000001 /* MotoRouteTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MotoRouteTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA0000000000000000000005 /* PerfectRouter.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PerfectRouter.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		BB0000000000000000000001 /* PerfectRouterTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PerfectRouterTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		CF3743E02FD8C83300F8F1DE /* Exceptions for "MotoRoute" folder in "MotoRoute" target */ = {
+		CF3743E02FD8C83300F8F1DE /* Exceptions for "PerfectRouter" folder in "PerfectRouter" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
 			);
-			target = AA0000000000000000000006 /* MotoRoute */;
+			target = AA0000000000000000000006 /* PerfectRouter */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		AA0000000000000000000001 /* MotoRoute */ = {
+		AA0000000000000000000001 /* PerfectRouter */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
-				CF3743E02FD8C83300F8F1DE /* Exceptions for "MotoRoute" folder in "MotoRoute" target */,
+				CF3743E02FD8C83300F8F1DE /* Exceptions for "PerfectRouter" folder in "PerfectRouter" target */,
 			);
-			path = MotoRoute;
+			path = PerfectRouter;
 			sourceTree = "<group>";
 		};
-		BB0000000000000000000002 /* MotoRouteTests */ = {
+		BB0000000000000000000002 /* PerfectRouterTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = MotoRouteTests;
+			path = PerfectRouterTests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -64,8 +64,8 @@
 		AA0000000000000000000003 = {
 			isa = PBXGroup;
 			children = (
-				AA0000000000000000000001 /* MotoRoute */,
-				BB0000000000000000000002 /* MotoRouteTests */,
+				AA0000000000000000000001 /* PerfectRouter */,
+				BB0000000000000000000002 /* PerfectRouterTests */,
 				AA0000000000000000000004 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -73,8 +73,8 @@
 		AA0000000000000000000004 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				AA0000000000000000000005 /* MotoRoute.app */,
-				BB0000000000000000000001 /* MotoRouteTests.xctest */,
+				AA0000000000000000000005 /* PerfectRouter.app */,
+				BB0000000000000000000001 /* PerfectRouterTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -82,9 +82,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		AA0000000000000000000006 /* MotoRoute */ = {
+		AA0000000000000000000006 /* PerfectRouter */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = AA0000000000000000000007 /* Build configuration list for PBXNativeTarget "MotoRoute" */;
+			buildConfigurationList = AA0000000000000000000007 /* Build configuration list for PBXNativeTarget "PerfectRouter" */;
 			buildPhases = (
 				AA0000000000000000000008 /* Sources */,
 				AA0000000000000000000002 /* Frameworks */,
@@ -93,16 +93,16 @@
 			buildRules = (
 			);
 			fileSystemSynchronizedGroups = (
-				AA0000000000000000000001 /* MotoRoute */,
+				AA0000000000000000000001 /* PerfectRouter */,
 			);
-			name = MotoRoute;
-			productName = MotoRoute;
-			productReference = AA0000000000000000000005 /* MotoRoute.app */;
+			name = PerfectRouter;
+			productName = PerfectRouter;
+			productReference = AA0000000000000000000005 /* PerfectRouter.app */;
 			productType = "com.apple.product-type.application";
 		};
-		BB0000000000000000000003 /* MotoRouteTests */ = {
+		BB0000000000000000000003 /* PerfectRouterTests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = BB0000000000000000000007 /* Build configuration list for PBXNativeTarget "MotoRouteTests" */;
+			buildConfigurationList = BB0000000000000000000007 /* Build configuration list for PBXNativeTarget "PerfectRouterTests" */;
 			buildPhases = (
 				BB0000000000000000000004 /* Sources */,
 				BB0000000000000000000005 /* Frameworks */,
@@ -114,11 +114,11 @@
 				BB000000000000000000000B /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
-				BB0000000000000000000002 /* MotoRouteTests */,
+				BB0000000000000000000002 /* PerfectRouterTests */,
 			);
-			name = MotoRouteTests;
-			productName = MotoRouteTests;
-			productReference = BB0000000000000000000001 /* MotoRouteTests.xctest */;
+			name = PerfectRouterTests;
+			productName = PerfectRouterTests;
+			productReference = BB0000000000000000000001 /* PerfectRouterTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
@@ -140,7 +140,7 @@
 					};
 				};
 			};
-			buildConfigurationList = AA000000000000000000000B /* Build configuration list for PBXProject "MotoRoute" */;
+			buildConfigurationList = AA000000000000000000000B /* Build configuration list for PBXProject "PerfectRouter" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -154,8 +154,8 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				AA0000000000000000000006 /* MotoRoute */,
-				BB0000000000000000000003 /* MotoRouteTests */,
+				AA0000000000000000000006 /* PerfectRouter */,
+				BB0000000000000000000003 /* PerfectRouterTests */,
 			);
 		};
 /* End PBXProject section */
@@ -189,13 +189,13 @@
 /* Begin PBXTargetDependency section */
 		BB000000000000000000000B /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = AA0000000000000000000006 /* MotoRoute */;
+			target = AA0000000000000000000006 /* PerfectRouter */;
 			targetProxy = BB000000000000000000000A /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
-		AA000000000000000000000C /* Debug configuration for PBXProject "MotoRoute" */ = {
+		AA000000000000000000000C /* Debug configuration for PBXProject "PerfectRouter" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -251,7 +251,7 @@
 			};
 			name = Debug;
 		};
-		AA000000000000000000000D /* Release configuration for PBXProject "MotoRoute" */ = {
+		AA000000000000000000000D /* Release configuration for PBXProject "PerfectRouter" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -300,23 +300,23 @@
 			};
 			name = Release;
 		};
-		AA000000000000000000000E /* Debug configuration for PBXNativeTarget "MotoRoute" */ = {
+		AA000000000000000000000E /* Debug configuration for PBXNativeTarget "PerfectRouter" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
-				CODE_SIGN_ENTITLEMENTS = MotoRoute/MotoRoute.entitlements;
+				CODE_SIGN_ENTITLEMENTS = PerfectRouter/PerfectRouter.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = NVE72N87D5;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = MotoRoute/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = MotoRoute;
+				INFOPLIST_FILE = PerfectRouter/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = PerfectRouter;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.travel";
-				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "MotoRoute uses your location to plot routes from where you are and to recommend fuel and rest stops along the way.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "PerfectRouter uses your location to plot routes from where you are and to recommend fuel and rest stops along the way.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -328,7 +328,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.apavlas.MotoRoute;
+				PRODUCT_BUNDLE_IDENTIFIER = com.apavlas.PerfectRouter;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -336,23 +336,23 @@
 			};
 			name = Debug;
 		};
-		AA000000000000000000000F /* Release configuration for PBXNativeTarget "MotoRoute" */ = {
+		AA000000000000000000000F /* Release configuration for PBXNativeTarget "PerfectRouter" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
-				CODE_SIGN_ENTITLEMENTS = MotoRoute/MotoRoute.entitlements;
+				CODE_SIGN_ENTITLEMENTS = PerfectRouter/PerfectRouter.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = NVE72N87D5;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = MotoRoute/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = MotoRoute;
+				INFOPLIST_FILE = PerfectRouter/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = PerfectRouter;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.travel";
-				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "MotoRoute uses your location to plot routes from where you are and to recommend fuel and rest stops along the way.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "PerfectRouter uses your location to plot routes from where you are and to recommend fuel and rest stops along the way.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -364,7 +364,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.apavlas.MotoRoute;
+				PRODUCT_BUNDLE_IDENTIFIER = com.apavlas.PerfectRouter;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -372,7 +372,7 @@
 			};
 			name = Release;
 		};
-		BB0000000000000000000008 /* Debug configuration for PBXNativeTarget "MotoRouteTests" */ = {
+		BB0000000000000000000008 /* Debug configuration for PBXNativeTarget "PerfectRouterTests" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
@@ -383,16 +383,16 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.MotoRouteTests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.PerfectRouterTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/MotoRoute.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/MotoRoute";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PerfectRouter.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/PerfectRouter";
 			};
 			name = Debug;
 		};
-		BB0000000000000000000009 /* Release configuration for PBXNativeTarget "MotoRouteTests" */ = {
+		BB0000000000000000000009 /* Release configuration for PBXNativeTarget "PerfectRouterTests" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
@@ -403,39 +403,39 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.MotoRouteTests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.PerfectRouterTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/MotoRoute.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/MotoRoute";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PerfectRouter.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/PerfectRouter";
 			};
 			name = Release;
 		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		AA0000000000000000000007 /* Build configuration list for PBXNativeTarget "MotoRoute" */ = {
+		AA0000000000000000000007 /* Build configuration list for PBXNativeTarget "PerfectRouter" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				AA000000000000000000000E /* Debug configuration for PBXNativeTarget "MotoRoute" */,
-				AA000000000000000000000F /* Release configuration for PBXNativeTarget "MotoRoute" */,
+				AA000000000000000000000E /* Debug configuration for PBXNativeTarget "PerfectRouter" */,
+				AA000000000000000000000F /* Release configuration for PBXNativeTarget "PerfectRouter" */,
 			);
 			defaultConfigurationName = Release;
 		};
-		AA000000000000000000000B /* Build configuration list for PBXProject "MotoRoute" */ = {
+		AA000000000000000000000B /* Build configuration list for PBXProject "PerfectRouter" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				AA000000000000000000000C /* Debug configuration for PBXProject "MotoRoute" */,
-				AA000000000000000000000D /* Release configuration for PBXProject "MotoRoute" */,
+				AA000000000000000000000C /* Debug configuration for PBXProject "PerfectRouter" */,
+				AA000000000000000000000D /* Release configuration for PBXProject "PerfectRouter" */,
 			);
 			defaultConfigurationName = Release;
 		};
-		BB0000000000000000000007 /* Build configuration list for PBXNativeTarget "MotoRouteTests" */ = {
+		BB0000000000000000000007 /* Build configuration list for PBXNativeTarget "PerfectRouterTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				BB0000000000000000000008 /* Debug configuration for PBXNativeTarget "MotoRouteTests" */,
-				BB0000000000000000000009 /* Release configuration for PBXNativeTarget "MotoRouteTests" */,
+				BB0000000000000000000008 /* Debug configuration for PBXNativeTarget "PerfectRouterTests" */,
+				BB0000000000000000000009 /* Release configuration for PBXNativeTarget "PerfectRouterTests" */,
 			);
 			defaultConfigurationName = Release;
 		};

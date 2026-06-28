@@ -1,6 +1,6 @@
 import XCTest
 import CoreLocation
-@testable import MotoRoute
+@testable import PerfectRouter
 
 /// Tests for `CLLocationCoordinate2D.isValidLocation`, the guard that keeps
 /// invalid / NaN coordinates from reaching MapKit (which asserts on them).

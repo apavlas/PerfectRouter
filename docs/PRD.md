@@ -1,6 +1,6 @@
-# MotoRoute - Product Requirements Document (PRD)
+# PerfectRouter - Product Requirements Document (PRD)
 
-Product requirements for **MotoRoute**, a SwiftUI + MapKit iOS app for planning motorcycle rides. This PRD documents the product as it exists today and frames a forward-looking vision that incorporates the v2 ideas from the project README.
+Product requirements for **PerfectRouter**, a SwiftUI + MapKit iOS app for planning motorcycle rides. This PRD documents the product as it exists today and frames a forward-looking vision that incorporates the v2 ideas from the project README.
 
 > UX flows, screen design, and the design system live in the companion document: [UXDesign.md](UXDesign.md).
 
@@ -8,7 +8,7 @@ Product requirements for **MotoRoute**, a SwiftUI + MapKit iOS app for planning 
 
 ## 1. Overview & Vision
 
-**One-liner:** MotoRoute helps motorcyclists plan multi-stop rides that are aware of the things car-routing apps ignore - fuel range, weather, and the kinds of stops riders actually want along the way.
+**One-liner:** PerfectRouter helps motorcyclists plan multi-stop rides that are aware of the things car-routing apps ignore - fuel range, weather, and the kinds of stops riders actually want along the way.
 
 **Problem statement:** General-purpose navigation apps (Apple Maps, Google Maps) optimize for the fastest car trip from A to B. Motorcyclists think differently. They care about:
 - Whether they can make the next stretch on one tank of fuel.
@@ -16,7 +16,7 @@ Product requirements for **MotoRoute**, a SwiftUI + MapKit iOS app for planning 
 - Whether they will ride into rain.
 - Reordering a day's worth of stops, then sharing the plan with their riding group.
 
-MotoRoute treats the ride - not just the destination - as the unit of planning.
+PerfectRouter treats the ride - not just the destination - as the unit of planning.
 
 **What makes it different:**
 - **Fuel-range awareness:** the app plans refuel stops around the rider's actual tank range and warns when a stretch has no reachable gas.
@@ -62,7 +62,7 @@ At a product level, the key journeys are:
 1. **Plan a ride** - set a start, add a destination, get a multi-leg route with summary.
 2. **Refuel-aware planning** - set tank range; the app places refuel stops and flags fuel gaps.
 3. **Discover stops** - switch category and add gas/food/coffee/scenic stops along the corridor.
-4. **Save & share** - save a ride locally or send a `motoroute://` link so a group rides the same plan.
+4. **Save & share** - save a ride locally or send a `perfectrouter://` link so a group rides the same plan.
 
 > Detailed step-by-step flows and diagrams are in [UXDesign.md, section 2](UXDesign.md#2-core-user-journeys).
 
@@ -102,7 +102,7 @@ At a product level, the key journeys are:
 - Rides are saved locally via `SavedRouteStore` (JSON in the app's Documents directory), listed most-recent-first, reloadable, and swipe-deletable.
 
 ### 5.8 Sharing & deep links
-- A ride serializes to a `SharedRoute` and encodes into a `motoroute://route?data=...` base64url link, with a human-readable share message.
+- A ride serializes to a `SharedRoute` and encodes into a `perfectrouter://route?data=...` base64url link, with a human-readable share message.
 - Importing reconstructs waypoints + suggested stops and opens on the sender's category.
 
 ### Tuning knobs (for product/engineering tuning)

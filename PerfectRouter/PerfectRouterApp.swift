@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct MotoRouteApp: App {
+struct PerfectRouterApp: App {
     /// Controls whether the scenic launch animation is still on screen.
     @State private var showSplash = true
 

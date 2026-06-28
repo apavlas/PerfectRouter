@@ -1,4 +1,4 @@
-# MotoRoute — iOS Starter Code
+# PerfectRouter — iOS Starter Code
 
 A SwiftUI + MapKit starter for a motorcycle ride-planning app with multi-stop routing and recommended stops (gas, food, coffee, scenic) along the route corridor.
 
@@ -7,16 +7,16 @@ A SwiftUI + MapKit starter for a motorcycle ride-planning app with multi-stop ro
 - iOS 17.0+ deployment target (uses the new SwiftUI `Map` APIs: `Marker`, `MapPolyline`, `Annotation`)
 
 ## Setup
-1. In Xcode: **File → New → Project → iOS → App**. Name it `MotoRoute`, interface **SwiftUI**, language **Swift**.
+1. In Xcode: **File → New → Project → iOS → App**. Name it `PerfectRouter`, interface **SwiftUI**, language **Swift**.
 2. Delete the generated `ContentView.swift` and drag these four files into the project:
-   - `MotoRouteApp.swift` (replace the generated one)
+   - `PerfectRouterApp.swift` (replace the generated one)
    - `ContentView.swift`
    - `RoutePlannerViewModel.swift`
    - `StopSuggestionService.swift`
    - `Models.swift`
 3. Add location permission: in the target's **Info** tab, add:
    - `Privacy - Location When In Use Usage Description` →
-     "MotoRoute uses your location to show your position and plan rides from where you are."
+     "PerfectRouter uses your location to show your position and plan rides from where you are."
 4. Build and run on a simulator or device. In the simulator, set a location via **Features → Location**.
 
 ## How it works

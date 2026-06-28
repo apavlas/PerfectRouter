@@ -76,10 +76,10 @@ struct SharedRoute: Codable, Equatable {
     // MARK: - Deep link
 
     /// Custom URL scheme other riders' copies of the app can open.
-    static let scheme = "motoroute"
+    static let scheme = "perfectrouter"
     static let host = "route"
 
-    /// A `motoroute://route?data=<base64url-json>` link that, when opened on a
+    /// A `perfectrouter://route?data=<base64url-json>` link that, when opened on a
     /// device with the app installed, reconstructs this exact ride.
     var shareURL: URL? {
         guard let json = try? JSONEncoder().encode(self) else { return nil }
@@ -96,7 +96,7 @@ struct SharedRoute: Codable, Equatable {
     }
 
     /// Rebuilds a `SharedRoute` from a link produced by `shareURL`.
-    /// Returns `nil` if the URL isn't a valid MotoRoute link.
+    /// Returns `nil` if the URL isn't a valid PerfectRouter link.
     init?(url: URL) {
         guard url.scheme == Self.scheme, url.host == Self.host,
               let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
@@ -124,10 +124,10 @@ struct SharedRoute: Codable, Equatable {
     /// Short text shown alongside the link when sharing (e.g. in Messages).
     var shareMessage: String {
         guard let start = stops.first?.name, let end = stops.last?.name, stops.count >= 2 else {
-            return "Check out my ride on MotoRoute."
+            return "Check out my ride on PerfectRouter."
         }
         let viaCount = stops.count - 2
         let via = viaCount > 0 ? " via \(viaCount) stop\(viaCount == 1 ? "" : "s")" : ""
-        return "Ride with me on MotoRoute: \(start) → \(end)\(via). Tap the link to load this route."
+        return "Ride with me on PerfectRouter: \(start) → \(end)\(via). Tap the link to load this route."
     }
 }

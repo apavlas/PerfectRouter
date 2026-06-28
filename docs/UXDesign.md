@@ -1,6 +1,6 @@
-# MotoRoute - UX Design
+# PerfectRouter - UX Design
 
-User-experience design for **MotoRoute**: user journeys, screen architecture, interaction states, and the design system. This documents the app as built today plus UX considerations for the forward-looking vision.
+User-experience design for **PerfectRouter**: user journeys, screen architecture, interaction states, and the design system. This documents the app as built today plus UX considerations for the forward-looking vision.
 
 > Product requirements, feature spec, roadmap, and metrics live in the companion document: [PRD.md](PRD.md).
 
@@ -48,7 +48,7 @@ Rider sets tank range with a slider (50-300 mi). When the ride is longer than on
 Rider switches the category chip (Gas / Food / Coffee / Scenic). The app searches the route corridor and shows pins on the map plus a ranked list (sorted by distance from start). Tapping adds the stop before the final destination and re-routes.
 
 ### 2.4 Save & share with a group
-Rider taps the bookmark to save the ride locally (auto-named "Start to End"), or shares a `motoroute://` link. A recipient with the app installed opens the link and the exact ride - waypoints and suggested stops - is reconstructed on their device.
+Rider taps the bookmark to save the ride locally (auto-named "Start to End"), or shares a `perfectrouter://` link. A recipient with the app installed opens the link and the exact ride - waypoints and suggested stops - is reconstructed on their device.
 
 ---
 

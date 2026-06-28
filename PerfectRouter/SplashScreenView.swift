@@ -83,7 +83,7 @@ struct SplashScreenView: View {
 
                 // App title fading up at the end.
                 VStack(spacing: 6) {
-                    Text("MotoRoute")
+                    Text("PerfectRouter")
                         .font(.system(size: 40, weight: .heavy, design: .rounded))
                         .foregroundStyle(.white)
                         .shadow(color: .black.opacity(0.3), radius: 8, y: 3)

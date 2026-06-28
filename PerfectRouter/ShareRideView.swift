@@ -11,6 +11,12 @@ struct ShareRideView: View {
     @State private var composingGroup: RiderGroup?
     @State private var showingManageGroups = false
 
+    /// Riders picked just for this ride, without saving a group.
+    @State private var adHocRiders: [Rider] = []
+    @State private var showingAdHocPicker = false
+    @State private var showingSaveGroupDialog = false
+    @State private var saveGroupName = ""
+
     private var shareURL: URL? { viewModel.sharedRoute.shareURL }
 
     var body: some View {
@@ -28,11 +34,13 @@ struct ShareRideView: View {
 
                 ridersSection
 
+                adHocSection
+
                 Section {
                     if let shareURL {
                         ShareLink(
                             item: shareURL,
-                            subject: Text("MotoRoute Ride"),
+                            subject: Text("PerfectRouter Ride"),
                             message: Text(viewModel.sharedRoute.shareMessage)
                         ) {
                             Label("Share via…", systemImage: "square.and.arrow.up")
@@ -67,7 +75,75 @@ struct ShareRideView: View {
             .sheet(isPresented: $showingManageGroups) {
                 RiderGroupsView(viewModel: viewModel)
             }
+            .alert("Save as Group", isPresented: $showingSaveGroupDialog) {
+                TextField("Group name", text: $saveGroupName)
+                Button("Cancel", role: .cancel) { }
+                Button("Save") {
+                    let group = viewModel.createRiderGroup(name: saveGroupName)
+                    for rider in adHocRiders {
+                        viewModel.addRider(rider, toGroup: group.id)
+                    }
+                }
+            } message: {
+                Text("Save these riders as a group so you can reuse them next time.")
+            }
+            .background(
+                // Invisible host that presents the contacts picker out-of-process.
+                ContactPhonePicker(isPresented: $showingAdHocPicker) { name, phone in
+                    addAdHocRider(name: name, phone: phone)
+                }
+            )
         }
+    }
+
+    /// A one-off list of riders to message for just this ride, plus the option
+    /// to save them as a reusable group.
+    @ViewBuilder
+    private var adHocSection: some View {
+        Section {
+            ForEach(adHocRiders) { rider in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(rider.name)
+                    Text(rider.phoneNumber)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .onDelete { adHocRiders.remove(atOffsets: $0) }
+
+            Button {
+                showingAdHocPicker = true
+            } label: {
+                Label("Add Person from Contacts", systemImage: "person.crop.circle.badge.plus")
+            }
+
+            if !adHocRiders.isEmpty {
+                Button {
+                    composingGroup = RiderGroup(name: "Selected Riders", riders: adHocRiders)
+                } label: {
+                    Label("Message These Riders", systemImage: "message.fill")
+                }
+                .disabled(!MessageComposer.canSendText)
+
+                Button {
+                    saveGroupName = ""
+                    showingSaveGroupDialog = true
+                } label: {
+                    Label("Save as Group", systemImage: "square.and.arrow.down")
+                }
+            }
+        } header: {
+            Text("Message Specific People")
+        } footer: {
+            Text("Pick people just for this ride — no group needed.")
+        }
+    }
+
+    /// Appends a picked contact, skipping exact duplicate numbers.
+    private func addAdHocRider(name: String, phone: String) {
+        let normalized = phone.filter(\.isNumber)
+        guard !adHocRiders.contains(where: { $0.phoneNumber.filter(\.isNumber) == normalized }) else { return }
+        adHocRiders.append(Rider(name: name, phoneNumber: phone))
     }
 
     @ViewBuilder

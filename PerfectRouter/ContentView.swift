@@ -234,6 +234,12 @@ struct ContentView: View {
             .sheet(isPresented: $showingHistory) {
                 RideHistoryView()
             }
+            .sheet(isPresented: $showingShareRide) {
+                ShareRideView(viewModel: viewModel)
+            }
+            .sheet(isPresented: $showingRiderGroups) {
+                RiderGroupsView(viewModel: viewModel)
+            }
             .onChange(of: showingSettings) { _, isShowing in
                 // Re-apply preferences when the Settings sheet closes.
                 if !isShowing { viewModel.applySettings() }

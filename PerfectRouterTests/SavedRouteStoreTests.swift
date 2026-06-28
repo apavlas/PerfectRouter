@@ -1,6 +1,6 @@
 import XCTest
 import CoreLocation
-@testable import MotoRoute
+@testable import PerfectRouter
 
 /// Unit tests for `SavedRouteStore`, the JSON-file persistence for saved rides.
 /// Each test uses a unique on-disk filename so runs don't clobber each other or
