@@ -84,6 +84,79 @@ struct StopSuggestionService {
         return results.sorted { $0.distanceAlongRoute < $1.distanceAlongRoute }
     }
 
+    /// Finds food near a single coordinate (e.g. a chosen fuel stop), within a
+    /// short detour radius — "right there", not a route-wide sweep. Results are
+    /// sorted nearest-first to the given coordinate and capped at `maxResults`.
+    ///
+    /// Pass the route's leg polylines so each result's `distanceAlongRoute` is
+    /// projected the same way `findStops` does it, keeping "X mi in" labels
+    /// consistent across the app.
+    func findFood(
+        near coordinate: CLLocationCoordinate2D,
+        alongPolylines legPolylines: [[CLLocationCoordinate2D]],
+        radiusMeters: CLLocationDistance = 1_500,
+        maxResults: Int = 3
+    ) async -> [SuggestedStop] {
+        guard coordinate.isValidLocation else { return [] }
+
+        let request = MKLocalSearch.Request()
+        request.naturalLanguageQuery = StopCategory.food.searchQuery
+        request.resultTypes = .pointOfInterest
+        request.region = MKCoordinateRegion(
+            center: coordinate,
+            latitudinalMeters: radiusMeters * 2,
+            longitudinalMeters: radiusMeters * 2
+        )
+
+        guard let response = try? await MKLocalSearch(request: request).start() else {
+            return []
+        }
+
+        let candidates = response.mapItems.compactMap { item -> SuggestedStop? in
+            let coord = item.placemark.coordinate
+            guard coord.isValidLocation else { return nil }
+            return SuggestedStop(
+                mapItem: item,
+                category: .food,
+                distanceAlongRoute: RouteGeometry.distanceAlongRoute(of: coord, alongPolylines: legPolylines)
+            )
+        }
+
+        return Self.rankFood(candidates, near: coordinate, radiusMeters: radiusMeters, maxResults: maxResults)
+    }
+
+    /// Pure selection logic for `findFood`: keep food within `radiusMeters` of
+    /// the origin, de-duplicate by name + rounded coordinate, sort nearest-first,
+    /// and cap at `maxResults`. Networking-free so it can be unit-tested.
+    static func rankFood(
+        _ candidates: [SuggestedStop],
+        near origin: CLLocationCoordinate2D,
+        radiusMeters: CLLocationDistance,
+        maxResults: Int
+    ) -> [SuggestedStop] {
+        let originLocation = CLLocation(latitude: origin.latitude, longitude: origin.longitude)
+        var seen = Set<String>()
+        var withinRadius: [(stop: SuggestedStop, distance: CLLocationDistance)] = []
+
+        for stop in candidates {
+            let coord = stop.coordinate
+            let distance = originLocation.distance(
+                from: CLLocation(latitude: coord.latitude, longitude: coord.longitude)
+            )
+            guard distance <= radiusMeters else { continue }
+
+            let key = "\(stop.name)|\(round(coord.latitude * 1000))|\(round(coord.longitude * 1000))"
+            guard seen.insert(key).inserted else { continue }
+
+            withinRadius.append((stop, distance))
+        }
+
+        return withinRadius
+            .sorted { $0.distance < $1.distance }
+            .prefix(maxResults)
+            .map { $0.stop }
+    }
+
     // MARK: - Polyline sampling
 
     private struct RouteSample {

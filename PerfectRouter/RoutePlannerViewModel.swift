@@ -160,6 +160,17 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// longer than the fuel range with no gas station found.
     var hasFuelGap = false
 
+    /// Each recommended fuel stop paired with food found right next to it, so a
+    /// rider can refuel and eat in one stop. Recomputed whenever `fuelStops`
+    /// change by `refreshFoodNearFuelStops()`.
+    var fuelFoodStops: [FuelFoodStop] = []
+
+    /// IDs of the fuel stops the food pairing was last computed for. Lets us
+    /// skip redundant (networked) food searches when `replanFuelStops()` runs
+    /// but the chosen stops haven't actually changed — e.g. small tank-range
+    /// tweaks that don't move any stop.
+    private var pairedFuelStopIDs: Set<UUID> = []
+
     /// Rain risk along the route at the rider's expected time of passing, or
     /// `nil` if unknown (weather unavailable) or not yet checked.
     var rainForecast: RouteRainForecast?
@@ -339,6 +350,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             travelSideGasStations = []
             fuelStops = []
             hasFuelGap = false
+            fuelFoodStops = []
+            pairedFuelStopIDs = []
             return
         }
 
@@ -356,6 +369,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         }
 
         replanFuelStops()
+        await refreshFoodNearFuelStops()
     }
 
     /// Re-selects the recommended fuel stops from the already-computed
@@ -365,6 +379,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         guard totalDistanceMeters > fuelRangeMeters else {
             fuelStops = []
             hasFuelGap = false
+            fuelFoodStops = []
+            pairedFuelStopIDs = []
             return
         }
         let plan = Self.planFuelStops(
@@ -374,6 +390,38 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         )
         fuelStops = plan.stops
         hasFuelGap = plan.hasGap
+        // Re-pair food when the range slider changes the chosen stops. The
+        // identity guard inside makes this a no-op (no network) when the set
+        // of stops is unchanged.
+        Task { await refreshFoodNearFuelStops() }
+    }
+
+    /// Pairs nearby food to each recommended fuel stop with one bounded search
+    /// per stop, so cost scales with the number of refuels (typically 1–3) and
+    /// not the route length. Skips the work entirely when the set of fuel stops
+    /// hasn't changed since the last pairing.
+    func refreshFoodNearFuelStops() async {
+        let currentIDs = Set(fuelStops.map(\.id))
+        guard currentIDs != pairedFuelStopIDs else { return }
+        pairedFuelStopIDs = currentIDs
+
+        guard !fuelStops.isEmpty else {
+            fuelFoodStops = []
+            return
+        }
+
+        // Project food onto the same polylines used everywhere else, computed
+        // once and reused across the per-stop searches.
+        let legPolylines = legs.map { RouteGeometry.coordinates(of: $0.polyline) }
+        var paired: [FuelFoodStop] = []
+        for stop in fuelStops {
+            let food = await suggestionService.findFood(
+                near: stop.coordinate,
+                alongPolylines: legPolylines
+            )
+            paired.append(FuelFoodStop(fuelStop: stop, nearbyFood: food))
+        }
+        fuelFoodStops = paired
     }
 
     /// Whether a gas station is one of the auto-recommended fuel stops.

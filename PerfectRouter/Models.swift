@@ -104,6 +104,19 @@ struct SuggestedStop: Identifiable {
     var coordinate: CLLocationCoordinate2D { mapItem.placemark.coordinate }
 }
 
+/// A recommended fuel stop together with food found right next to it, so a
+/// rider can refuel and eat in a single stop instead of two. Derived from
+/// `fuelStops` and recomputed when they change — never persisted.
+struct FuelFoodStop: Identifiable {
+    /// Mirrors the underlying fuel stop's id, giving stable diffing and a
+    /// simple way to detect when the set of paired stops has changed.
+    var id: UUID { fuelStop.id }
+    let fuelStop: SuggestedStop
+    /// Food near the fuel stop, sorted nearest-first. Empty when nothing is
+    /// within the search radius.
+    let nearbyFood: [SuggestedStop]
+}
+
 extension SuggestedStop {
     /// Rebuilds a stop from primitive values (e.g. a route shared by another
     /// rider), synthesizing a placemark-backed `MKMapItem` for the coordinate.

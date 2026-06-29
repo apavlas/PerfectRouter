@@ -381,6 +381,15 @@ struct ContentView: View {
                     Label("Fuel stop \(index + 1): \(fuelStop.name) (~\(formattedDistance(fuelStop.distanceAlongRoute)) in)",
                           systemImage: "fuelpump.fill")
                         .foregroundStyle(.green)
+
+                    // Food found right next to this fuel stop, so the rider can
+                    // refuel and eat in one stop. Nested under its fuel stop.
+                    ForEach(foodNearFuelStop(fuelStop.id)) { food in
+                        Label(food.name, systemImage: "fork.knife")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .padding(.leading)
+                    }
                 }
                 if viewModel.hasFuelGap {
                     Label("No gas station found within your fuel range on part of this route — consider a different path.",
@@ -690,6 +699,12 @@ struct ContentView: View {
         Duration.seconds(seconds).formatted(
             .units(allowed: [.hours, .minutes], width: .abbreviated)
         )
+    }
+
+    /// Food paired to the fuel stop with the given id, or empty while the
+    /// (async) pairing is still loading.
+    private func foodNearFuelStop(_ fuelStopID: UUID) -> [SuggestedStop] {
+        viewModel.fuelFoodStops.first { $0.id == fuelStopID }?.nearbyFood ?? []
     }
 }
 
