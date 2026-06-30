@@ -79,6 +79,13 @@ struct SharedRoute: Codable, Equatable {
     static let scheme = "perfectrouter"
     static let host = "route"
 
+    /// Upper bounds enforced when importing a link. A `perfectrouter://` URL is
+    /// untrusted input (any web page or app can open one), so a crafted link
+    /// could otherwise carry a huge payload that exhausts memory or spawns
+    /// thousands of routing requests and map annotations on import.
+    static let maxEncodedLength = 64 * 1024
+    static let maxElementCount = 100
+
     /// A `perfectrouter://route?data=<base64url-json>` link that, when opened on a
     /// device with the app installed, reconstructs this exact ride.
     var shareURL: URL? {
@@ -100,7 +107,8 @@ struct SharedRoute: Codable, Equatable {
     init?(url: URL) {
         guard url.scheme == Self.scheme, url.host == Self.host,
               let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              let encoded = components.queryItems?.first(where: { $0.name == "data" })?.value
+              let encoded = components.queryItems?.first(where: { $0.name == "data" })?.value,
+              encoded.count <= Self.maxEncodedLength
         else { return nil }
 
         var base64 = encoded
@@ -113,7 +121,9 @@ struct SharedRoute: Codable, Equatable {
         }
 
         guard let data = Data(base64Encoded: base64),
-              let decoded = try? JSONDecoder().decode(SharedRoute.self, from: data)
+              let decoded = try? JSONDecoder().decode(SharedRoute.self, from: data),
+              decoded.stops.count <= Self.maxElementCount,
+              decoded.suggestions.count <= Self.maxElementCount
         else { return nil }
 
         self = decoded

@@ -70,6 +70,9 @@ struct RiderGroupStore {
     /// Overwrites the stored rider groups with `groups`.
     func save(_ groups: [RiderGroup]) {
         guard let data = try? JSONEncoder().encode(groups) else { return }
-        try? data.write(to: fileURL, options: [.atomic])
+        // Groups hold contacts' phone numbers, so protect the file at rest and
+        // keep it out of unencrypted device backups.
+        try? data.write(to: fileURL, options: [.atomic, .completeFileProtection])
+        excludeFromBackup(fileURL)
     }
 }

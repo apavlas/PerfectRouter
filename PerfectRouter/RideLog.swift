@@ -71,6 +71,9 @@ struct RideLogStore {
 
     private func save(_ entries: [RideLogEntry]) {
         guard let data = try? JSONEncoder().encode(entries) else { return }
-        try? data.write(to: fileURL, options: [.atomic])
+        // Ride history reveals where the rider has been, so protect the file at
+        // rest and keep it out of unencrypted device backups.
+        try? data.write(to: fileURL, options: [.atomic, .completeFileProtection])
+        excludeFromBackup(fileURL)
     }
 }

@@ -19,12 +19,27 @@ enum RouteSnapshotter {
 
     /// Loads a previously saved snapshot image by filename.
     static func image(named filename: String) -> UIImage? {
-        UIImage(contentsOfFile: snapshotsDirectory().appendingPathComponent(filename).path)
+        guard let url = snapshotURL(for: filename) else { return nil }
+        return UIImage(contentsOfFile: url.path)
     }
 
     /// Removes a saved snapshot file, e.g. when its ride is deleted.
     static func deleteSnapshot(named filename: String) {
-        try? FileManager.default.removeItem(at: snapshotsDirectory().appendingPathComponent(filename))
+        guard let url = snapshotURL(for: filename) else { return }
+        try? FileManager.default.removeItem(at: url)
+    }
+
+    /// Resolves a snapshot filename to a URL inside the snapshots directory,
+    /// rejecting anything that isn't a single path component. Filenames are
+    /// read back from `ride_log.json`; refusing path separators and `..` keeps
+    /// a tampered or malformed entry from escaping the snapshots directory and
+    /// reading or deleting arbitrary files.
+    private static func snapshotURL(for filename: String) -> URL? {
+        guard !filename.isEmpty,
+              !filename.contains("/"),
+              filename != ".",
+              filename != ".." else { return nil }
+        return snapshotsDirectory().appendingPathComponent(filename)
     }
 
     /// Captures and saves a snapshot of the route, returning its filename.

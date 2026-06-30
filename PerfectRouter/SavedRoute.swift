@@ -40,6 +40,19 @@ struct SavedRouteStore {
     /// Overwrites the stored rides with `routes`.
     func save(_ routes: [SavedRoute]) {
         guard let data = try? JSONEncoder().encode(routes) else { return }
-        try? data.write(to: fileURL, options: [.atomic])
+        // Saved rides hold location history, so protect the file at rest and
+        // keep it out of unencrypted device backups.
+        try? data.write(to: fileURL, options: [.atomic, .completeFileProtection])
+        excludeFromBackup(fileURL)
     }
+}
+
+/// Marks a file so it is omitted from iCloud / iTunes backups. Used by the
+/// local stores to keep personal data (location history, contacts' phone
+/// numbers) from leaving the device in a backup.
+func excludeFromBackup(_ url: URL) {
+    var url = url
+    var values = URLResourceValues()
+    values.isExcludedFromBackup = true
+    try? url.setResourceValues(values)
 }
