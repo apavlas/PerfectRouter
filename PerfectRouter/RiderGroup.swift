@@ -48,31 +48,20 @@ struct RiderGroup: Identifiable, Codable, Equatable {
 }
 
 /// Persists rider groups to a JSON file in the app's Documents directory.
-/// The payload is small (names and phone numbers), so reads and writes are
-/// done synchronously, mirroring `SavedRouteStore`.
 struct RiderGroupStore {
-    private let fileURL: URL
+    private let store: JSONFileStore<RiderGroup>
 
     init(filename: String = "rider_groups.json") {
-        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        fileURL = documents.appendingPathComponent(filename)
+        store = JSONFileStore(filename: filename)
     }
 
     /// Loads the saved rider groups, or an empty list if none are stored yet.
     func load() -> [RiderGroup] {
-        guard let data = try? Data(contentsOf: fileURL),
-              let groups = try? JSONDecoder().decode([RiderGroup].self, from: data) else {
-            return []
-        }
-        return groups
+        store.load()
     }
 
     /// Overwrites the stored rider groups with `groups`.
     func save(_ groups: [RiderGroup]) {
-        guard let data = try? JSONEncoder().encode(groups) else { return }
-        // Groups hold contacts' phone numbers, so protect the file at rest and
-        // keep it out of unencrypted device backups.
-        try? data.write(to: fileURL, options: [.atomic, .completeFileProtection])
-        excludeFromBackup(fileURL)
+        store.save(groups)
     }
 }

@@ -1,6 +1,5 @@
 import SwiftUI
 import MapKit
-import Contacts
 
 struct ContentView: View {
     /// Becomes `true` once the launch splash has faded, signaling that it's a
@@ -8,6 +7,7 @@ struct ContentView: View {
     /// pop up over the splash animation). Defaults to `true` for previews.
     var readyForPermissions = true
 
+    @Environment(\.scenePhase) private var scenePhase
     @State private var viewModel = RoutePlannerViewModel()
     @State private var cameraPosition: MapCameraPosition = .userLocation(
         fallback: .region(MKCoordinateRegion(
@@ -16,25 +16,35 @@ struct ContentView: View {
         ))
     )
     @State private var visibleRegion: MKCoordinateRegion?
-    @State private var searchText = ""
-    @State private var searchResults: [MKMapItem] = []
     @State private var showSheet = true
     @State private var sheetDetent: PresentationDetent = .medium
     @State private var showingSaveDialog = false
     @State private var saveRouteName = ""
     @State private var showingSettings = false
     @State private var showingHistory = false
-    @State private var showingContactPicker = false
     @State private var showingShareRide = false
     @State private var showingRiderGroups = false
 
     var body: some View {
-        // MapReader exposes a proxy that converts a pressed screen point into a
-        // map coordinate, so a long press can drop a start point on the map.
-        MapReader { proxy in
-            mapView
-                .gesture(dropStartGesture(proxy: proxy))
+        GeometryReader { geo in
+            // MapReader exposes a proxy that converts a pressed screen point
+            // into a map coordinate, so a long press can drop a start point.
+            MapReader { proxy in
+                mapView
+                    .gesture(dropStartGesture(proxy: proxy))
+            }
+            // Mirror the planning sheet as a bottom safe-area inset so the
+            // map centers content — and frames routes — in the area the sheet
+            // doesn't cover. Without this a computed route can sit entirely
+            // behind the sheet and look like it never appeared.
+            .safeAreaPadding(.bottom, geo.size.height * sheetObscuredFraction)
         }
+    }
+
+    /// Roughly how much of the screen the planning sheet covers at the
+    /// current detent.
+    private var sheetObscuredFraction: CGFloat {
+        sheetDetent == .fraction(0.15) ? 0.15 : 0.5
     }
 
     private var mapView: some View {
@@ -52,6 +62,7 @@ struct ContentView: View {
                 MapPolyline(leg.polyline)
                     .stroke(.blue, lineWidth: 5)
             }
+
 
             // Non-recommended gas stations along the route — pickable while
             // browsing another category. Drawn neutral/gray and excluding the
@@ -74,9 +85,11 @@ struct ContentView: View {
             }
 
             // Suggested stops for the selected category — tap a pin to add it.
-            // Recommended fuel stops are excluded here so they aren't drawn
-            // twice (the Gas category's suggestions include them).
-            ForEach(viewModel.suggestedStops.filter { !viewModel.isRecommendedFuelStop($0) }) { stop in
+            // Recommended fuel stops and ride highlights are excluded here so
+            // they aren't drawn twice (their own highlighted layers cover them).
+            ForEach(viewModel.suggestedStops.filter {
+                !viewModel.isRecommendedFuelStop($0) && !viewModel.isRideHighlight($0)
+            }) { stop in
                 Annotation(stop.name, coordinate: stop.coordinate) {
                     Button {
                         viewModel.addStop(from: stop)
@@ -84,6 +97,24 @@ struct ContentView: View {
                         Image(systemName: stop.category.systemImage)
                             .padding(6)
                             .background(.thinMaterial, in: Circle())
+                    }
+                }
+            }
+
+            // Recommended ride highlights — purple star pins so places worth
+            // a stop stand out from ordinary suggestions.
+            ForEach(viewModel.rideHighlights) { stop in
+                Annotation(stop.name, coordinate: stop.coordinate) {
+                    Button {
+                        viewModel.addStop(from: stop)
+                    } label: {
+                        Image(systemName: "star.fill")
+                            .font(.headline)
+                            .foregroundStyle(.white)
+                            .padding(9)
+                            .background(.purple, in: Circle())
+                            .overlay(Circle().stroke(.white, lineWidth: 2.5))
+                            .shadow(radius: 3)
                     }
                 }
             }
@@ -118,6 +149,36 @@ struct ContentView: View {
             if ready {
                 viewModel.requestLocationPermission()
             }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            // Location updates stop after each fix (battery); grab a fresh fix
+            // whenever the rider comes back to the app.
+            if phase == .active {
+                viewModel.refreshLocation()
+            }
+        }
+        .onChange(of: viewModel.legs) { _, legs in
+            // Whenever a route lands, frame the whole ride on screen. Without
+            // this the camera stays wherever the rider left it (or centered on
+            // the destination), and the polyline can sit entirely behind the
+            // planning sheet — "the route doesn't show".
+            if !legs.isEmpty {
+                frameRoute(legs)
+            }
+        }
+        .task {
+            // Debug harness: when launched with --auto-route-test (e.g. via
+            // `simctl launch <udid> <bundle-id> --auto-route-test`), add a
+            // fixed destination two seconds in — the same `addWaypoint` call a
+            // search-result tap makes — so the full route pipeline can be
+            // exercised and screenshotted from the CLI without UI taps.
+            // Inert in normal launches.
+            guard ProcessInfo.processInfo.arguments.contains("--auto-route-test") else { return }
+            try? await Task.sleep(for: .seconds(2))
+            viewModel.addWaypoint(Waypoint(
+                name: "Atlanta",
+                coordinate: CLLocationCoordinate2D(latitude: 33.749, longitude: -84.388)
+            ))
         }
         .onOpenURL { url in
             if viewModel.importRoute(from: url),
@@ -168,16 +229,24 @@ struct ContentView: View {
     private var planningSheet: some View {
         NavigationStack {
             List {
-                searchSection
-                routeStyleSection
-                rideSummarySection
-                fuelRangeSection
-                if viewModel.selectedCategory != .gas && !viewModel.legs.isEmpty {
-                    gasStationsSection
+                SearchSection(
+                    viewModel: viewModel,
+                    currentRegion: currentRegion,
+                    onWaypointAdded: { recenter(on: $0.coordinate, spanDelta: 0.3) }
+                )
+                RouteStyleSection(viewModel: viewModel)
+                DepartureSection(viewModel: viewModel)
+                RideSummarySection(viewModel: viewModel)
+                if !viewModel.rideHighlights.isEmpty {
+                    RideHighlightsSection(viewModel: viewModel)
                 }
-                waypointsSection
-                suggestionsSection
-                savedRoutesSection
+                FuelRangeSection(viewModel: viewModel)
+                if viewModel.selectedCategory != .gas && !viewModel.legs.isEmpty {
+                    GasStationsSection(viewModel: viewModel)
+                }
+                WaypointsSection(viewModel: viewModel, onUseMapCenterAsStart: addStartFromMapCenter)
+                SuggestionsSection(viewModel: viewModel)
+                SavedRoutesSection(viewModel: viewModel, onLoad: loadSaved)
             }
             .navigationTitle("Plan Ride")
             .navigationBarTitleDisplayMode(.inline)
@@ -247,358 +316,7 @@ struct ContentView: View {
         }
     }
 
-    /// Lists rides the rider has saved on this device. Tap to reload one,
-    /// swipe to delete.
-    private var savedRoutesSection: some View {
-        Section("Saved Routes") {
-            if viewModel.savedRoutes.isEmpty {
-                Text("Save a ride with the bookmark button to find it here later.")
-                    .foregroundStyle(.secondary)
-            }
-            ForEach(viewModel.savedRoutes) { saved in
-                Button {
-                    loadSaved(saved)
-                } label: {
-                    HStack {
-                        Image(systemName: "bookmark.fill")
-                            .foregroundStyle(.blue)
-                        VStack(alignment: .leading) {
-                            Text(saved.name)
-                            Text(saved.savedAt, format: .dateTime.month().day().year())
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                    }
-                }
-                .buttonStyle(.plain)
-            }
-            .onDelete { viewModel.deleteSavedRoutes(at: $0) }
-        }
-    }
-
-    /// Always-visible search field (replaces .searchable, which was hidden
-    /// when the sheet sat at its smallest detent).
-    private var searchSection: some View {
-        Section {
-            HStack {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                TextField("Add a destination or stop", text: $searchText)
-                    .autocorrectionDisabled()
-                    .submitLabel(.search)
-                if !searchText.isEmpty {
-                    Button {
-                        searchText = ""
-                        searchResults = []
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            // Live search, debounced: re-fires 0.4s after the user stops typing.
-            .task(id: searchText) {
-                guard !searchText.isEmpty else {
-                    searchResults = []
-                    return
-                }
-                try? await Task.sleep(for: .milliseconds(400))
-                guard !Task.isCancelled else { return }
-                searchResults = await viewModel.searchPlaces(query: searchText, near: currentRegion)
-                    .filter { $0.placemark.coordinate.isValidLocation }
-            }
-
-            Button {
-                showingContactPicker = true
-            } label: {
-                Label("Choose from Contacts", systemImage: "person.crop.circle")
-            }
-
-            ForEach(searchResults.prefix(6), id: \.self) { item in
-                Button {
-                    addSearchResult(item)
-                } label: {
-                    HStack {
-                        Image(systemName: "plus.circle")
-                            .foregroundStyle(.blue)
-                        VStack(alignment: .leading) {
-                            Text(item.name ?? "Unknown")
-                            if let locality = item.placemark.locality {
-                                Text(locality)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        // The contact picker presents itself modally, so it lives invisibly in
-        // the background rather than as a `.sheet` (which made it flash and
-        // dismiss on the first tap).
-        .background {
-            ContactAddressPicker(isPresented: $showingContactPicker) { name, address in
-                addContactAddress(named: name, at: address)
-            }
-        }
-    }
-
-    /// Lets the rider bias routing toward scenic back roads or away from
-    /// highways. Changing the style re-plans the current ride immediately.
-    private var routeStyleSection: some View {
-        Section {
-            Picker("Route style", selection: Binding(
-                get: { viewModel.routeStyle },
-                set: { viewModel.setRouteStyle($0) }
-            )) {
-                ForEach(RouteStyle.allCases) { style in
-                    Label(style.rawValue, systemImage: style.systemImage)
-                        .tag(style)
-                }
-            }
-            .pickerStyle(.menu)
-        } header: {
-            Text("Route Style")
-        } footer: {
-            Text(viewModel.routeStyle.detail)
-        }
-    }
-
-    private var rideSummarySection: some View {
-        Section {
-            if viewModel.isCalculating {
-                ProgressView("Calculating route…")
-            } else if !viewModel.legs.isEmpty {
-                HStack {
-                    Label(formattedDistance(viewModel.totalDistanceMeters), systemImage: "road.lanes")
-                    Spacer()
-                    Label(formattedDuration(viewModel.totalExpectedTravelTime), systemImage: "clock")
-                }
-                ForEach(Array(viewModel.fuelStops.enumerated()), id: \.element.id) { index, fuelStop in
-                    Label("Fuel stop \(index + 1): \(fuelStop.name) (~\(formattedDistance(fuelStop.distanceAlongRoute)) in)",
-                          systemImage: "fuelpump.fill")
-                        .foregroundStyle(.green)
-
-                    // Food found right next to this fuel stop, so the rider can
-                    // refuel and eat in one stop. Nested under its fuel stop.
-                    ForEach(foodNearFuelStop(fuelStop.id)) { food in
-                        Label(food.name, systemImage: "fork.knife")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .padding(.leading)
-                    }
-                }
-                if viewModel.hasFuelGap {
-                    Label("No gas station found within your fuel range on part of this route — consider a different path.",
-                          systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                }
-                if let rainWarning = viewModel.rainWarning {
-                    Label(rainWarning, systemImage: "cloud.rain.fill")
-                        .foregroundStyle(.blue)
-                } else if viewModel.isCheckingWeather {
-                    Label("Checking weather along your route…", systemImage: "cloud.sun.fill")
-                        .foregroundStyle(.secondary)
-                }
-                // Primary, one-tap hand-off. Apple Maps is CarPlay-native, so
-                // its turn-by-turn guidance automatically continues on the car
-                // display once the rider connects to CarPlay.
-                Button {
-                    launchAppleMaps()
-                } label: {
-                    Label("Navigate", systemImage: "car.fill")
-                        .frame(maxWidth: .infinity)
-                        .font(.headline)
-                }
-                .buttonStyle(.borderedProminent)
-                .listRowInsets(EdgeInsets())
-                .listRowBackground(Color.clear)
-
-                // Optional alternative, only when Google Maps is installed.
-                // (Google Maps drives its own CarPlay support in its app.)
-                if NavigationLauncher.isGoogleMapsAvailable {
-                    Button {
-                        launchGoogleMaps()
-                    } label: {
-                        Label("Open in Google Maps", systemImage: "location.north.line.fill")
-                    }
-                }
-            }
-            if let here = viewModel.currentLocation,
-               let shareURL = NavigationLauncher.currentLocationShareURL(here) {
-                ShareLink(
-                    item: shareURL,
-                    subject: Text("My location"),
-                    message: Text("Here's where I am right now.")
-                ) {
-                    Label("Share Current Location", systemImage: "dot.radiowaves.left.and.right")
-                }
-            }
-            if let error = viewModel.errorMessage {
-                Text(error).foregroundStyle(.red)
-            }
-        }
-    }
-
-    private func launchAppleMaps() {
-        viewModel.logCurrentRide()
-        NavigationLauncher.openInAppleMaps(viewModel.waypoints)
-    }
-
-    private func launchGoogleMaps() {
-        viewModel.logCurrentRide()
-        NavigationLauncher.openInGoogleMaps(viewModel.waypoints)
-    }
-
-    /// Lets the rider set their tank range, which drives how often gas stops
-    /// are recommended. Re-plans fuel stops when the rider finishes adjusting.
-    private var fuelRangeSection: some View {
-        Section("Fuel Range") {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Label("Tank range", systemImage: "fuelpump.fill")
-                    Spacer()
-                    Text("\(Int(fuelRangeMiles.rounded())) mi")
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                }
-                Slider(
-                    value: fuelRangeMilesBinding,
-                    in: 50...300,
-                    step: 10,
-                    label: { Text("Tank range") },
-                    minimumValueLabel: { Text("50").font(.caption2).foregroundStyle(.secondary) },
-                    maximumValueLabel: { Text("300").font(.caption2).foregroundStyle(.secondary) },
-                    onEditingChanged: { editing in
-                        // Re-plan only when the drag ends. No network search —
-                        // just re-selects from the gas stations already loaded.
-                        if !editing {
-                            viewModel.replanFuelStops()
-                        }
-                    }
-                )
-            }
-        }
-    }
-
-    /// Lists every gas station found along the route so the rider can pick any
-    /// of them. The auto-recommended fuel stops are badged. Shown while
-    /// browsing a non-gas category (the Gas category already lists these in
-    /// the suggestions section).
-    private var gasStationsSection: some View {
-        Section("Gas Stations on Route") {
-            if viewModel.gasStations.isEmpty {
-                Text("No gas stations found along this route.")
-                    .foregroundStyle(.secondary)
-            }
-            ForEach(viewModel.gasStations) { stop in
-                Button {
-                    viewModel.addStop(from: stop)
-                } label: {
-                    HStack {
-                        Image(systemName: "fuelpump.fill")
-                            .foregroundStyle(viewModel.isRecommendedFuelStop(stop) ? .green : .secondary)
-                        VStack(alignment: .leading) {
-                            Text(stop.name)
-                            Text("~\(formattedDistance(stop.distanceAlongRoute)) from start")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        if viewModel.isRecommendedFuelStop(stop) {
-                            Text("Recommended")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.green)
-                        }
-                        Image(systemName: "plus.circle.fill")
-                            .foregroundStyle(.blue)
-                    }
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-
-    private var waypointsSection: some View {
-        Section("Route (\(viewModel.waypoints.count) stops)") {
-            if viewModel.waypoints.isEmpty {
-                Text(viewModel.currentLocation == nil
-                     ? "Long-press the map or use the button below to set a start, then search for your destination."
-                     : "Search for your destination — we'll route from your current location.")
-                    .foregroundStyle(.secondary)
-            }
-            // When there's no location fix to auto-seed the origin, let the
-            // rider drop a start point at the center of the visible map. A new
-            // start is inserted ahead of any place already added, so it becomes
-            // the ride origin.
-            if viewModel.currentLocation == nil, viewModel.waypoints.count < 2 {
-                Button {
-                    addStartFromMapCenter()
-                } label: {
-                    Label("Use Current Map Area as Start", systemImage: "mappin.and.ellipse")
-                }
-            }
-            ForEach(viewModel.waypoints) { waypoint in
-                Label(waypoint.name, systemImage: "mappin.circle.fill")
-            }
-            .onDelete { viewModel.removeWaypoint(at: $0) }
-            .onMove { viewModel.moveWaypoint(from: $0, to: $1) }
-        }
-    }
-
-    private var suggestionsSection: some View {
-        Section("Suggested \(viewModel.selectedCategory.rawValue) Stops") {
-            if viewModel.isLoadingSuggestions {
-                ProgressView("Searching along your route…")
-            } else if viewModel.suggestedStops.isEmpty && !viewModel.legs.isEmpty {
-                Text("No \(viewModel.selectedCategory.rawValue.lowercased()) stops found near this route.")
-                    .foregroundStyle(.secondary)
-            } else if viewModel.legs.isEmpty {
-                Text("Add at least two stops to see suggestions.")
-                    .foregroundStyle(.secondary)
-            }
-            ForEach(viewModel.suggestedStops.prefix(15)) { stop in
-                Button {
-                    viewModel.addStop(from: stop)
-                } label: {
-                    HStack {
-                        Image(systemName: stop.category.systemImage)
-                        VStack(alignment: .leading) {
-                            Text(stop.name)
-                            Text("~\(formattedDistance(stop.distanceAlongRoute)) from start")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Image(systemName: "plus.circle.fill")
-                            .foregroundStyle(.blue)
-                    }
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-
     // MARK: - Actions & helpers
-
-    private static let metersPerMile: CLLocationDistance = 1609.344
-
-    /// The view model's fuel range expressed in miles, for display.
-    private var fuelRangeMiles: Double {
-        viewModel.fuelRangeMeters / Self.metersPerMile
-    }
-
-    /// Two-way binding that exposes the fuel range (stored in meters) as miles
-    /// for the slider.
-    private var fuelRangeMilesBinding: Binding<Double> {
-        Binding(
-            get: { viewModel.fuelRangeMeters / Self.metersPerMile },
-            set: { viewModel.fuelRangeMeters = $0 * Self.metersPerMile }
-        )
-    }
 
     private var currentRegion: MKCoordinateRegion {
         visibleRegion ?? MKCoordinateRegion(
@@ -607,25 +325,18 @@ struct ContentView: View {
         )
     }
 
-    private func addSearchResult(_ item: MKMapItem) {
-        let coordinate = item.placemark.coordinate
-        // Ignore results with no usable coordinate (invalid / NaN) — adding one
-        // would crash MapKit when routing or recentering the map on it.
-        guard coordinate.isValidLocation else { return }
-        let waypoint = Waypoint(name: item.name ?? "Stop", coordinate: coordinate)
-        viewModel.addWaypoint(waypoint)
-        searchResults = []
-        searchText = ""
-        recenter(on: waypoint.coordinate, spanDelta: 0.3)
-    }
-
-    /// Geocodes a postal address chosen from Contacts and adds it as a waypoint,
-    /// framing it on the map once it resolves.
-    private func addContactAddress(named name: String, at address: CNPostalAddress) {
-        Task {
-            if let waypoint = await viewModel.addWaypoint(named: name, at: address) {
-                recenter(on: waypoint.coordinate, spanDelta: 0.3)
-            }
+    /// Frames the full route in the map's visible (safe) area. The bottom
+    /// safe-area inset applied in `body` keeps the framing clear of the
+    /// planning sheet.
+    private func frameRoute(_ legs: [MKRoute]) {
+        var rect = MKMapRect.null
+        for leg in legs {
+            rect = rect.union(leg.polyline.boundingMapRect)
+        }
+        guard !rect.isNull else { return }
+        let padded = rect.insetBy(dx: -rect.width * 0.15, dy: -rect.height * 0.15)
+        withAnimation(.easeInOut(duration: 0.6)) {
+            cameraPosition = .rect(padded)
         }
     }
 
@@ -689,22 +400,6 @@ struct ContentView: View {
         if index == 0 { return "flag.fill" }
         if index == viewModel.waypoints.count - 1 { return "flag.checkered" }
         return "mappin"
-    }
-
-    private func formattedDistance(_ meters: CLLocationDistance) -> String {
-        formattedRideDistance(meters)
-    }
-
-    private func formattedDuration(_ seconds: TimeInterval) -> String {
-        Duration.seconds(seconds).formatted(
-            .units(allowed: [.hours, .minutes], width: .abbreviated)
-        )
-    }
-
-    /// Food paired to the fuel stop with the given id, or empty while the
-    /// (async) pairing is still loading.
-    private func foodNearFuelStop(_ fuelStopID: UUID) -> [SuggestedStop] {
-        viewModel.fuelFoodStops.first { $0.id == fuelStopID }?.nearbyFood ?? []
     }
 }
 

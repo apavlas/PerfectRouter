@@ -70,4 +70,74 @@ final class RouteGeometryTests: XCTestCase {
         )
         XCTAssertEqual(d, 0, accuracy: 0.0001)
     }
+
+    // MARK: - Side of travel
+
+    /// A west-to-east line along the equator: north of it is the traveler's
+    /// left, south of it their right.
+    private let eastboundLine = [
+        CLLocationCoordinate2D(latitude: 0, longitude: 0),
+        CLLocationCoordinate2D(latitude: 0, longitude: 1)
+    ]
+
+    func testPointSouthOfEastboundRouteIsRight() {
+        let side = RouteGeometry.side(
+            of: CLLocationCoordinate2D(latitude: -0.01, longitude: 0.5),
+            alongPolylines: [eastboundLine]
+        )
+        XCTAssertEqual(side, .right)
+    }
+
+    func testPointNorthOfEastboundRouteIsLeft() {
+        let side = RouteGeometry.side(
+            of: CLLocationCoordinate2D(latitude: 0.01, longitude: 0.5),
+            alongPolylines: [eastboundLine]
+        )
+        XCTAssertEqual(side, .left)
+    }
+
+    func testSideFlipsWithDirectionOfTravel() {
+        // The same point relative to the same road, ridden the other way.
+        let westboundLine = Array(eastboundLine.reversed())
+        let side = RouteGeometry.side(
+            of: CLLocationCoordinate2D(latitude: -0.01, longitude: 0.5),
+            alongPolylines: [westboundLine]
+        )
+        XCTAssertEqual(side, .left)
+    }
+
+    func testPointOnRouteLineIsUnknown() {
+        let side = RouteGeometry.side(
+            of: CLLocationCoordinate2D(latitude: 0, longitude: 0.5),
+            alongPolylines: [eastboundLine]
+        )
+        XCTAssertEqual(side, .unknown)
+    }
+
+    func testEmptyRouteSideIsUnknown() {
+        let side = RouteGeometry.side(
+            of: CLLocationCoordinate2D(latitude: 0, longitude: 0),
+            alongPolylines: []
+        )
+        XCTAssertEqual(side, .unknown)
+    }
+
+    func testTravelSideRespectsDrivingHand() {
+        let south = CLLocationCoordinate2D(latitude: -0.01, longitude: 0.5)   // rider's right
+        let north = CLLocationCoordinate2D(latitude: 0.01, longitude: 0.5)    // rider's left
+
+        // Right-hand traffic (US): right-side stops reachable, left-side not.
+        XCTAssertTrue(RouteGeometry.isOnTravelSide(south, alongPolylines: [eastboundLine], drivesOnRight: true))
+        XCTAssertFalse(RouteGeometry.isOnTravelSide(north, alongPolylines: [eastboundLine], drivesOnRight: true))
+
+        // Left-hand traffic (UK, Japan, Australia): flipped.
+        XCTAssertFalse(RouteGeometry.isOnTravelSide(south, alongPolylines: [eastboundLine], drivesOnRight: false))
+        XCTAssertTrue(RouteGeometry.isOnTravelSide(north, alongPolylines: [eastboundLine], drivesOnRight: false))
+    }
+
+    func testPointOnRouteLineIsAlwaysReachable() {
+        let onLine = CLLocationCoordinate2D(latitude: 0, longitude: 0.5)
+        XCTAssertTrue(RouteGeometry.isOnTravelSide(onLine, alongPolylines: [eastboundLine], drivesOnRight: true))
+        XCTAssertTrue(RouteGeometry.isOnTravelSide(onLine, alongPolylines: [eastboundLine], drivesOnRight: false))
+    }
 }

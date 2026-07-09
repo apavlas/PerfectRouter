@@ -72,11 +72,13 @@ struct StopSuggestionService {
 
                 // Use the stop's true position along the route rather than the
                 // coarse sample distance, so fuel-stop spacing and "X mi from
-                // start" labels are accurate.
+                // start" labels are accurate. The detour (distance off the
+                // route line) feeds the ride-highlight ranking.
                 results.append(SuggestedStop(
                     mapItem: item,
                     category: category,
-                    distanceAlongRoute: RouteGeometry.distanceAlongRoute(of: coord, alongPolylines: legPolylines)
+                    distanceAlongRoute: RouteGeometry.distanceAlongRoute(of: coord, alongPolylines: legPolylines),
+                    detourMeters: RouteGeometry.distanceFromRoute(of: coord, alongPolylines: legPolylines)
                 ))
             }
         }
@@ -118,7 +120,8 @@ struct StopSuggestionService {
             return SuggestedStop(
                 mapItem: item,
                 category: .food,
-                distanceAlongRoute: RouteGeometry.distanceAlongRoute(of: coord, alongPolylines: legPolylines)
+                distanceAlongRoute: RouteGeometry.distanceAlongRoute(of: coord, alongPolylines: legPolylines),
+                detourMeters: RouteGeometry.distanceFromRoute(of: coord, alongPolylines: legPolylines)
             )
         }
 
@@ -166,13 +169,14 @@ struct StopSuggestionService {
     /// Picks at most `max` items spread evenly across `samples` (always
     /// including the first and last). Keeps coverage spanning the whole route
     /// when there are more sample points than the search budget allows.
-    private func evenlySpaced(_ samples: [RouteSample], max limit: Int) -> [RouteSample] {
+    /// Generic (and internal) so the selection logic is unit-testable.
+    func evenlySpaced<T>(_ samples: [T], max limit: Int) -> [T] {
         guard limit > 0 else { return [] }
         guard samples.count > limit else { return samples }
         guard limit > 1 else { return samples.isEmpty ? [] : [samples[0]] }
 
         let step = Double(samples.count - 1) / Double(limit - 1)
-        var picked: [RouteSample] = []
+        var picked: [T] = []
         for i in 0..<limit {
             picked.append(samples[Int((Double(i) * step).rounded())])
         }

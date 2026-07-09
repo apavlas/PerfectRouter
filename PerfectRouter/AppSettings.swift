@@ -5,9 +5,28 @@ import MapKit
 /// `@AppStorage`; non-View types (e.g. the view model) read the typed
 /// accessors. Keeping the keys and defaults in one place avoids drift.
 ///
-/// Distances are shown in miles throughout the app for now.
+/// Preferences are *stored* in miles (the original storage unit, so existing
+/// riders' settings survive) but *displayed* in the rider's locale unit.
 enum AppSettings {
     static let metersPerMile: CLLocationDistance = 1609.344
+    static let kilometersPerMile = 1.609344
+
+    /// Whether rider-facing distances are shown in kilometers. The UK measures
+    /// road distances in miles, so only fully metric locales count.
+    static let usesMetricUnits = Locale.current.measurementSystem == .metric
+
+    /// Short unit label for rider-facing distance values ("mi" / "km").
+    static var distanceUnitAbbreviation: String { usesMetricUnits ? "km" : "mi" }
+
+    /// Converts a stored miles value to the display unit.
+    static func displayDistance(fromMiles miles: Double) -> Double {
+        usesMetricUnits ? miles * kilometersPerMile : miles
+    }
+
+    /// Converts a display-unit value back to stored miles.
+    static func miles(fromDisplayDistance value: Double) -> Double {
+        usesMetricUnits ? value / kilometersPerMile : value
+    }
 
     enum Keys {
         static let defaultFuelRangeMiles = "settings.defaultFuelRangeMiles"
@@ -47,10 +66,10 @@ enum AppSettings {
     }
 }
 
-/// Shared distance string used across the app (miles).
+/// Shared distance string used across the app, in the rider's locale unit.
 func formattedRideDistance(_ meters: CLLocationDistance) -> String {
     let formatter = MKDistanceFormatter()
     formatter.unitStyle = .abbreviated
-    formatter.units = .imperial
+    formatter.units = AppSettings.usesMetricUnits ? .metric : .imperial
     return formatter.string(fromDistance: meters)
 }

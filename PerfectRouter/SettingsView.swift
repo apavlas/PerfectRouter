@@ -32,16 +32,13 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Label("Default tank range", systemImage: "fuelpump.fill")
-                            Spacer()
-                            Text("\(Int(fuelRangeMiles.rounded())) mi")
-                                .foregroundStyle(.secondary)
-                                .monospacedDigit()
-                        }
-                        Slider(value: $fuelRangeMiles, in: 50...300, step: 10)
-                    }
+                    DistanceSliderRow(
+                        label: "Default tank range",
+                        systemImage: "fuelpump.fill",
+                        miles: $fuelRangeMiles,
+                        milesRange: 50...300,
+                        step: 10
+                    )
                 } header: {
                     Text("Default Tank Range")
                 } footer: {
@@ -49,16 +46,13 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Label("Search every", systemImage: "magnifyingglass")
-                            Spacer()
-                            Text("\(Int(searchIntervalMiles.rounded())) mi")
-                                .foregroundStyle(.secondary)
-                                .monospacedDigit()
-                        }
-                        Slider(value: $searchIntervalMiles, in: 10...60, step: 5)
-                    }
+                    DistanceSliderRow(
+                        label: "Search every",
+                        systemImage: "magnifyingglass",
+                        miles: $searchIntervalMiles,
+                        milesRange: 10...60,
+                        step: 5
+                    )
                 } header: {
                     Text("Suggestion Density")
                 } footer: {

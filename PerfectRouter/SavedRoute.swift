@@ -18,41 +18,20 @@ struct SavedRoute: Identifiable, Codable, Equatable {
 }
 
 /// Persists saved rides to a JSON file in the app's Documents directory.
-/// The payload is small (a list of coordinates), so reads and writes are done
-/// synchronously.
 struct SavedRouteStore {
-    private let fileURL: URL
+    private let store: JSONFileStore<SavedRoute>
 
     init(filename: String = "saved_routes.json") {
-        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        fileURL = documents.appendingPathComponent(filename)
+        store = JSONFileStore(filename: filename)
     }
 
     /// Loads the saved rides, or an empty list if none are stored yet.
     func load() -> [SavedRoute] {
-        guard let data = try? Data(contentsOf: fileURL),
-              let routes = try? JSONDecoder().decode([SavedRoute].self, from: data) else {
-            return []
-        }
-        return routes
+        store.load()
     }
 
     /// Overwrites the stored rides with `routes`.
     func save(_ routes: [SavedRoute]) {
-        guard let data = try? JSONEncoder().encode(routes) else { return }
-        // Saved rides hold location history, so protect the file at rest and
-        // keep it out of unencrypted device backups.
-        try? data.write(to: fileURL, options: [.atomic, .completeFileProtection])
-        excludeFromBackup(fileURL)
+        store.save(routes)
     }
-}
-
-/// Marks a file so it is omitted from iCloud / iTunes backups. Used by the
-/// local stores to keep personal data (location history, contacts' phone
-/// numbers) from leaving the device in a backup.
-func excludeFromBackup(_ url: URL) {
-    var url = url
-    var values = URLResourceValues()
-    values.isExcludedFromBackup = true
-    try? url.setResourceValues(values)
 }

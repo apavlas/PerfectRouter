@@ -31,49 +31,41 @@ struct RideLogEntry: Codable, Identifiable, Equatable {
 /// Persists the ride history to a JSON file in the app's Documents directory,
 /// mirroring the lightweight approach used by `SavedRouteStore`.
 struct RideLogStore {
-    private let fileURL: URL
+    private let store: JSONFileStore<RideLogEntry>
 
     init(filename: String = "ride_log.json") {
-        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        fileURL = documents.appendingPathComponent(filename)
+        store = JSONFileStore(filename: filename)
     }
 
     /// All logged rides, most recent first.
     func load() -> [RideLogEntry] {
-        guard let data = try? Data(contentsOf: fileURL),
-              let entries = try? JSONDecoder().decode([RideLogEntry].self, from: data) else {
-            return []
-        }
-        return entries.sorted { $0.date > $1.date }
+        store.load().sorted { $0.date > $1.date }
     }
 
     /// Appends a ride to the log.
     func append(_ entry: RideLogEntry) {
         var all = load()
         all.insert(entry, at: 0)
-        save(all)
+        store.save(all)
     }
 
     /// Removes a ride from the log (its snapshot file is cleaned up by the caller).
     func delete(_ entry: RideLogEntry) {
         var all = load()
         all.removeAll { $0.id == entry.id }
-        save(all)
+        store.save(all)
     }
 
     /// Attaches a snapshot filename to a previously logged ride.
     func updateSnapshot(id: UUID, filename: String) {
         var all = load()
-        guard let index = all.firstIndex(where: { $0.id == id }) else { return }
+        guard let index = all.firstIndex(where: { $0.id == id }) else {
+            // The ride was deleted while its snapshot was still rendering —
+            // remove the freshly written file so it isn't orphaned on disk.
+            RouteSnapshotter.deleteSnapshot(named: filename)
+            return
+        }
         all[index].snapshotFilename = filename
-        save(all)
-    }
-
-    private func save(_ entries: [RideLogEntry]) {
-        guard let data = try? JSONEncoder().encode(entries) else { return }
-        // Ride history reveals where the rider has been, so protect the file at
-        // rest and keep it out of unencrypted device backups.
-        try? data.write(to: fileURL, options: [.atomic, .completeFileProtection])
-        excludeFromBackup(fileURL)
+        store.save(all)
     }
 }

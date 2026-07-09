@@ -7,8 +7,17 @@ import UIKit
 enum NavigationLauncher {
 
     /// Opens the multi-stop route in Apple Maps with driving directions.
+    ///
+    /// `MKMapItem.openMaps(with:launchOptions:)` only routes between the first
+    /// two items — extra items are dropped as route stops — so rides with
+    /// intermediate stops go through the Maps URL scheme instead, which keeps
+    /// every stop (at the cost of showing coordinates rather than stop names).
     static func openInAppleMaps(_ waypoints: [Waypoint]) {
         guard waypoints.count >= 2 else { return }
+        if waypoints.count > 2, let url = appleMapsMultiStopURL(waypoints) {
+            UIApplication.shared.open(url)
+            return
+        }
         let items = waypoints.map { waypoint -> MKMapItem in
             let item = MKMapItem(placemark: MKPlacemark(coordinate: waypoint.coordinate))
             item.name = waypoint.name
@@ -18,6 +27,28 @@ enum NavigationLauncher {
             with: items,
             launchOptions: [MKLaunchOptionsDirectionsModeKey: MKLaunchOptionsDirectionsModeDriving]
         )
+    }
+
+    /// A maps.apple.com driving-directions URL routing through every waypoint.
+    /// Destinations are chained in `daddr` with `+to:` — absent from Apple's
+    /// URL scheme reference but long supported by Maps, and the only URL form
+    /// that preserves mid-ride stops. If Maps ever stops honoring the chain it
+    /// degrades to directions to the first destination, no worse than the
+    /// `openMaps` path.
+    static func appleMapsMultiStopURL(_ waypoints: [Waypoint]) -> URL? {
+        guard waypoints.count >= 2, let origin = waypoints.first else { return nil }
+        let coordinateText = { (waypoint: Waypoint) in
+            "\(waypoint.coordinate.latitude),\(waypoint.coordinate.longitude)"
+        }
+        let destinations = waypoints.dropFirst().map(coordinateText).joined(separator: "+to:")
+
+        var components = URLComponents(string: "https://maps.apple.com/")
+        components?.queryItems = [
+            URLQueryItem(name: "saddr", value: coordinateText(origin)),
+            URLQueryItem(name: "daddr", value: destinations),
+            URLQueryItem(name: "dirflg", value: "d"),
+        ]
+        return components?.url
     }
 
     /// Whether Google Maps is installed (requires `comgooglemaps` in the

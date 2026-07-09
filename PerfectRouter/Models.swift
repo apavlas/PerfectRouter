@@ -29,25 +29,28 @@ enum StopCategory: String, CaseIterable, Identifiable {
     case food = "Food"
     case coffee = "Coffee"
     case scenic = "Scenic"
+    case attraction = "Sights"
 
     var id: String { rawValue }
 
     /// Query string passed to MKLocalSearch.
     var searchQuery: String {
         switch self {
-        case .gas:    return "gas station"
-        case .food:   return "restaurant"
-        case .coffee: return "coffee"
-        case .scenic: return "scenic viewpoint"
+        case .gas:        return "gas station"
+        case .food:       return "restaurant"
+        case .coffee:     return "coffee"
+        case .scenic:     return "scenic viewpoint"
+        case .attraction: return "tourist attractions"
         }
     }
 
     var systemImage: String {
         switch self {
-        case .gas:    return "fuelpump.fill"
-        case .food:   return "fork.knife"
-        case .coffee: return "cup.and.saucer.fill"
-        case .scenic: return "binoculars.fill"
+        case .gas:        return "fuelpump.fill"
+        case .food:       return "fork.knife"
+        case .coffee:     return "cup.and.saucer.fill"
+        case .scenic:     return "binoculars.fill"
+        case .attraction: return "star.fill"
         }
     }
 }
@@ -99,6 +102,10 @@ struct SuggestedStop: Identifiable {
     /// along the route to the nearest sampled point. Used for sorting
     /// and for fuel-range warnings.
     let distanceAlongRoute: CLLocationDistance
+    /// How far off the route line the stop sits, in meters — the detour a
+    /// rider takes to reach it. 0 when unknown (e.g. stops from a shared
+    /// route link).
+    var detourMeters: CLLocationDistance = 0
 
     var name: String { mapItem.name ?? "Unknown" }
     var coordinate: CLLocationCoordinate2D { mapItem.placemark.coordinate }
@@ -123,9 +130,13 @@ extension SuggestedStop {
     init(name: String,
          coordinate: CLLocationCoordinate2D,
          category: StopCategory,
-         distanceAlongRoute: CLLocationDistance) {
+         distanceAlongRoute: CLLocationDistance,
+         detourMeters: CLLocationDistance = 0) {
         let mapItem = MKMapItem(placemark: MKPlacemark(coordinate: coordinate))
         mapItem.name = name
-        self.init(mapItem: mapItem, category: category, distanceAlongRoute: distanceAlongRoute)
+        self.init(mapItem: mapItem,
+                  category: category,
+                  distanceAlongRoute: distanceAlongRoute,
+                  detourMeters: detourMeters)
     }
 }

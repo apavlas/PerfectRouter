@@ -51,6 +51,18 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// deallocated every time SwiftUI rebuilds the view hierarchy.
     private let locationManager = CLLocationManager()
 
+    /// The in-flight route recalculation. Each new plan cancels the previous
+    /// one; otherwise two overlapping recalculations (e.g. two stops added
+    /// quickly) can interleave, and the slower one — computed from an older
+    /// waypoint list — can finish last and overwrite the newer results.
+    private var routeTask: Task<Void, Never>?
+
+    /// Cancels any in-flight recalculation and starts a fresh one.
+    private func scheduleRecalculation(refreshingSuggestions: Bool = true) {
+        routeTask?.cancel()
+        routeTask = Task { await recalculateRoute(refreshingSuggestions: refreshingSuggestions) }
+    }
+
     override init() {
         super.init()
         locationManager.delegate = self
@@ -94,7 +106,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         let newStyle = AppSettings.defaultRouteStyle
         if newStyle != routeStyle {
             routeStyle = newStyle
-            Task { await recalculateRoute() }
+            scheduleRecalculation()
         }
     }
 
@@ -123,7 +135,19 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let coordinate = locations.last?.coordinate else { return }
+        // One good fix is all the planner needs (it seeds the ride start and
+        // the location-share link). Stop continuous updates to save battery;
+        // `refreshLocation()` requests a fresh fix when the app returns to
+        // the foreground.
+        manager.stopUpdatingLocation()
         Task { @MainActor in currentLocation = coordinate }
+    }
+
+    /// Requests a fresh location fix (e.g. when the app returns to the
+    /// foreground). Updates stop again once the fix arrives, so this stays
+    /// cheap on battery.
+    func refreshLocation() {
+        startTrackingIfAuthorized()
     }
 
     nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
@@ -171,6 +195,31 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// tweaks that don't move any stop.
     private var pairedFuelStopIDs: Set<UUID> = []
 
+    /// A handful of recommended places of interest along the ride — low-detour
+    /// sights spread across the route that make good stops. Recomputed after
+    /// each route change by `refreshHighlights()`.
+    var rideHighlights: [SuggestedStop] = []
+
+    /// When the rider plans to leave, or `nil` to assume leaving now. Drives
+    /// the weather check so a ride planned for tomorrow morning is checked
+    /// against tomorrow morning's forecast, not right now's.
+    private(set) var departureDate: Date?
+
+    /// The departure used for time-of-passing estimates. A picked time that
+    /// has since passed falls back to "now" rather than a time in the past.
+    var effectiveDeparture: Date {
+        guard let departureDate, departureDate > Date() else { return Date() }
+        return departureDate
+    }
+
+    /// Sets when the rider plans to leave (`nil` = now) and re-checks the
+    /// route's weather against the new time of passing each point.
+    func setDeparture(_ date: Date?) {
+        guard date != departureDate else { return }
+        departureDate = date
+        Task { await refreshWeather() }
+    }
+
     /// Rain risk along the route at the rider's expected time of passing, or
     /// `nil` if unknown (weather unavailable) or not yet checked.
     var rainForecast: RouteRainForecast?
@@ -212,7 +261,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             waypoints.append(Waypoint(name: "Current Location", coordinate: here))
         }
         waypoints.append(waypoint)
-        Task { await recalculateRoute() }
+        scheduleRecalculation()
     }
 
     /// Sets an explicit ride origin as the first waypoint. Used when there's
@@ -221,7 +270,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     func addStart(_ waypoint: Waypoint) {
         guard waypoint.coordinate.isValidLocation else { return }
         waypoints.insert(waypoint, at: 0)
-        Task { await recalculateRoute() }
+        scheduleRecalculation()
     }
 
     func addStop(from suggestion: SuggestedStop) {
@@ -234,17 +283,17 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         } else {
             waypoints.append(waypoint)
         }
-        Task { await recalculateRoute() }
+        scheduleRecalculation()
     }
 
     func removeWaypoint(at offsets: IndexSet) {
         waypoints.remove(atOffsets: offsets)
-        Task { await recalculateRoute() }
+        scheduleRecalculation()
     }
 
     func moveWaypoint(from source: IndexSet, to destination: Int) {
         waypoints.move(fromOffsets: source, toOffset: destination)
-        Task { await recalculateRoute() }
+        scheduleRecalculation()
     }
 
     // MARK: - Routing
@@ -258,6 +307,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
         guard waypoints.count >= 2 else {
             legs = []
+            clearStopRecommendations()
             await weatherNotifier.updateRainWarning(nil)
             return
         }
@@ -272,6 +322,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             request.source = MKMapItem(placemark: MKPlacemark(coordinate: waypoints[i].coordinate))
             request.destination = MKMapItem(placemark: MKPlacemark(coordinate: waypoints[i + 1].coordinate))
             request.transportType = .automobile
+            // Let MapKit factor predicted traffic for the planned departure
+            // into the route choice and travel-time estimates.
+            request.departureDate = effectiveDeparture
             // Bias the route to the rider's chosen style.
             request.highwayPreference = routeStyle.avoidsHighways ? .avoid : .any
             request.tollPreference = routeStyle.avoidsTolls ? .avoid : .any
@@ -280,24 +333,33 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
             do {
                 let response = try await MKDirections(request: request).calculate()
+                // MKDirections isn't cancellation-aware, so a superseded
+                // recalculation still gets its response — drop it here rather
+                // than let stale legs overwrite the newer plan's results.
+                guard !Task.isCancelled else { return }
                 guard let route = Self.preferredRoute(from: response.routes, style: routeStyle) else {
                     errorMessage = "No route found between \(waypoints[i].name) and \(waypoints[i + 1].name)."
                     legs = []
+                    clearStopRecommendations()
                     return
                 }
                 newLegs.append(route)
             } catch {
+                guard !Task.isCancelled else { return }
                 errorMessage = "Routing failed: \(error.localizedDescription)"
                 legs = []
+                clearStopRecommendations()
                 return
             }
         }
 
+        guard !Task.isCancelled else { return }
         legs = newLegs
         if refreshingSuggestions {
             await refreshSuggestions()
         }
         await refreshGasStations()
+        await refreshHighlights()
         await refreshWeather()
     }
 
@@ -307,7 +369,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         guard style != routeStyle else { return }
         routeStyle = style
         UserDefaults.standard.set(style.rawValue, forKey: AppSettings.Keys.routeStyle)
-        Task { await recalculateRoute() }
+        scheduleRecalculation()
     }
 
     /// Picks which of MapKit's returned routes to use for a leg. For scenic
@@ -333,7 +395,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         }
         isCheckingWeather = true
         defer { isCheckingWeather = false }
-        rainForecast = await weatherService.rainForecast(alongLegs: legs, departure: Date())
+        let forecast = await weatherService.rainForecast(alongLegs: legs, departure: effectiveDeparture)
+        guard !Task.isCancelled else { return }
+        rainForecast = forecast
         // Surface the same warning shown on screen as a local notification so
         // the rider is alerted even if they've stopped looking at the app.
         await weatherNotifier.updateRainWarning(rainWarning)
@@ -344,6 +408,18 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// Finds every gas station along the route (independent of the selected
     /// category) so the rider can pick any of them, then plans which ones to
     /// recommend as fuel stops.
+    /// Clears every route-derived stop recommendation, so a cleared or failed
+    /// route doesn't leave stale pins and rows behind.
+    private func clearStopRecommendations() {
+        gasStations = []
+        travelSideGasStations = []
+        fuelStops = []
+        hasFuelGap = false
+        fuelFoodStops = []
+        pairedFuelStopIDs = []
+        rideHighlights = []
+    }
+
     func refreshGasStations() async {
         guard !legs.isEmpty else {
             gasStations = []
@@ -360,7 +436,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         if selectedCategory == .gas, !suggestedStops.isEmpty {
             gasStations = suggestedStops
         } else {
-            gasStations = await suggestionService.findStops(category: .gas, alongLegs: legs)
+            let found = await suggestionService.findStops(category: .gas, alongLegs: legs)
+            guard !Task.isCancelled else { return }
+            gasStations = found
         }
 
         // Recommendations only consider stops on the rider's side of travel.
@@ -419,6 +497,12 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 near: stop.coordinate,
                 alongPolylines: legPolylines
             )
+            // Superseded mid-pairing: reset the identity guard so the next
+            // run redoes the (abandoned) pairing, and leave state untouched.
+            guard !Task.isCancelled else {
+                pairedFuelStopIDs = []
+                return
+            }
             paired.append(FuelFoodStop(fuelStop: stop, nearbyFood: food))
         }
         fuelFoodStops = paired
@@ -476,16 +560,93 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         return (chosen, hasGap)
     }
 
+    // MARK: - Ride highlights (places of interest)
+
+    /// Finds places of interest along the route and picks a handful worth
+    /// stopping at — low-detour sights spread across the ride. Mirrors the
+    /// fuel-stop pipeline: search wide, then select with pure logic.
+    func refreshHighlights() async {
+        guard !legs.isEmpty else {
+            rideHighlights = []
+            return
+        }
+
+        // Reuse already-loaded sights when the rider is browsing that
+        // category; otherwise run a dedicated (smaller) search — highlights
+        // are a bonus, so they get half the usual search budget to keep the
+        // per-route MKLocalSearch load down.
+        let candidates: [SuggestedStop]
+        if selectedCategory == .attraction, !suggestedStops.isEmpty {
+            candidates = suggestedStops
+        } else {
+            var service = suggestionService
+            service.maxSearches = suggestionService.maxSearches / 2
+            let found = await service.findStops(category: .attraction, alongLegs: legs)
+            guard !Task.isCancelled else { return }
+            candidates = found
+        }
+
+        rideHighlights = Self.selectHighlights(
+            from: candidates,
+            totalDistance: totalDistanceMeters
+        )
+    }
+
+    /// Whether a stop is one of the auto-recommended ride highlights.
+    func isRideHighlight(_ stop: SuggestedStop) -> Bool {
+        rideHighlights.contains { $0.id == stop.id }
+    }
+
+    /// Pure selection of ride highlights from the places of interest found
+    /// near the route. A good stop is one that barely interrupts the ride:
+    /// candidates more than `maxDetourMeters` off the route are dropped, as
+    /// are ones essentially at the start or destination (the rider is already
+    /// there). The rest are taken smallest-detour-first, keeping stops at
+    /// least `minSeparationMeters` apart so the picks spread across the ride
+    /// instead of clustering in one town. Returned in ride order.
+    nonisolated static func selectHighlights(
+        from candidates: [SuggestedStop],
+        totalDistance: CLLocationDistance,
+        maxCount: Int = 4,
+        maxDetourMeters: CLLocationDistance = 3_000,
+        minSeparationMeters: CLLocationDistance = 15_000
+    ) -> [SuggestedStop] {
+        guard maxCount > 0, totalDistance > 0 else { return [] }
+
+        // Ignore sights basically at the origin or destination.
+        let endMargin = min(5_000, totalDistance * 0.05)
+        let eligible = candidates.filter {
+            $0.detourMeters <= maxDetourMeters
+                && $0.distanceAlongRoute > endMargin
+                && $0.distanceAlongRoute < totalDistance - endMargin
+        }
+
+        var chosen: [SuggestedStop] = []
+        for stop in eligible.sorted(by: { $0.detourMeters < $1.detourMeters }) {
+            guard chosen.count < maxCount else { break }
+            let farEnough = chosen.allSatisfy {
+                abs($0.distanceAlongRoute - stop.distanceAlongRoute) >= minSeparationMeters
+            }
+            if farEnough {
+                chosen.append(stop)
+            }
+        }
+
+        return chosen.sorted { $0.distanceAlongRoute < $1.distanceAlongRoute }
+    }
+
     // MARK: - Suggestions
 
     func refreshSuggestions() async {
         guard !legs.isEmpty else { return }
         isLoadingSuggestions = true
         defer { isLoadingSuggestions = false }
-        suggestedStops = await suggestionService.findStops(
+        let found = await suggestionService.findStops(
             category: selectedCategory,
             alongLegs: legs
         )
+        guard !Task.isCancelled else { return }
+        suggestedStops = found
     }
 
     func selectCategory(_ category: StopCategory) {
@@ -524,8 +685,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         if let category = shared.suggestionCategory {
             selectedCategory = category
         }
-        Task {
+        routeTask?.cancel()
+        routeTask = Task {
             await recalculateRoute(refreshingSuggestions: importedStops.isEmpty)
+            guard !Task.isCancelled else { return }
             if !importedStops.isEmpty {
                 suggestedStops = importedStops
             }
@@ -593,8 +756,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         if let category = saved.route.suggestionCategory {
             selectedCategory = category
         }
-        Task {
+        routeTask?.cancel()
+        routeTask = Task {
             await recalculateRoute(refreshingSuggestions: savedStops.isEmpty)
+            guard !Task.isCancelled else { return }
             if !savedStops.isEmpty {
                 suggestedStops = savedStops
             }
