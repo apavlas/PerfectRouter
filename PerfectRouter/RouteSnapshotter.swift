@@ -74,8 +74,12 @@ enum RouteSnapshotter {
         guard let data = image.pngData() else { return nil }
 
         let filename = "\(UUID().uuidString).png"
+        let url = snapshotsDirectory().appendingPathComponent(filename)
         do {
-            try data.write(to: snapshotsDirectory().appendingPathComponent(filename))
+            // A snapshot is a visual map of exactly where the rider has been,
+            // so it gets the same protection as the ride log that references it.
+            try data.write(to: url, options: [.atomic, .completeFileProtection])
+            excludeFromBackup(url)
             return filename
         } catch {
             return nil
