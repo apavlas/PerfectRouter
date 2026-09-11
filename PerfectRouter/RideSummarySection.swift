@@ -18,17 +18,39 @@ struct RideSummarySection: View {
                     Label(formattedDuration(viewModel.totalExpectedTravelTime), systemImage: "clock")
                 }
                 ForEach(Array(viewModel.fuelStops.enumerated()), id: \.element.id) { index, fuelStop in
-                    Label("Fuel stop \(index + 1): \(fuelStop.name) (~\(formattedRideDistance(fuelStop.distanceAlongRoute)) in)",
-                          systemImage: "fuelpump.fill")
-                        .foregroundStyle(.green)
+                    // Same addStop path as map / list suggestions — tap to
+                    // insert the stop and re-route.
+                    Button {
+                        viewModel.addStop(from: fuelStop)
+                    } label: {
+                        HStack {
+                            Label("Fuel stop \(index + 1): \(fuelStop.name) (~\(formattedRideDistance(fuelStop.distanceAlongRoute)) in)",
+                                  systemImage: "fuelpump.fill")
+                            Spacer()
+                            Image(systemName: "plus.circle.fill")
+                                .foregroundStyle(.blue)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.green)
 
                     // Food found right next to this fuel stop, so the rider can
                     // refuel and eat in one stop. Nested under its fuel stop.
                     ForEach(foodNearFuelStop(fuelStop.id)) { food in
-                        Label(food.name, systemImage: "fork.knife")
+                        Button {
+                            viewModel.addStop(from: food)
+                        } label: {
+                            HStack {
+                                Label(food.name, systemImage: "fork.knife")
+                                Spacer()
+                                Image(systemName: "plus.circle.fill")
+                                    .foregroundStyle(.blue)
+                            }
                             .font(.subheadline)
-                            .foregroundStyle(.secondary)
                             .padding(.leading)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
                     }
                 }
                 if viewModel.hasFuelGap {
