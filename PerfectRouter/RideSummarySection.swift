@@ -49,7 +49,9 @@ struct RideSummarySection: View {
                 Button {
                     launchAppleMaps()
                 } label: {
-                    Label("Navigate", systemImage: "car.fill")
+                    // motorcycle.fill is SF Symbols 6 / iOS 18+; reuse the
+                    // Splash rider glyph so this stays valid on iOS 17.
+                    Label("Navigate", systemImage: "figure.outdoor.cycle")
                         .frame(maxWidth: .infinity)
                         .font(.headline)
                 }
