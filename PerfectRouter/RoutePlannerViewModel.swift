@@ -99,14 +99,20 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     /// Re-reads preferences that can change mid-session (e.g. after the rider
     /// edits Settings). The per-ride fuel slider is left as-is so an in-progress
-    /// adjustment isn't overwritten.
-    func applySettings() {
+    /// adjustment isn't overwritten, unless `seedFuelRange` is set (first-run /
+    /// post-splash) so the planner picks up `settings.defaultFuelRangeMiles`.
+    func applySettings(seedFuelRange: Bool = false) {
         suggestionService.sampleIntervalMeters = AppSettings.searchIntervalMeters
+        if seedFuelRange {
+            fuelRangeMeters = AppSettings.defaultFuelRangeMeters
+        }
         // Pick up a route style changed in Settings and re-plan if it differs.
         let newStyle = AppSettings.defaultRouteStyle
         if newStyle != routeStyle {
             routeStyle = newStyle
             scheduleRecalculation()
+        } else if seedFuelRange, !waypoints.isEmpty {
+            replanFuelStops()
         }
     }
 

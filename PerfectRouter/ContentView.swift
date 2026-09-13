@@ -6,6 +6,9 @@ struct ContentView: View {
     /// good time to ask for location permission (so the system alert doesn't
     /// pop up over the splash animation). Defaults to `true` for previews.
     var readyForPermissions = true
+    /// When `false` (first-run still showing), the planning sheet stays hidden
+    /// so it cannot cover the intro. Defaults to `true` for previews.
+    var planningSheetEnabled = true
 
     @Environment(\.scenePhase) private var scenePhase
     @State private var viewModel = RoutePlannerViewModel()
@@ -143,10 +146,12 @@ struct ContentView: View {
             visibleRegion = context.region
         }
         .onChange(of: readyForPermissions, initial: true) { _, ready in
-            // Wait for the splash to clear before prompting for location.
-            // Riders already authorized from a previous launch keep tracking
-            // (started in the view model's init) regardless of this prompt.
+            // Wait for the splash (and first-run, when shown) to clear before
+            // prompting for location, so the system alert doesn't sit over
+            // those screens. Riders already authorized from a previous launch
+            // keep tracking (started in the view model's init) regardless.
             if ready {
+                viewModel.applySettings(seedFuelRange: true)
                 viewModel.requestLocationPermission()
             }
         }
@@ -190,7 +195,10 @@ struct ContentView: View {
         .safeAreaInset(edge: .top) {
             categoryPicker
         }
-        .sheet(isPresented: $showSheet) {
+        .sheet(isPresented: Binding(
+            get: { showSheet && planningSheetEnabled },
+            set: { showSheet = $0 }
+        )) {
             planningSheet
                 .presentationDetents([.fraction(0.15), .medium, .large], selection: $sheetDetent)
                 .presentationBackgroundInteraction(.enabled(upThrough: .medium))
