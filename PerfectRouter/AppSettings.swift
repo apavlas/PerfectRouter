@@ -32,6 +32,8 @@ enum AppSettings {
         static let defaultFuelRangeMiles = "settings.defaultFuelRangeMiles"
         static let searchIntervalMiles = "settings.searchIntervalMiles"
         static let routeStyle = "settings.routeStyle"
+        /// One-time post-splash first-run. Once true, the intro is never shown again.
+        static let hasCompletedFirstRun = "settings.hasCompletedFirstRun"
     }
 
     static let defaultFuelRangeMilesDefault = 100.0
@@ -63,6 +65,22 @@ enum AppSettings {
         let miles = UserDefaults.standard.object(forKey: Keys.searchIntervalMiles) as? Double
             ?? searchIntervalMilesDefault
         return miles * metersPerMile
+    }
+
+    /// Whether the rider has already finished or skipped the first-run screen.
+    static var hasCompletedFirstRun: Bool {
+        UserDefaults.standard.bool(forKey: Keys.hasCompletedFirstRun)
+    }
+
+    /// Marks first-run done so it doesn't nag on later launches. When `miles`
+    /// is provided (Start planning), writes `settings.defaultFuelRangeMiles`
+    /// so Settings and the planner share the same tank. `nil` (Set up later)
+    /// leaves the stored default as-is.
+    static func completeFirstRun(savingTankMiles miles: Double? = nil) {
+        if let miles {
+            UserDefaults.standard.set(miles, forKey: Keys.defaultFuelRangeMiles)
+        }
+        UserDefaults.standard.set(true, forKey: Keys.hasCompletedFirstRun)
     }
 }
 
