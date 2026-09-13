@@ -229,23 +229,27 @@ struct ContentView: View {
     private var planningSheet: some View {
         NavigationStack {
             List {
+                // AC-S1: search → waypoints → summary (Navigate) → highlights
+                // → suggestions → gas → prefs (fuel / leave later / style) →
+                // saved routes. Cold-plan Search + Summary stay above prefs so
+                // medium detent can act without scrolling past ride settings.
                 SearchSection(
                     viewModel: viewModel,
                     currentRegion: currentRegion,
                     onWaypointAdded: { recenter(on: $0.coordinate, spanDelta: 0.3) }
                 )
-                RouteStyleSection(viewModel: viewModel)
-                DepartureSection(viewModel: viewModel)
+                WaypointsSection(viewModel: viewModel, onUseMapCenterAsStart: addStartFromMapCenter)
                 RideSummarySection(viewModel: viewModel)
                 if !viewModel.rideHighlights.isEmpty {
                     RideHighlightsSection(viewModel: viewModel)
                 }
-                FuelRangeSection(viewModel: viewModel)
+                SuggestionsSection(viewModel: viewModel)
                 if viewModel.selectedCategory != .gas && !viewModel.legs.isEmpty {
                     GasStationsSection(viewModel: viewModel)
                 }
-                WaypointsSection(viewModel: viewModel, onUseMapCenterAsStart: addStartFromMapCenter)
-                SuggestionsSection(viewModel: viewModel)
+                FuelRangeSection(viewModel: viewModel)
+                DepartureSection(viewModel: viewModel)
+                RouteStyleSection(viewModel: viewModel)
                 SavedRoutesSection(viewModel: viewModel, onLoad: loadSaved)
             }
             .navigationTitle("Plan Ride")
