@@ -283,7 +283,11 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         guard suggestion.coordinate.isValidLocation else { return }
         // Insert before the final destination so the ride still ends
         // where the rider intended.
-        let waypoint = Waypoint(name: suggestion.name, coordinate: suggestion.coordinate)
+        let waypoint = Waypoint(
+            name: suggestion.name,
+            coordinate: suggestion.coordinate,
+            isGasFill: suggestion.category == .gas
+        )
         if waypoints.count >= 2 {
             waypoints.insert(waypoint, at: waypoints.count - 1)
         } else {
@@ -470,7 +474,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         let plan = Self.planFuelStops(
             from: travelSideGasStations,
             totalDistance: totalDistanceMeters,
-            range: fuelRangeMeters
+            range: fuelRangeMeters,
+            filledAt: gasFillDistances
         )
         fuelStops = plan.stops
         hasFuelGap = plan.hasGap
@@ -523,16 +528,27 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// safety buffer so the rider isn't running on fumes (~85% = ~15% reserve).
     nonisolated static let fuelSafetyFactor = 0.85
 
-    /// Greedy fuel-stop selection. From the last fill-up, prefer the gas
-    /// station as far along as possible but still within `safetyFactor` of the
-    /// tank range (so there's a reserve). If no station falls in that comfort
-    /// window, fall back to one within the full hard range rather than skip a
+    /// Distances along the current route of rider-added gas waypoints, each
+    /// treated as a fill so later recommendations start from that point.
+    private var gasFillDistances: [CLLocationDistance] {
+        guard !legs.isEmpty else { return [] }
+        return waypoints
+            .filter(\.isGasFill)
+            .map { RouteGeometry.distanceAlongRoute(of: $0.coordinate, along: legs) }
+    }
+
+    /// Greedy fuel-stop selection. From the last fill-up (ride start, or a
+    /// rider-added gas waypoint in `filledAt`), prefer the gas station as far
+    /// along as possible but still within `safetyFactor` of the tank range
+    /// (so there's a reserve). If no station falls in that comfort window,
+    /// fall back to one within the full hard range rather than skip a
     /// refuel; only when nothing is reachable at all is a fuel gap flagged.
     /// Refuels are planned one per tank until the destination is in range.
     nonisolated static func planFuelStops(
         from gasStops: [SuggestedStop],
         totalDistance: CLLocationDistance,
         range: CLLocationDistance,
+        filledAt: [CLLocationDistance] = [],
         safetyFactor: Double = fuelSafetyFactor
     ) -> (stops: [SuggestedStop], hasGap: Bool) {
         guard range > 0, totalDistance > range else { return ([], false) }
@@ -541,7 +557,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         let sorted = gasStops.sorted { $0.distanceAlongRoute < $1.distanceAlongRoute }
         var chosen: [SuggestedStop] = []
         var hasGap = false
-        var lastRefuel: CLLocationDistance = 0   // distance of the last fill-up
+        // Rider-added gas stops count as fills; later pumps plan from the last one.
+        var lastRefuel: CLLocationDistance = max(0, filledAt.max() ?? 0)
 
         // Keep refueling until the remaining distance fits within one tank.
         while totalDistance - lastRefuel > range {

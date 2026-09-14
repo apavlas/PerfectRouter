@@ -17,6 +17,9 @@ struct Waypoint: Identifiable, Equatable {
     let id = UUID()
     var name: String
     var coordinate: CLLocationCoordinate2D
+    /// True when the rider added this stop as a gas station (pin, list, or
+    /// ride-summary row). Counts as a tank fill for `planFuelStops`.
+    var isGasFill: Bool = false
 
     static func == (lhs: Waypoint, rhs: Waypoint) -> Bool {
         lhs.id == rhs.id

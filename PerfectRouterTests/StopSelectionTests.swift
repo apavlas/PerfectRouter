@@ -33,6 +33,7 @@ final class StopSelectionTests: XCTestCase {
         viewModel.addStop(from: suggestion("Diner", category: .food, lat: 33.5, lon: -81.5))
 
         XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "Diner", "End"])
+        XCTAssertFalse(viewModel.waypoints[1].isGasFill)
     }
 
     func testAddStopInsertsFuelBeforeDestination() {
@@ -45,6 +46,7 @@ final class StopSelectionTests: XCTestCase {
         viewModel.addStop(from: suggestion("Gas-N-Go", category: .gas, lat: 33.4, lon: -81.6))
 
         XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "Gas-N-Go", "End"])
+        XCTAssertTrue(viewModel.waypoints[1].isGasFill)
     }
 
     func testAddStopRejectsInvalidCoordinate() {
