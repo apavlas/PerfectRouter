@@ -176,6 +176,17 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// change by `refreshGasStations()`.
     var gasStations: [SuggestedStop] = []
 
+    /// Whether the planning sheet's "All gas on route" disclosure is open.
+    /// Gray map pins for non-recommended stations follow this so the map
+    /// stays quiet until the rider asks for the full list.
+    var isShowingAllGasOnRoute = false
+
+    /// Extra gray gas pins: only while browsing a non-gas category *and* the
+    /// full station list is expanded. Recommended pumps and category pins stay.
+    var showsAllGasPins: Bool {
+        selectedCategory != .gas && isShowingAllGasOnRoute
+    }
+
     /// The subset of `gasStations` automatically recommended as fuel stops —
     /// roughly one per tank of fuel (`fuelRangeMeters`, ~100 mi) and limited to
     /// the side of the road matching the direction of travel.
@@ -424,6 +435,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         fuelFoodStops = []
         pairedFuelStopIDs = []
         rideHighlights = []
+        isShowingAllGasOnRoute = false
     }
 
     func refreshGasStations() async {
