@@ -1,44 +1,61 @@
 import SwiftUI
 
-/// Lists every gas station found along the route so the rider can pick any
-/// of them. The auto-recommended fuel stops are badged. Shown while
-/// browsing a non-gas category (the Gas category already lists these in
-/// the suggestions section).
+/// Short recommended-fuel block for Food / Coffee / Scenic. The Gas chip
+/// already lists stations under Suggested Gas, so this section stays gated
+/// off that category. The full corridor list is optional under disclosure.
 struct GasStationsSection: View {
     let viewModel: RoutePlannerViewModel
 
     var body: some View {
-        Section("Gas Stations on Route") {
-            if viewModel.gasStations.isEmpty {
+        Section("Recommended fuel") {
+            if viewModel.fuelStops.isEmpty && viewModel.gasStations.isEmpty {
                 Text("No gas stations found along this route.")
                     .foregroundStyle(.secondary)
             }
-            ForEach(viewModel.gasStations) { stop in
-                Button {
-                    viewModel.addStop(from: stop)
-                } label: {
-                    HStack {
-                        Image(systemName: "fuelpump.fill")
-                            .foregroundStyle(viewModel.isRecommendedFuelStop(stop) ? .green : .secondary)
-                        VStack(alignment: .leading) {
-                            Text(stop.name)
-                            Text("~\(formattedRideDistance(stop.distanceAlongRoute)) from start")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        if viewModel.isRecommendedFuelStop(stop) {
-                            Text("Recommended")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.green)
-                        }
-                        Image(systemName: "plus.circle.fill")
-                            .foregroundStyle(.blue)
+            ForEach(viewModel.fuelStops) { stop in
+                gasRow(stop, recommended: true)
+            }
+            if !viewModel.gasStations.isEmpty {
+                DisclosureGroup(
+                    "All gas on route",
+                    isExpanded: Binding(
+                        get: { viewModel.isShowingAllGasOnRoute },
+                        set: { viewModel.isShowingAllGasOnRoute = $0 }
+                    )
+                ) {
+                    ForEach(viewModel.gasStations) { stop in
+                        gasRow(stop, recommended: viewModel.isRecommendedFuelStop(stop))
                     }
                 }
-                .buttonStyle(.plain)
             }
         }
+    }
+
+    /// Same green/recommended row used for auto picks; tap adds the stop.
+    private func gasRow(_ stop: SuggestedStop, recommended: Bool) -> some View {
+        Button {
+            viewModel.addStop(from: stop)
+        } label: {
+            HStack {
+                Image(systemName: "fuelpump.fill")
+                    .foregroundStyle(recommended ? .green : .secondary)
+                VStack(alignment: .leading) {
+                    Text(stop.name)
+                    Text("~\(formattedRideDistance(stop.distanceAlongRoute)) from start")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if recommended {
+                    Text("Recommended")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.green)
+                }
+                Image(systemName: "plus.circle.fill")
+                    .foregroundStyle(.blue)
+            }
+        }
+        .buttonStyle(.plain)
     }
 }
 

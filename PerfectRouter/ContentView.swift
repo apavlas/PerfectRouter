@@ -67,11 +67,11 @@ struct ContentView: View {
             }
 
 
-            // Non-recommended gas stations along the route — pickable while
-            // browsing another category. Drawn neutral/gray and excluding the
-            // recommended stops, which get their own highlighted layer below.
-            // Hidden in the Gas category, where the suggestions layer covers them.
-            if viewModel.selectedCategory != .gas {
+            // Non-recommended gas stations — only while the sheet's
+            // "All gas on route" list is open. Recommended pumps and the
+            // selected-category pins stay regardless. Hidden in Gas, where
+            // the suggestions layer already covers stations.
+            if viewModel.showsAllGasPins {
                 ForEach(viewModel.gasStations.filter { !viewModel.isRecommendedFuelStop($0) }) { stop in
                     Annotation(stop.name, coordinate: stop.coordinate) {
                         Button {
