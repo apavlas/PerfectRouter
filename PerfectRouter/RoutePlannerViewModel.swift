@@ -31,7 +31,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// Rider's fuel range in meters (default ~100 miles).
     var fuelRangeMeters: CLLocationDistance = 160_900
 
-    /// How routes are biased — fastest, avoiding highways, or scenic back roads.
+    /// How routes are biased — fastest, avoiding highways, or scenic (Apple alternates).
     var routeStyle: RouteStyle = .fastest
 
     private var suggestionService = StopSuggestionService()

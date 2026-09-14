@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Lets the rider bias routing toward scenic back roads or away from
-/// highways. Changing the style re-plans the current ride immediately.
+/// Lets the rider pick Fastest, Avoid Highways, or Scenic. Changing the
+/// style re-plans the current ride immediately.
 struct RouteStyleSection: View {
     let viewModel: RoutePlannerViewModel
 

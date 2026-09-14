@@ -58,9 +58,9 @@ enum StopCategory: String, CaseIterable, Identifiable {
     }
 }
 
-/// How the planner should bias route calculation. Riders often prefer twisty
-/// back roads over the fastest stretch of interstate, so PerfectRouter can avoid
-/// highways and, for scenic rides, tolls — favoring quieter, more scenic roads.
+/// How the planner should bias route calculation. Scenic asks Apple to
+/// avoid highways and tolls and pick an alternate when one is offered —
+/// not twisty or back-road routing.
 enum RouteStyle: String, CaseIterable, Identifiable {
     case fastest = "Fastest"
     case avoidHighways = "Avoid Highways"
@@ -81,7 +81,7 @@ enum RouteStyle: String, CaseIterable, Identifiable {
         switch self {
         case .fastest:       return "The quickest route, highways included."
         case .avoidHighways: return "Stays off highways where possible."
-        case .scenic:        return "Favors quiet back roads, avoiding highways and tolls."
+        case .scenic:        return "Avoids highways and tolls when Apple offers a quieter option — not true twisty routing."
         }
     }
 
