@@ -83,26 +83,16 @@ struct ContactAddressPicker: UIViewControllerRepresentable {
             }
             guard contactProperty.key == CNContactPostalAddressesKey,
                   let address = contactProperty.value as? CNPostalAddress else { return }
-            onSelect(displayName(for: contactProperty, address: address), address)
+            // Do not read name keys unless they were fetched — see ContactLabel.
+            onSelect(
+                ContactLabel.name(from: contactProperty.contact, fallback: ContactLabel.mailingAddress(address)),
+                address
+            )
         }
 
         func contactPickerDidCancel(_ picker: CNContactPickerViewController) {
             self.picker = nil
             dismiss()
-        }
-
-        /// Prefers the contact's name, falling back to the organization, then
-        /// the formatted street address, so a waypoint always has a label.
-        private func displayName(for property: CNContactProperty, address: CNPostalAddress) -> String {
-            if let name = CNContactFormatter.string(from: property.contact, style: .fullName),
-               !name.isEmpty {
-                return name
-            }
-            if !property.contact.organizationName.isEmpty {
-                return property.contact.organizationName
-            }
-            return CNPostalAddressFormatter.string(from: address, style: .mailingAddress)
-                .replacingOccurrences(of: "\n", with: ", ")
         }
     }
 }

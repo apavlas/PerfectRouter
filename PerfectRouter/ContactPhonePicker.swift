@@ -80,28 +80,13 @@ struct ContactPhonePicker: UIViewControllerRepresentable {
             }
             guard contactProperty.key == CNContactPhoneNumbersKey,
                   let phone = contactProperty.value as? CNPhoneNumber else { return }
-            onSelect(displayName(for: contactProperty), phone.stringValue)
+            // Do not read name keys unless they were fetched — see ContactLabel.
+            onSelect(ContactLabel.name(from: contactProperty.contact, fallback: phone.stringValue), phone.stringValue)
         }
 
         func contactPickerDidCancel(_ picker: CNContactPickerViewController) {
             self.picker = nil
             dismiss()
-        }
-
-        /// Prefers the contact's name, falling back to the organization, then
-        /// the phone number itself, so a rider always has a label.
-        private func displayName(for property: CNContactProperty) -> String {
-            if let name = CNContactFormatter.string(from: property.contact, style: .fullName),
-               !name.isEmpty {
-                return name
-            }
-            if !property.contact.organizationName.isEmpty {
-                return property.contact.organizationName
-            }
-            if let phone = property.value as? CNPhoneNumber {
-                return phone.stringValue
-            }
-            return "Rider"
         }
     }
 }

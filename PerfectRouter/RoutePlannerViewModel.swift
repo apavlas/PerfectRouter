@@ -897,7 +897,18 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// when the address can't be located. Returns the added waypoint, or `nil`.
     @discardableResult
     func addWaypoint(named name: String, at postalAddress: CNPostalAddress) async -> Waypoint? {
-        let placemarks = try? await CLGeocoder().geocodePostalAddress(postalAddress)
+        let query = ContactLabel.mailingAddress(postalAddress)
+        guard !query.isEmpty else {
+            errorMessage = "That contact has no usable address."
+            return nil
+        }
+        // Structured postal geocode first; fall back to the formatted string
+        // so sparse simulator contacts still resolve.
+        let geocoder = CLGeocoder()
+        var placemarks = try? await geocoder.geocodePostalAddress(postalAddress)
+        if placemarks?.contains(where: { $0.location?.coordinate.isValidLocation == true }) != true {
+            placemarks = try? await geocoder.geocodeAddressString(query)
+        }
         guard let coordinate = placemarks?.first?.location?.coordinate,
               coordinate.isValidLocation else {
             errorMessage = "Couldn't find a location for \(name)."
