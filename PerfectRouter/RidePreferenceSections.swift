@@ -71,7 +71,8 @@ struct DepartureSection: View {
 }
 
 /// Lets the rider set their tank range, which drives how often gas stops
-/// are recommended. Re-plans fuel stops when the rider finishes adjusting.
+/// are searched and recommended (preferring pumps that also have food).
+/// Re-searches along the route when the rider finishes adjusting.
 struct FuelRangeSection: View {
     let viewModel: RoutePlannerViewModel
 
@@ -84,10 +85,10 @@ struct FuelRangeSection: View {
                 milesRange: 50...300,
                 step: 10,
                 onEditingChanged: { editing in
-                    // Re-plan only when the drag ends. No network search —
-                    // just re-selects from the gas stations already loaded.
+                    // Tank miles drive both the search grid and the pick.
+                    // Re-search gas/food at the new intervals when the drag ends.
                     if !editing {
-                        viewModel.replanFuelStops()
+                        Task { await viewModel.refreshGasStations() }
                     }
                 }
             )

@@ -168,6 +168,46 @@ enum RouteGeometry {
         return best
     }
 
+    /// Coordinates on the route at each target distance from the start.
+    /// Distances past the end of the route are dropped. Used to search for
+    /// gas (and food) at tank-interval points instead of a fixed mile grid.
+    static func coordinates(
+        alongPolylines polylines: [[CLLocationCoordinate2D]],
+        atDistances distances: [CLLocationDistance]
+    ) -> [CLLocationCoordinate2D] {
+        let targets = distances.filter { $0 >= 0 }.sorted()
+        guard !targets.isEmpty else { return [] }
+
+        var results: [CLLocationCoordinate2D] = []
+        var targetIndex = 0
+        var cumulative: CLLocationDistance = 0
+
+        for coords in polylines {
+            guard coords.count > 1 else { continue }
+            for i in 1..<coords.count {
+                let a = coords[i - 1]
+                let b = coords[i]
+                let segmentMeters = CLLocation(latitude: a.latitude, longitude: a.longitude)
+                    .distance(from: CLLocation(latitude: b.latitude, longitude: b.longitude))
+                let nextCumulative = cumulative + segmentMeters
+
+                while targetIndex < targets.count && targets[targetIndex] <= nextCumulative {
+                    let remaining = targets[targetIndex] - cumulative
+                    let t = segmentMeters > 0 ? remaining / segmentMeters : 1
+                    results.append(CLLocationCoordinate2D(
+                        latitude: a.latitude + t * (b.latitude - a.latitude),
+                        longitude: a.longitude + t * (b.longitude - a.longitude)
+                    ))
+                    targetIndex += 1
+                }
+
+                cumulative = nextCumulative
+                if targetIndex >= targets.count { return results }
+            }
+        }
+        return results
+    }
+
     /// Extracts a polyline's coordinates into an array.
     static func coordinates(of polyline: MKPolyline) -> [CLLocationCoordinate2D] {
         let count = polyline.pointCount

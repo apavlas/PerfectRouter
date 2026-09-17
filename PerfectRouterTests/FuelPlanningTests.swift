@@ -160,4 +160,154 @@ final class FuelPlanningTests: XCTestCase {
         XCTAssertFalse(hasGap)
         XCTAssertEqual(stops.map { Int($0.distanceAlongRoute) }, [140_000])
     }
+
+    // MARK: - Food at the stop
+
+    func testPrefersGasWithFoodOverFartherGasOnly() {
+        // Both sit in the 85 km comfort window. Gas-only is farther; food wins.
+        let withFood = gas(at: 60_000)
+        let gasOnly = gas(at: 80_000)
+        let (stops, hasGap) = RoutePlannerViewModel.planFuelStops(
+            from: [withFood, gasOnly],
+            totalDistance: 150_000,
+            range: 100_000,
+            preferringFoodAt: [withFood.id]
+        )
+        XCTAssertFalse(hasGap)
+        XCTAssertEqual(stops.map(\.id), [withFood.id])
+    }
+
+    func testPicksFarthestFoodStopInsideTheTankWindow() {
+        let earlyFood = gas(at: 40_000)
+        let laterFood = gas(at: 80_000)
+        let gasOnly = gas(at: 84_000)
+        let (stops, hasGap) = RoutePlannerViewModel.planFuelStops(
+            from: [earlyFood, laterFood, gasOnly],
+            totalDistance: 150_000,
+            range: 100_000,
+            preferringFoodAt: [earlyFood.id, laterFood.id]
+        )
+        XCTAssertFalse(hasGap)
+        XCTAssertEqual(stops.map(\.id), [laterFood.id])
+    }
+
+    func testFallsBackToGasOnlyWhenNoFoodInWindow() {
+        let only = gas(at: 80_000)
+        let (stops, hasGap) = RoutePlannerViewModel.planFuelStops(
+            from: [only],
+            totalDistance: 150_000,
+            range: 100_000,
+            preferringFoodAt: [UUID()]
+        )
+        XCTAssertFalse(hasGap)
+        XCTAssertEqual(stops.map { Int($0.distanceAlongRoute) }, [80_000])
+    }
+
+    func testHardRangeFallbackPrefersFood() {
+        // Comfort window (85 km) is empty. Both candidates sit in hard range;
+        // the farther one is gas-only, so food at 95 km wins.
+        let withFood = gas(at: 95_000)
+        let gasOnly = gas(at: 99_000)
+        let (stops, hasGap) = RoutePlannerViewModel.planFuelStops(
+            from: [withFood, gasOnly],
+            totalDistance: 150_000,
+            range: 100_000,
+            preferringFoodAt: [withFood.id]
+        )
+        XCTAssertFalse(hasGap)
+        XCTAssertEqual(stops.map(\.id), [withFood.id])
+    }
+
+    func testEmptyPreferringFoodKeepsFarthestInWindow() {
+        // Default / no food data: same pick as the original long-ride case.
+        let stations = stride(from: 20_000.0, through: 240_000.0, by: 20_000.0).map { gas(at: $0) }
+        let (stops, hasGap) = RoutePlannerViewModel.planFuelStops(
+            from: stations,
+            totalDistance: 250_000,
+            range: 100_000,
+            preferringFoodAt: []
+        )
+        XCTAssertFalse(hasGap)
+        XCTAssertEqual(stops.map { Int($0.distanceAlongRoute) }, [80_000, 160_000])
+    }
+
+    // MARK: - Tank-interval search grid
+
+    func testFuelSearchDistancesAnchorToTankInterval() {
+        let distances = RoutePlannerViewModel.fuelSearchDistances(
+            totalDistance: 250_000,
+            range: 100_000
+        )
+        let interval = 100_000 * RoutePlannerViewModel.fuelSafetyFactor
+        XCTAssertTrue(distances.contains { abs($0 - interval) < 1 }, "missing comfort-edge \(interval)")
+        XCTAssertTrue(distances.contains { abs($0 - interval * 2) < 1 }, "missing second tank \(interval * 2)")
+        XCTAssertTrue(distances.allSatisfy { $0 < 250_000 })
+    }
+
+    func testFuelSearchDistancesAreNotATwentyFiveMileGrid() {
+        let tankMeters = 100 * AppSettings.metersPerMile
+        let distances = RoutePlannerViewModel.fuelSearchDistances(
+            totalDistance: 400 * AppSettings.metersPerMile,
+            range: tankMeters
+        )
+        let twentyFiveMiles = 25 * AppSettings.metersPerMile
+        // First tank-interval point is ~85 mi, not 25.
+        XCTAssertGreaterThan(distances.min() ?? 0, twentyFiveMiles)
+        XCTAssertTrue(distances.contains { abs($0 - tankMeters * RoutePlannerViewModel.fuelSafetyFactor) < 1 })
+    }
+
+    func testFuelSearchDistancesCapAtMax() {
+        let distances = RoutePlannerViewModel.fuelSearchDistances(
+            totalDistance: 5_000_000,
+            range: 100_000,
+            maxCount: 16
+        )
+        XCTAssertEqual(distances.count, 16)
+        XCTAssertEqual(distances, distances.sorted())
+    }
+
+    func testShortRideStillGetsASearchPoint() {
+        let distances = RoutePlannerViewModel.fuelSearchDistances(
+            totalDistance: 50_000,
+            range: 100_000
+        )
+        XCTAssertEqual(distances.count, 1)
+        XCTAssertEqual(distances[0], 25_000, accuracy: 1)
+    }
+
+    func testGasStopsWithNearbyFoodMarksInRadius() {
+        let pump = SuggestedStop(
+            name: "Pump",
+            coordinate: CLLocationCoordinate2D(latitude: 40.0, longitude: -75.0),
+            category: .gas,
+            distanceAlongRoute: 80_000
+        )
+        // ~0.001° latitude ≈ 111 m — inside the 1.5 km food radius.
+        let diner = SuggestedStop(
+            name: "Diner",
+            coordinate: CLLocationCoordinate2D(latitude: 40.001, longitude: -75.0),
+            category: .food,
+            distanceAlongRoute: 80_000
+        )
+        let ids = RoutePlannerViewModel.gasStopsWithNearbyFood([pump], food: [diner])
+        XCTAssertEqual(ids, [pump.id])
+    }
+
+    func testGasStopsWithNearbyFoodIgnoresFarFood() {
+        let pump = SuggestedStop(
+            name: "Pump",
+            coordinate: CLLocationCoordinate2D(latitude: 40.0, longitude: -75.0),
+            category: .gas,
+            distanceAlongRoute: 80_000
+        )
+        // ~0.05° latitude ≈ 5.5 km — outside the 1.5 km food radius.
+        let diner = SuggestedStop(
+            name: "Far Diner",
+            coordinate: CLLocationCoordinate2D(latitude: 40.05, longitude: -75.0),
+            category: .food,
+            distanceAlongRoute: 80_000
+        )
+        let ids = RoutePlannerViewModel.gasStopsWithNearbyFood([pump], food: [diner])
+        XCTAssertTrue(ids.isEmpty)
+    }
 }

@@ -140,4 +140,31 @@ final class RouteGeometryTests: XCTestCase {
         XCTAssertTrue(RouteGeometry.isOnTravelSide(onLine, alongPolylines: [eastboundLine], drivesOnRight: true))
         XCTAssertTrue(RouteGeometry.isOnTravelSide(onLine, alongPolylines: [eastboundLine], drivesOnRight: false))
     }
+
+    // MARK: - Coordinates at route distances
+
+    func testCoordinatesAtDistancesOnEquator() {
+        let start = CLLocationCoordinate2D(latitude: 0, longitude: 0)
+        let end = CLLocationCoordinate2D(latitude: 0, longitude: 1)
+        let total = meters(from: start, to: end)
+        let coords = RouteGeometry.coordinates(
+            alongPolylines: [[start, end]],
+            atDistances: [0, total / 2, total]
+        )
+        XCTAssertEqual(coords.count, 3)
+        XCTAssertEqual(coords[0].longitude, 0, accuracy: 0.001)
+        XCTAssertEqual(coords[1].longitude, 0.5, accuracy: 0.02)
+        XCTAssertEqual(coords[2].longitude, 1, accuracy: 0.02)
+    }
+
+    func testCoordinatesAtDistancesDropPastEnd() {
+        let start = CLLocationCoordinate2D(latitude: 0, longitude: 0)
+        let end = CLLocationCoordinate2D(latitude: 0, longitude: 1)
+        let total = meters(from: start, to: end)
+        let coords = RouteGeometry.coordinates(
+            alongPolylines: [[start, end]],
+            atDistances: [total * 2]
+        )
+        XCTAssertTrue(coords.isEmpty)
+    }
 }
