@@ -17,13 +17,31 @@ struct RouteRainForecast: Equatable {
 /// Strategy: sample a handful of points evenly along the route, estimate when
 /// the rider reaches each (assuming an immediate departure and constant pace),
 /// then read the hourly precipitation chance nearest that time.
+///
+/// WeatherKit requires a paid Apple Developer team. Debug builds omit that
+/// entitlement so a free Personal Team can Run in Xcode; this service then
+/// returns `nil` instead of calling WeatherKit.
 struct RouteWeatherService {
+
+    /// Debug (personal-team) builds omit the WeatherKit entitlement, so rain
+    /// checks are skipped. Release / App Store keeps the entitlement and
+    /// WeatherKit. `try?` below still swallows API errors so a missing
+    /// capability cannot crash a ride plan.
+    static var isEnabled: Bool {
+#if DEBUG
+        false
+#else
+        true
+#endif
+    }
 
     /// Number of points sampled along the route. Kept small — each is a
     /// separate WeatherKit request.
     var sampleCount = 5
 
     func rainForecast(alongLegs legs: [MKRoute], departure: Date) async -> RouteRainForecast? {
+        guard Self.isEnabled else { return nil }
+
         let samples = sampledPoints(alongLegs: legs, departure: departure, count: sampleCount)
         guard !samples.isEmpty else { return nil }
 
@@ -33,6 +51,8 @@ struct RouteWeatherService {
         for sample in samples {
             let location = CLLocation(latitude: sample.coordinate.latitude,
                                       longitude: sample.coordinate.longitude)
+            // Missing entitlement, network, or WeatherKit outage: skip the
+            // sample rather than failing the ride plan.
             guard let weather = try? await service.weather(for: location) else { continue }
 
             // The hourly entry closest to when the rider passes this point.

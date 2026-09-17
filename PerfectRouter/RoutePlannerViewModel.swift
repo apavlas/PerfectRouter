@@ -417,9 +417,14 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     // MARK: - Weather
 
     /// Checks the route for rain at the rider's expected time of passing.
-    /// Degrades silently (no warning) if WeatherKit is unavailable.
+    /// Degrades silently (no warning, no spinner) if WeatherKit is unavailable.
     func refreshWeather() async {
         guard !legs.isEmpty else {
+            rainForecast = nil
+            await weatherNotifier.updateRainWarning(nil)
+            return
+        }
+        guard RouteWeatherService.isEnabled else {
             rainForecast = nil
             await weatherNotifier.updateRainWarning(nil)
             return
