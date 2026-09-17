@@ -4,7 +4,9 @@ import MapKit
 /// Finds recommended stops (gas, food, etc.) along a calculated route.
 ///
 /// Strategy:
-/// 1. Sample points along the route polyline every `sampleIntervalMeters`.
+/// 1. Sample points along the route polyline — either every
+///    `sampleIntervalMeters` (Settings suggestion density) or at caller-supplied
+///    tank-interval distances (fuel planning).
 /// 2. Run an MKLocalSearch for the category around each sampled point.
 /// 3. Keep results within `corridorRadiusMeters` of the route and de-duplicate.
 struct StopSuggestionService {
@@ -24,14 +26,30 @@ struct StopSuggestionService {
     var interSearchDelay: Duration = .milliseconds(120)
 
     /// Find stops of one category along the given routes (one route per leg).
+    ///
+    /// When `sampleDistances` is provided, searches run at those route
+    /// distances (tank-interval fuel planning). Otherwise samples use
+    /// `sampleIntervalMeters` (the Settings suggestion-density grid).
     func findStops(
         category: StopCategory,
-        alongLegs legs: [MKRoute]
+        alongLegs legs: [MKRoute],
+        sampleDistances: [CLLocationDistance]? = nil
     ) async -> [SuggestedStop] {
-        // Spread a bounded number of searches across the ENTIRE route, so gas
-        // (and other) stops are still found on long rides instead of only near
-        // the start. Capping protects against MKLocalSearch throttling.
-        let samples = evenlySpaced(samplePoints(alongLegs: legs), max: maxSearches)
+        // Spread a bounded number of searches across the route. Fuel planning
+        // passes tank-interval distances so gas/food lookups land where a
+        // refill will actually be recommended. Other categories keep the
+        // Settings spacing. Capping protects against MKLocalSearch throttling.
+        let rawSamples: [RouteSample]
+        if let sampleDistances {
+            let coords = RouteGeometry.coordinates(
+                alongPolylines: legs.map { RouteGeometry.coordinates(of: $0.polyline) },
+                atDistances: sampleDistances
+            )
+            rawSamples = coords.map { RouteSample(coordinate: $0) }
+        } else {
+            rawSamples = samplePoints(alongLegs: legs)
+        }
+        let samples = evenlySpaced(rawSamples, max: maxSearches)
         // Extract each leg's polyline coordinates once and reuse them for every
         // stop's distance-along-route projection (instead of rebuilding them per
         // result), which matters on long routes with many results.

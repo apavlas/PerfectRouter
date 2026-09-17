@@ -73,4 +73,19 @@ final class FirstRunTests: XCTestCase {
         viewModel.applySettings(seedFuelRange: true)
         XCTAssertEqual(viewModel.fuelRangeMeters, 180 * AppSettings.metersPerMile, accuracy: 1)
     }
+
+    func testFirstRunTankMilesDriveFuelSearchGrid() {
+        AppSettings.completeFirstRun(savingTankMiles: 160)
+        let range = AppSettings.defaultFuelRangeMeters
+        let distances = RoutePlannerViewModel.fuelSearchDistances(
+            totalDistance: 500 * AppSettings.metersPerMile,
+            range: range
+        )
+        let interval = range * RoutePlannerViewModel.fuelSafetyFactor
+        XCTAssertTrue(
+            distances.contains { abs($0 - interval) < 1 },
+            "search grid should include the first tank interval, not 25-mile steps"
+        )
+        XCTAssertGreaterThan(distances.min() ?? 0, 25 * AppSettings.metersPerMile)
+    }
 }
