@@ -62,6 +62,30 @@ final class FuelPlanningTests: XCTestCase {
         XCTAssertEqual(stops.map { Int($0.distanceAlongRoute) }, [40_000])
     }
 
+    func testContinuesPastGapToLaterStation() {
+        // Dry stretch after the first pick; a pump later on the ride must
+        // still be recommended instead of stopping at the first gap.
+        let (stops, hasGap) = RoutePlannerViewModel.planFuelStops(
+            from: [gas(at: 40_000), gas(at: 220_000)],
+            totalDistance: 400_000,
+            range: 100_000
+        )
+        XCTAssertTrue(hasGap)
+        XCTAssertEqual(stops.map { Int($0.distanceAlongRoute) }, [40_000, 220_000])
+    }
+
+    func testPicksStationAfterOpeningDryStretch() {
+        // Nothing in the first tank; the planner walks forward and still
+        // recommends the first reachable later pump.
+        let (stops, hasGap) = RoutePlannerViewModel.planFuelStops(
+            from: [gas(at: 200_000)],
+            totalDistance: 400_000,
+            range: 100_000
+        )
+        XCTAssertTrue(hasGap)
+        XCTAssertEqual(stops.map { Int($0.distanceAlongRoute) }, [200_000])
+    }
+
     func testNoStationsAtAllFlagsGap() {
         let (stops, hasGap) = RoutePlannerViewModel.planFuelStops(
             from: [],
@@ -231,6 +255,20 @@ final class FuelPlanningTests: XCTestCase {
         XCTAssertEqual(stops.map { Int($0.distanceAlongRoute) }, [80_000, 160_000])
     }
 
+    func testMissingFoodDoesNotSkipLaterTanks() {
+        // Food on tank 1 only. Tank 2 is gas-only and must still be picked.
+        let foodStop = gas(at: 80_000)
+        let gasOnly = gas(at: 160_000)
+        let (stops, hasGap) = RoutePlannerViewModel.planFuelStops(
+            from: [foodStop, gasOnly],
+            totalDistance: 250_000,
+            range: 100_000,
+            preferringFoodAt: [foodStop.id]
+        )
+        XCTAssertFalse(hasGap)
+        XCTAssertEqual(stops.map(\.id), [foodStop.id, gasOnly.id])
+    }
+
     // MARK: - Tank-interval search grid
 
     func testFuelSearchDistancesAnchorToTankInterval() {
@@ -264,6 +302,40 @@ final class FuelPlanningTests: XCTestCase {
         )
         XCTAssertEqual(distances.count, 16)
         XCTAssertEqual(distances, distances.sorted())
+    }
+
+    func testFuelSearchDistancesKeepEveryTankBeforeAddingExtras() {
+        let total: CLLocationDistance = 900_000
+        let range: CLLocationDistance = 100_000
+        let distances = RoutePlannerViewModel.fuelSearchDistances(
+            totalDistance: total,
+            range: range,
+            maxCount: 12
+        )
+        let interval = range * RoutePlannerViewModel.fuelSafetyFactor
+        var k = 1
+        while interval * Double(k) < total {
+            let edge = interval * Double(k)
+            XCTAssertTrue(
+                distances.contains { abs($0 - edge) < 1 },
+                "missing tank-interval edge \(edge)"
+            )
+            k += 1
+        }
+        XCTAssertLessThanOrEqual(distances.count, 12)
+    }
+
+    func testFuelSearchDistancesCapKeepsFirstAndLastTank() {
+        let distances = RoutePlannerViewModel.fuelSearchDistances(
+            totalDistance: 5_000_000,
+            range: 100_000,
+            maxCount: 8
+        )
+        let interval = 100_000 * RoutePlannerViewModel.fuelSafetyFactor
+        let lastEdge = interval * floor((5_000_000 - 1) / interval)
+        XCTAssertEqual(distances.count, 8)
+        XCTAssertEqual(distances.first ?? 0, interval, accuracy: 1)
+        XCTAssertEqual(distances.last ?? 0, lastEdge, accuracy: 1)
     }
 
     func testShortRideStillGetsASearchPoint() {

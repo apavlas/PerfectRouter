@@ -28,28 +28,28 @@ struct StopSuggestionService {
     /// Find stops of one category along the given routes (one route per leg).
     ///
     /// When `sampleDistances` is provided, searches run at those route
-    /// distances (tank-interval fuel planning). Otherwise samples use
-    /// `sampleIntervalMeters` (the Settings suggestion-density grid).
+    /// distances (fuel planning already capped per tank). Those points are
+    /// not downsampled again by `maxSearches`, so later tanks stay covered.
+    /// Otherwise samples use `sampleIntervalMeters` (Settings density).
     func findStops(
         category: StopCategory,
         alongLegs legs: [MKRoute],
-        sampleDistances: [CLLocationDistance]? = nil
+        sampleDistances: [CLLocationDistance]? = nil,
+        corridorRadiusMeters: CLLocationDistance? = nil
     ) async -> [SuggestedStop] {
-        // Spread a bounded number of searches across the route. Fuel planning
-        // passes tank-interval distances so gas/food lookups land where a
-        // refill will actually be recommended. Other categories keep the
-        // Settings spacing. Capping protects against MKLocalSearch throttling.
-        let rawSamples: [RouteSample]
+        let corridor = corridorRadiusMeters ?? self.corridorRadiusMeters
+        let samples: [RouteSample]
         if let sampleDistances {
+            // Caller chose the grid (one set of points per tank along the
+            // whole route). Searching all of them keeps later windows filled.
             let coords = RouteGeometry.coordinates(
                 alongPolylines: legs.map { RouteGeometry.coordinates(of: $0.polyline) },
                 atDistances: sampleDistances
             )
-            rawSamples = coords.map { RouteSample(coordinate: $0) }
+            samples = coords.map { RouteSample(coordinate: $0) }
         } else {
-            rawSamples = samplePoints(alongLegs: legs)
+            samples = evenlySpaced(samplePoints(alongLegs: legs), max: maxSearches)
         }
-        let samples = evenlySpaced(rawSamples, max: maxSearches)
         // Extract each leg's polyline coordinates once and reuse them for every
         // stop's distance-along-route projection (instead of rebuilding them per
         // result), which matters on long routes with many results.
@@ -66,8 +66,8 @@ struct StopSuggestionService {
             request.resultTypes = .pointOfInterest
             request.region = MKCoordinateRegion(
                 center: sample.coordinate,
-                latitudinalMeters: corridorRadiusMeters * 2,
-                longitudinalMeters: corridorRadiusMeters * 2
+                latitudinalMeters: corridor * 2,
+                longitudinalMeters: corridor * 2
             )
 
             guard let response = try? await MKLocalSearch(request: request).start() else {
@@ -83,7 +83,7 @@ struct StopSuggestionService {
                 let distFromSample = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
                     .distance(from: CLLocation(latitude: sample.coordinate.latitude,
                                                longitude: sample.coordinate.longitude))
-                guard distFromSample <= corridorRadiusMeters else { continue }
+                guard distFromSample <= corridor else { continue }
 
                 let key = "\(item.name ?? "")|\(round(coord.latitude * 1000))|\(round(coord.longitude * 1000))"
                 guard seen.insert(key).inserted else { continue }
