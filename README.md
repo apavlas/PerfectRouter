@@ -1,36 +1,31 @@
-# PerfectRouter — iOS Starter Code
+# PerfectRouter
 
-A SwiftUI + MapKit starter for a motorcycle ride-planning app with multi-stop routing and recommended stops (gas, food, coffee, scenic) along the route corridor.
+A SwiftUI + MapKit iOS app for planning motorcycle rides: multi-stop routing, fuel-range stops, corridor suggestions (gas, food, coffee, scenic), weather along the route, and save/share.
 
 ## Requirements
+
 - Xcode 15 or later
-- iOS 17.0+ deployment target (uses the new SwiftUI `Map` APIs: `Marker`, `MapPolyline`, `Annotation`)
+- iOS 17.0+ deployment target
 
 ## Setup
-1. In Xcode: **File → New → Project → iOS → App**. Name it `PerfectRouter`, interface **SwiftUI**, language **Swift**.
-2. Delete the generated `ContentView.swift` and drag these four files into the project:
-   - `PerfectRouterApp.swift` (replace the generated one)
-   - `ContentView.swift`
-   - `RoutePlannerViewModel.swift`
-   - `StopSuggestionService.swift`
-   - `Models.swift`
-3. Add location permission: in the target's **Info** tab, add:
-   - `Privacy - Location When In Use Usage Description` →
-     "PerfectRouter uses your location to show your position and plan rides from where you are."
-4. Build and run on a simulator or device. In the simulator, set a location via **Features → Location**.
+
+1. Clone this repo and open **`PerfectRouter.xcodeproj`** at the repo root. Use the shared **PerfectRouter** scheme (included under `xcshareddata`).
+2. Select an iOS Simulator or a signed-in development team for a device, then build and run. In the simulator, set a location via **Features → Location** if you want a GPS fix other than the built-in Augusta, GA default.
+
+Do **not** create a new Xcode project or drag individual Swift files into a blank app — this repo already is the app target plus `PerfectRouterTests`.
 
 ## How it works
+
 - **Multi-stop routing**: `RoutePlannerViewModel.recalculateRoute()` runs one `MKDirections` request per consecutive waypoint pair and stores each leg's `MKRoute`.
-- **Stop recommendations**: `StopSuggestionService` walks the route polylines, samples a point every ~25 miles, runs an `MKLocalSearch` for the selected category around each point, keeps results within ~5 miles of the route, and de-duplicates.
-- **Fuel awareness**: `fuelRangeMeters` (default ~120 mi) drives a banner that recommends the last gas station reachable within one tank, or warns when none was found.
+- **Stop recommendations**: `StopSuggestionService` samples the route corridor and runs `MKLocalSearch` for the selected category.
+- **Fuel awareness**: rider-added gas fills (`Waypoint.isGasFill`) and suggested pumps feed `planFuelStops`. Fills persist through save, share, and import.
+- **Navigate**: two-stop rides use `MKMapItem.openMaps`; three or more use Apple's unified `maps.apple.com/directions` URL (repeated `waypoint` parameters). Google Maps is used when installed.
+- **Save & share**: rides serialize as `SharedRoute` (JSON + `perfectrouter://` link) and are stored locally via `SavedRouteStore`.
 
-## Tuning knobs
-- `StopSuggestionService.sampleIntervalMeters` — search density along the route
-- `StopSuggestionService.corridorRadiusMeters` — how far off-route a stop may be
-- `RoutePlannerViewModel.fuelRangeMeters` — rider's tank range (expose this in a settings screen later)
+## Tests
 
-## Known limitations / next steps
-- `MKLocalSearch` is rate-limited; for long rides increase the sample interval or batch by region.
-- Fuel-range logic only considers distance from the ride start, not remaining fuel after a stop is added — track "distance since last gas stop" for v2.
-- Apple routing won't prefer twisty roads. For "scenic/curvy route" options, integrate HERE or Mapbox Directions.
-- Persist rides with SwiftData and add CloudKit sync for sharing routes with riding groups.
+The **PerfectRouter** scheme includes the `PerfectRouterTests` target. In Xcode: **Product → Test**, or:
+
+```bash
+xcodebuild -scheme PerfectRouter -destination 'platform=iOS Simulator,name=iPhone 16' test
+```

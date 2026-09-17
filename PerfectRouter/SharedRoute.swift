@@ -7,10 +7,31 @@ struct SharedRoute: Codable, Equatable {
 
     /// One shared stop: a name plus its coordinate. Stored as plain
     /// `Double`s because `CLLocationCoordinate2D` is not `Codable`.
+    /// `isGasFill` is optional on decode so older saved/shared rides
+    /// (name + lat/lon only) still import, defaulting to not-a-fill.
     struct Stop: Codable, Equatable {
         var name: String
         var latitude: CLLocationDegrees
         var longitude: CLLocationDegrees
+        var isGasFill: Bool
+
+        init(name: String,
+             latitude: CLLocationDegrees,
+             longitude: CLLocationDegrees,
+             isGasFill: Bool = false) {
+            self.name = name
+            self.latitude = latitude
+            self.longitude = longitude
+            self.isGasFill = isGasFill
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            name = try container.decode(String.self, forKey: .name)
+            latitude = try container.decode(CLLocationDegrees.self, forKey: .latitude)
+            longitude = try container.decode(CLLocationDegrees.self, forKey: .longitude)
+            isGasFill = try container.decodeIfPresent(Bool.self, forKey: .isGasFill) ?? false
+        }
     }
 
     /// One shared suggestion: a stop recommended along the route, including
@@ -33,7 +54,8 @@ struct SharedRoute: Codable, Equatable {
         stops = waypoints.map {
             Stop(name: $0.name,
                  latitude: $0.coordinate.latitude,
-                 longitude: $0.coordinate.longitude)
+                 longitude: $0.coordinate.longitude,
+                 isGasFill: $0.isGasFill)
         }
         suggestions = suggestedStops.map {
             Suggestion(name: $0.name,
@@ -48,7 +70,8 @@ struct SharedRoute: Codable, Equatable {
         stops.map {
             Waypoint(name: $0.name,
                      coordinate: CLLocationCoordinate2D(latitude: $0.latitude,
-                                                        longitude: $0.longitude))
+                                                        longitude: $0.longitude),
+                     isGasFill: $0.isGasFill)
         }
     }
 

@@ -65,6 +65,19 @@ final class SavedRouteStoreTests: XCTestCase {
         XCTAssertEqual(waypoints.last?.coordinate.longitude ?? 0, -81.0, accuracy: 0.0001)
     }
 
+    func testRoundTripPreservesGasFillFlag() {
+        let waypoints = [
+            Waypoint(name: "Start", coordinate: CLLocationCoordinate2D(latitude: 33.0, longitude: -82.0)),
+            Waypoint(name: "Pump", coordinate: CLLocationCoordinate2D(latitude: 33.5, longitude: -81.5), isGasFill: true),
+            Waypoint(name: "End", coordinate: CLLocationCoordinate2D(latitude: 34.0, longitude: -81.0)),
+        ]
+        store.save([SavedRoute(name: "Fill Ride", savedAt: Date(), route: SharedRoute(waypoints: waypoints))])
+
+        let loaded = store.load().first?.route.waypoints ?? []
+        XCTAssertEqual(loaded.map(\.name), ["Start", "Pump", "End"])
+        XCTAssertEqual(loaded.map(\.isGasFill), [false, true, false])
+    }
+
     func testSavingEmptyListClearsStore() {
         store.save([route(named: "Temp")])
         store.save([])

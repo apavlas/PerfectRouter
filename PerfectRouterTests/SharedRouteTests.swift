@@ -7,8 +7,8 @@ import CoreLocation
 /// that keep a crafted `perfectrouter://` link from carrying a huge payload.
 final class SharedRouteTests: XCTestCase {
 
-    private func waypoint(_ name: String, lat: Double, lon: Double) -> Waypoint {
-        Waypoint(name: name, coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon))
+    private func waypoint(_ name: String, lat: Double, lon: Double, isGasFill: Bool = false) -> Waypoint {
+        Waypoint(name: name, coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon), isGasFill: isGasFill)
     }
 
     func testURLRoundTripPreservesRoute() {
@@ -23,6 +23,28 @@ final class SharedRouteTests: XCTestCase {
         }
         XCTAssertEqual(url.scheme, SharedRoute.scheme)
         XCTAssertEqual(SharedRoute(url: url), route)
+    }
+
+    func testURLRoundTripPreservesGasFill() {
+        let route = SharedRoute(waypoints: [
+            waypoint("Home", lat: 33.4735, lon: -82.0105),
+            waypoint("Gas-N-Go", lat: 34.0, lon: -82.5, isGasFill: true),
+            waypoint("Overlook", lat: 35.05, lon: -83.19),
+        ])
+
+        guard let url = route.shareURL, let decoded = SharedRoute(url: url) else {
+            return XCTFail("shareURL should encode a route with a gas fill")
+        }
+        XCTAssertEqual(decoded, route)
+        XCTAssertEqual(decoded.stops.map(\.isGasFill), [false, true, false])
+        XCTAssertEqual(decoded.waypoints.map(\.isGasFill), [false, true, false])
+    }
+
+    func testLegacyJSONWithoutGasFillDecodesAsFalse() throws {
+        let json = Data(#"{"stops":[{"name":"Home","latitude":33.0,"longitude":-82.0},{"name":"End","latitude":34.0,"longitude":-81.0}],"suggestions":[]}"#.utf8)
+        let decoded = try JSONDecoder().decode(SharedRoute.self, from: json)
+        XCTAssertEqual(decoded.stops.map(\.isGasFill), [false, false])
+        XCTAssertFalse(decoded.waypoints.contains(where: \.isGasFill))
     }
 
     func testURLRoundTripPreservesSuggestions() {
