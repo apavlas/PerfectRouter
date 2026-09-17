@@ -1,4 +1,5 @@
 import XCTest
+import Contacts
 import CoreLocation
 @testable import PerfectRouter
 
@@ -110,6 +111,14 @@ final class StopSelectionTests: XCTestCase {
         XCTAssertTrue(viewModel.importRoute(from: url))
         XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "Pump", "End"])
         XCTAssertEqual(viewModel.waypoints.map(\.isGasFill), [false, true, false])
+    }
+
+    func testAddContactWaypointRejectsEmptyAddress() async {
+        let viewModel = RoutePlannerViewModel()
+        let result = await viewModel.addWaypoint(named: "Nobody", at: CNMutablePostalAddress())
+        XCTAssertNil(result)
+        XCTAssertEqual(viewModel.errorMessage, "That contact has no usable address.")
+        XCTAssertTrue(viewModel.waypoints.isEmpty)
     }
 
     func testAddStopRejectsInvalidCoordinate() {
