@@ -7,6 +7,33 @@ import CoreLocation
 /// without any networking.
 final class FuelPlanningTests: XCTestCase {
 
+    /// UTC calendar so meal-window tests don't depend on the host timezone.
+    private var utcCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return calendar
+    }
+
+    private func utcDate(hour: Int, minute: Int = 0) -> Date {
+        utcCalendar.date(from: DateComponents(year: 2026, month: 6, day: 15, hour: hour, minute: minute))!
+    }
+
+    /// 10:00 departure + 3 h over 150 km puts the 85 km comfort edge at 11:42 (lunch).
+    private func lunchPlan(
+        from stations: [SuggestedStop],
+        preferringFoodAt: Set<UUID>
+    ) -> (stops: [SuggestedStop], hasGap: Bool) {
+        RoutePlannerViewModel.planFuelStops(
+            from: stations,
+            totalDistance: 150_000,
+            range: 100_000,
+            preferringFoodAt: preferringFoodAt,
+            departure: utcDate(hour: 10),
+            totalTravelTime: 3 * 60 * 60,
+            calendar: utcCalendar
+        )
+    }
+
     /// Builds a gas stop at a given distance along the route.
     private func gas(at meters: CLLocationDistance) -> SuggestedStop {
         SuggestedStop(
@@ -187,59 +214,78 @@ final class FuelPlanningTests: XCTestCase {
 
     // MARK: - Food at the stop
 
-    func testPrefersGasWithFoodOverFartherGasOnly() {
-        // Both sit in the 85 km comfort window. Gas-only is farther; food wins.
+    func testPrefersGasWithFoodAtMealTime() {
+        // Comfort-edge ETA is lunch. Both sit in the 85 km window; food wins.
         let withFood = gas(at: 60_000)
         let gasOnly = gas(at: 80_000)
-        let (stops, hasGap) = RoutePlannerViewModel.planFuelStops(
-            from: [withFood, gasOnly],
-            totalDistance: 150_000,
-            range: 100_000,
-            preferringFoodAt: [withFood.id]
-        )
+        let (stops, hasGap) = lunchPlan(from: [withFood, gasOnly], preferringFoodAt: [withFood.id])
         XCTAssertFalse(hasGap)
         XCTAssertEqual(stops.map(\.id), [withFood.id])
     }
 
-    func testPicksFarthestFoodStopInsideTheTankWindow() {
+    func testPicksFarthestFoodStopInsideTheTankWindowAtMealTime() {
         let earlyFood = gas(at: 40_000)
         let laterFood = gas(at: 80_000)
         let gasOnly = gas(at: 84_000)
-        let (stops, hasGap) = RoutePlannerViewModel.planFuelStops(
+        let (stops, hasGap) = lunchPlan(
             from: [earlyFood, laterFood, gasOnly],
-            totalDistance: 150_000,
-            range: 100_000,
             preferringFoodAt: [earlyFood.id, laterFood.id]
         )
         XCTAssertFalse(hasGap)
         XCTAssertEqual(stops.map(\.id), [laterFood.id])
     }
 
-    func testFallsBackToGasOnlyWhenNoFoodInWindow() {
-        let only = gas(at: 80_000)
-        let (stops, hasGap) = RoutePlannerViewModel.planFuelStops(
-            from: [only],
-            totalDistance: 150_000,
-            range: 100_000,
-            preferringFoodAt: [UUID()]
-        )
-        XCTAssertFalse(hasGap)
-        XCTAssertEqual(stops.map { Int($0.distanceAlongRoute) }, [80_000])
-    }
-
-    func testHardRangeFallbackPrefersFood() {
-        // Comfort window (85 km) is empty. Both candidates sit in hard range;
-        // the farther one is gas-only, so food at 95 km wins.
-        let withFood = gas(at: 95_000)
-        let gasOnly = gas(at: 99_000)
+    func testOffMealKeepsFarthestGasEvenWhenFoodExists() {
+        // 13:00 + 1.7 h = 14:42 — between lunch and dinner. Tank interval wins.
+        let withFood = gas(at: 60_000)
+        let gasOnly = gas(at: 80_000)
         let (stops, hasGap) = RoutePlannerViewModel.planFuelStops(
             from: [withFood, gasOnly],
             totalDistance: 150_000,
             range: 100_000,
-            preferringFoodAt: [withFood.id]
+            preferringFoodAt: [withFood.id],
+            departure: utcDate(hour: 13),
+            totalTravelTime: 3 * 60 * 60,
+            calendar: utcCalendar
         )
         XCTAssertFalse(hasGap)
+        XCTAssertEqual(stops.map(\.id), [gasOnly.id])
+    }
+
+    func testFallsBackToGasOnlyWhenNoFoodInWindow() {
+        let only = gas(at: 80_000)
+        let (stops, hasGap) = lunchPlan(from: [only], preferringFoodAt: [UUID()])
+        XCTAssertFalse(hasGap)
+        XCTAssertEqual(stops.map { Int($0.distanceAlongRoute) }, [80_000])
+    }
+
+    func testHardRangeFallbackPrefersFoodAtMealTime() {
+        // Comfort window (85 km) is empty. Lunch ETA still prefers food at 95 km.
+        let withFood = gas(at: 95_000)
+        let gasOnly = gas(at: 99_000)
+        let (stops, hasGap) = lunchPlan(from: [withFood, gasOnly], preferringFoodAt: [withFood.id])
+        XCTAssertFalse(hasGap)
         XCTAssertEqual(stops.map(\.id), [withFood.id])
+    }
+
+    func testMealTimeWindows() {
+        XCTAssertTrue(RoutePlannerViewModel.isMealTime(utcDate(hour: 7, minute: 30), calendar: utcCalendar))
+        XCTAssertTrue(RoutePlannerViewModel.isMealTime(utcDate(hour: 12), calendar: utcCalendar))
+        XCTAssertTrue(RoutePlannerViewModel.isMealTime(utcDate(hour: 18, minute: 15), calendar: utcCalendar))
+        XCTAssertFalse(RoutePlannerViewModel.isMealTime(utcDate(hour: 10, minute: 15), calendar: utcCalendar))
+        XCTAssertFalse(RoutePlannerViewModel.isMealTime(utcDate(hour: 15), calendar: utcCalendar))
+        XCTAssertFalse(RoutePlannerViewModel.isMealTime(utcDate(hour: 21), calendar: utcCalendar))
+    }
+
+    func testEtaAlongRouteInterpolatesByDistance() {
+        let departure = utcDate(hour: 10)
+        let eta = RoutePlannerViewModel.etaAlongRoute(
+            distance: 75_000,
+            totalDistance: 150_000,
+            departure: departure,
+            totalTravelTime: 3 * 60 * 60
+        )
+        XCTAssertEqual(eta.timeIntervalSince(departure), 1.5 * 60 * 60, accuracy: 1)
     }
 
     func testEmptyPreferringFoodKeepsFarthestInWindow() {

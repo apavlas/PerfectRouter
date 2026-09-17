@@ -191,7 +191,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     /// The subset of `gasStations` automatically recommended as fuel stops —
     /// one per tank along the whole ride (`fuelRangeMeters`). Food is
-    /// optional (preferred in-window when present). Travel-side only.
+    /// optional; preferred in-window when the tank-interval ETA is a meal.
+    /// Travel-side only.
     var fuelStops: [SuggestedStop] = []
 
     /// Gas stations on the rider's side of travel (no crossing oncoming
@@ -237,10 +238,12 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     }
 
     /// Sets when the rider plans to leave (`nil` = now) and re-checks the
-    /// route's weather against the new time of passing each point.
+    /// route's weather against the new time of passing each point. Also
+    /// re-picks fuel stops so meal-time food preference follows the new ETAs.
     func setDeparture(_ date: Date?) {
         guard date != departureDate else { return }
         departureDate = date
+        replanFuelStops()
         Task { await refreshWeather() }
     }
 
@@ -532,7 +535,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             totalDistance: totalDistanceMeters,
             range: fuelRangeMeters,
             filledAt: gasFillDistances,
-            preferringFoodAt: gasStopsWithFood
+            preferringFoodAt: gasStopsWithFood,
+            departure: effectiveDeparture,
+            totalTravelTime: totalExpectedTravelTime
         )
         fuelStops = plan.stops
         hasFuelGap = plan.hasGap
@@ -708,21 +713,55 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             .map { RouteGeometry.distanceAlongRoute(of: $0.coordinate, along: legs) }
     }
 
+    /// Whether `date` falls in a typical meal window (breakfast / lunch / dinner).
+    nonisolated static func isMealTime(
+        _ date: Date,
+        windows: [MealWindow] = MealWindow.typical,
+        calendar: Calendar = .current
+    ) -> Bool {
+        let parts = calendar.dateComponents([.hour, .minute], from: date)
+        let minutes = (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
+        return windows.contains { window in
+            if window.startMinutes <= window.endMinutes {
+                return minutes >= window.startMinutes && minutes < window.endMinutes
+            }
+            return minutes >= window.startMinutes || minutes < window.endMinutes
+        }
+    }
+
+    /// ETA at `distance` along the ride, interpolating travel time by fraction
+    /// of total distance. Used to decide whether a tank-interval stop is a meal.
+    nonisolated static func etaAlongRoute(
+        distance: CLLocationDistance,
+        totalDistance: CLLocationDistance,
+        departure: Date,
+        totalTravelTime: TimeInterval
+    ) -> Date {
+        guard totalDistance > 0, totalTravelTime > 0 else { return departure }
+        let fraction = min(max(distance / totalDistance, 0), 1)
+        return departure.addingTimeInterval(totalTravelTime * fraction)
+    }
+
     /// Greedy fuel-stop selection. From the last fill-up (ride start, or a
     /// rider-added gas waypoint in `filledAt`), pick the gas station as far
     /// along as possible but still within `safetyFactor` of the tank range
-    /// (so there's a reserve). Food is optional: when `preferringFoodAt`
-    /// lists an in-window pump, that pump wins over gas-only in the same
-    /// window; missing food never skips the stop. If the comfort window is
-    /// empty, fall back to the hard range. A dry stretch flags `hasGap` and
-    /// advances one tank so later windows along the route are still planned.
+    /// (so there's a reserve). Food is optional: when the tank-interval ETA
+    /// is near breakfast / lunch / dinner *and* `preferringFoodAt` lists an
+    /// in-window pump, that pump wins over gas-only in the same window.
+    /// Off-meal or missing food never skips the stop. If the comfort window
+    /// is empty, fall back to the hard range. A dry stretch flags `hasGap`
+    /// and advances one tank so later windows along the route are still planned.
     nonisolated static func planFuelStops(
         from gasStops: [SuggestedStop],
         totalDistance: CLLocationDistance,
         range: CLLocationDistance,
         filledAt: [CLLocationDistance] = [],
         safetyFactor: Double = fuelSafetyFactor,
-        preferringFoodAt: Set<UUID> = []
+        preferringFoodAt: Set<UUID> = [],
+        departure: Date? = nil,
+        totalTravelTime: TimeInterval = 0,
+        mealWindows: [MealWindow] = MealWindow.typical,
+        calendar: Calendar = .current
     ) -> (stops: [SuggestedStop], hasGap: Bool) {
         guard range > 0, totalDistance > range else { return ([], false) }
 
@@ -735,15 +774,30 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
         // Keep refueling until the remaining distance fits within one tank.
         while totalDistance - lastRefuel > range {
+            let targetDistance = min(lastRefuel + comfortRange, totalDistance)
+            let preferFoodForMeal: Bool
+            if let departure, totalTravelTime > 0 {
+                let eta = etaAlongRoute(
+                    distance: targetDistance,
+                    totalDistance: totalDistance,
+                    departure: departure,
+                    totalTravelTime: totalTravelTime
+                )
+                preferFoodForMeal = isMealTime(eta, windows: mealWindows, calendar: calendar)
+            } else {
+                preferFoodForMeal = false
+            }
+
             // Farthest station within the comfort window (~85%); hard range
-            // only if that window is empty. Food is a preference, not a gate.
+            // only if that window is empty. Food is a meal-time preference,
+            // not a gate — off-meal we keep the tank-interval gas pick.
             let farthest: (CLLocationDistance) -> SuggestedStop? = { limit in
                 let inWindow = sorted.filter {
                     $0.distanceAlongRoute > lastRefuel && $0.distanceAlongRoute <= lastRefuel + limit
                 }
-                let withFood = preferringFoodAt.isEmpty
-                    ? []
-                    : inWindow.filter { preferringFoodAt.contains($0.id) }
+                let withFood = (preferFoodForMeal && !preferringFoodAt.isEmpty)
+                    ? inWindow.filter { preferringFoodAt.contains($0.id) }
+                    : []
                 let pool = withFood.isEmpty ? inWindow : withFood
                 return pool.max(by: { $0.distanceAlongRoute < $1.distanceAlongRoute })
             }
