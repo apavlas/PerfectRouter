@@ -190,8 +190,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     }
 
     /// The subset of `gasStations` automatically recommended as fuel stops —
-    /// one per tank (`fuelRangeMeters`), preferring pumps that also have food,
-    /// and limited to the side of the road matching the direction of travel.
+    /// one per tank along the whole ride (`fuelRangeMeters`). Food is
+    /// optional; preferred in-window when the tank-interval ETA is a meal.
+    /// Travel-side only.
     var fuelStops: [SuggestedStop] = []
 
     /// Gas stations on the rider's side of travel (no crossing oncoming
@@ -237,10 +238,12 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     }
 
     /// Sets when the rider plans to leave (`nil` = now) and re-checks the
-    /// route's weather against the new time of passing each point.
+    /// route's weather against the new time of passing each point. Also
+    /// re-picks fuel stops so meal-time food preference follows the new ETAs.
     func setDeparture(_ date: Date?) {
         guard date != departureDate else { return }
         departureDate = date
+        replanFuelStops()
         Task { await refreshWeather() }
     }
 
@@ -393,10 +396,12 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
         guard !Task.isCancelled else { return }
         legs = newLegs
+        // Fuel first so the tank-interval gas search is not starved by the
+        // category-chip MKLocalSearch budget (16 lookups at searchIntervalMiles).
+        await refreshGasStations()
         if refreshingSuggestions {
             await refreshSuggestions()
         }
-        await refreshGasStations()
         await refreshHighlights()
         await refreshWeather()
     }
@@ -477,9 +482,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             return
         }
 
-        // Search gas (and food) at tank-interval points. Do not reuse the
-        // Gas-chip suggestions — those still sample every searchIntervalMiles
-        // (~25 mi) and would ignore tank range.
+        // Search gas (and food) in every tank window along the whole route.
+        // Wider corridor than the chip-suggestion 5 mi so pumps not sitting
+        // on the exact interval point still enter the candidate pool.
         let sampleDistances = Self.fuelSearchDistances(
             totalDistance: totalDistanceMeters,
             range: fuelRangeMeters
@@ -487,7 +492,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         let found = await suggestionService.findStops(
             category: .gas,
             alongLegs: legs,
-            sampleDistances: sampleDistances
+            sampleDistances: sampleDistances,
+            corridorRadiusMeters: Self.fuelSearchCorridorMeters
         )
         guard !Task.isCancelled else { return }
         gasStations = found
@@ -500,7 +506,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         let foodAlongRoute = await suggestionService.findStops(
             category: .food,
             alongLegs: legs,
-            sampleDistances: sampleDistances
+            sampleDistances: sampleDistances,
+            corridorRadiusMeters: Self.fuelSearchCorridorMeters
         )
         guard !Task.isCancelled else { return }
         gasStopsWithFood = Self.gasStopsWithNearbyFood(
@@ -528,7 +535,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             totalDistance: totalDistanceMeters,
             range: fuelRangeMeters,
             filledAt: gasFillDistances,
-            preferringFoodAt: gasStopsWithFood
+            preferringFoodAt: gasStopsWithFood,
+            departure: effectiveDeparture,
+            totalTravelTime: totalExpectedTravelTime
         )
         fuelStops = plan.stops
         hasFuelGap = plan.hasGap
@@ -585,14 +594,24 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// Matches `StopSuggestionService.findFood`'s default radius.
     nonisolated static let fuelFoodRadiusMeters: CLLocationDistance = 1_500
 
+    /// Corridor for tank-interval gas/food search. Wider than the chip
+    /// suggestion default (~5 mi) so a pump a town off the sample still counts.
+    nonisolated static let fuelSearchCorridorMeters: CLLocationDistance = 24_000
+
+    /// How many lookups to keep inside each tank window after every tank
+    /// edge along the route has a sample.
+    nonisolated static let fuelSearchSamplesPerTank = 3
+
     /// Distances along the route at which to search for gas and food.
-    /// Anchored to the tank interval (`range * safetyFactor`) so the search
-    /// budget is spent where refuels will be recommended, not every 25 miles.
+    /// Every tank interval on the ride gets at least one sample (the comfort
+    /// edge). Remaining budget fills intra-window points. Later tanks are
+    /// never dropped to make room for extra samples on earlier tanks.
     nonisolated static func fuelSearchDistances(
         totalDistance: CLLocationDistance,
         range: CLLocationDistance,
         safetyFactor: Double = fuelSafetyFactor,
-        maxCount: Int = 16
+        maxCount: Int = 32,
+        samplesPerTank: Int = fuelSearchSamplesPerTank
     ) -> [CLLocationDistance] {
         guard range > 0, totalDistance > 0, maxCount > 0 else { return [] }
 
@@ -604,14 +623,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         }
 
         var edges: [CLLocationDistance] = []
-        var mids: [CLLocationDistance] = []
         var k = 1
         while true {
             let edge = interval * Double(k)
-            let mid = interval * (Double(k) - 0.5)
-            if mid > 0, mid < totalDistance {
-                mids.append(mid)
-            }
             if edge < totalDistance {
                 edges.append(edge)
             }
@@ -620,14 +634,34 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             if k > 10_000 { break }
         }
 
+        // One sample per tank along the whole route first. Only if that
+        // already exceeds the cap do we thin — still keeping first and last.
         if edges.count >= maxCount {
             return spacedDistances(edges, max: maxCount)
         }
 
+        var extras: [CLLocationDistance] = []
+        let divisions = max(samplesPerTank, 1)
+        for edge in edges {
+            let start = edge - interval
+            if divisions > 1 {
+                for i in 1..<divisions {
+                    let d = start + interval * Double(i) / Double(divisions)
+                    if d > 0, d < totalDistance {
+                        extras.append(d)
+                    }
+                }
+            }
+        }
+        if let last = edges.last, last < totalDistance {
+            let tail = (last + totalDistance) / 2
+            extras.append(tail)
+        }
+
         var picked = edges
-        for mid in mids {
+        for extra in extras {
             guard picked.count < maxCount else { break }
-            picked.append(mid)
+            picked.append(extra)
         }
         return picked.sorted()
     }
@@ -679,22 +713,55 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             .map { RouteGeometry.distanceAlongRoute(of: $0.coordinate, along: legs) }
     }
 
+    /// Whether `date` falls in a typical meal window (breakfast / lunch / dinner).
+    nonisolated static func isMealTime(
+        _ date: Date,
+        windows: [MealWindow] = MealWindow.typical,
+        calendar: Calendar = .current
+    ) -> Bool {
+        let parts = calendar.dateComponents([.hour, .minute], from: date)
+        let minutes = (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
+        return windows.contains { window in
+            if window.startMinutes <= window.endMinutes {
+                return minutes >= window.startMinutes && minutes < window.endMinutes
+            }
+            return minutes >= window.startMinutes || minutes < window.endMinutes
+        }
+    }
+
+    /// ETA at `distance` along the ride, interpolating travel time by fraction
+    /// of total distance. Used to decide whether a tank-interval stop is a meal.
+    nonisolated static func etaAlongRoute(
+        distance: CLLocationDistance,
+        totalDistance: CLLocationDistance,
+        departure: Date,
+        totalTravelTime: TimeInterval
+    ) -> Date {
+        guard totalDistance > 0, totalTravelTime > 0 else { return departure }
+        let fraction = min(max(distance / totalDistance, 0), 1)
+        return departure.addingTimeInterval(totalTravelTime * fraction)
+    }
+
     /// Greedy fuel-stop selection. From the last fill-up (ride start, or a
-    /// rider-added gas waypoint in `filledAt`), prefer the gas station as far
+    /// rider-added gas waypoint in `filledAt`), pick the gas station as far
     /// along as possible but still within `safetyFactor` of the tank range
-    /// (so there's a reserve). When `preferringFoodAt` lists pumps that have
-    /// food, those win inside the same window — required when any in-window
-    /// station has food, otherwise the farthest gas-only stop is used. If no
-    /// station falls in the comfort window, fall back to the full hard range;
-    /// only when nothing is reachable at all is a fuel gap flagged.
-    /// Refuels are planned one per tank until the destination is in range.
+    /// (so there's a reserve). Food is optional: when the tank-interval ETA
+    /// is near breakfast / lunch / dinner *and* `preferringFoodAt` lists an
+    /// in-window pump, that pump wins over gas-only in the same window.
+    /// Off-meal or missing food never skips the stop. If the comfort window
+    /// is empty, fall back to the hard range. A dry stretch flags `hasGap`
+    /// and advances one tank so later windows along the route are still planned.
     nonisolated static func planFuelStops(
         from gasStops: [SuggestedStop],
         totalDistance: CLLocationDistance,
         range: CLLocationDistance,
         filledAt: [CLLocationDistance] = [],
         safetyFactor: Double = fuelSafetyFactor,
-        preferringFoodAt: Set<UUID> = []
+        preferringFoodAt: Set<UUID> = [],
+        departure: Date? = nil,
+        totalTravelTime: TimeInterval = 0,
+        mealWindows: [MealWindow] = MealWindow.typical,
+        calendar: Calendar = .current
     ) -> (stops: [SuggestedStop], hasGap: Bool) {
         guard range > 0, totalDistance > range else { return ([], false) }
 
@@ -707,28 +774,46 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
         // Keep refueling until the remaining distance fits within one tank.
         while totalDistance - lastRefuel > range {
-            // Prefer the farthest station within the comfort window (~85%);
-            // fall back to the hard range only if the comfort window is empty.
-            // When any in-window pump has food, require food in that pick.
+            let targetDistance = min(lastRefuel + comfortRange, totalDistance)
+            let preferFoodForMeal: Bool
+            if let departure, totalTravelTime > 0 {
+                let eta = etaAlongRoute(
+                    distance: targetDistance,
+                    totalDistance: totalDistance,
+                    departure: departure,
+                    totalTravelTime: totalTravelTime
+                )
+                preferFoodForMeal = isMealTime(eta, windows: mealWindows, calendar: calendar)
+            } else {
+                preferFoodForMeal = false
+            }
+
+            // Farthest station within the comfort window (~85%); hard range
+            // only if that window is empty. Food is a meal-time preference,
+            // not a gate — off-meal we keep the tank-interval gas pick.
             let farthest: (CLLocationDistance) -> SuggestedStop? = { limit in
                 let inWindow = sorted.filter {
                     $0.distanceAlongRoute > lastRefuel && $0.distanceAlongRoute <= lastRefuel + limit
                 }
-                let withFood = preferringFoodAt.isEmpty
-                    ? []
-                    : inWindow.filter { preferringFoodAt.contains($0.id) }
+                let withFood = (preferFoodForMeal && !preferringFoodAt.isEmpty)
+                    ? inWindow.filter { preferringFoodAt.contains($0.id) }
+                    : []
                 let pool = withFood.isEmpty ? inWindow : withFood
                 return pool.max(by: { $0.distanceAlongRoute < $1.distanceAlongRoute })
             }
 
-            guard let stop = farthest(comfortRange) ?? farthest(range) else {
-                // No reachable gas station in this stretch — fuel gap.
-                hasGap = true
-                break
+            if let stop = farthest(comfortRange) ?? farthest(range) {
+                chosen.append(stop)
+                lastRefuel = stop.distanceAlongRoute
+                continue
             }
 
-            chosen.append(stop)
-            lastRefuel = stop.distanceAlongRoute
+            // Dry stretch — keep walking tank-by-tank so a later pump is
+            // still recommended instead of stopping at the first gap.
+            hasGap = true
+            let jump = lastRefuel + range
+            guard jump > lastRefuel else { break }
+            lastRefuel = jump
         }
 
         return (chosen, hasGap)

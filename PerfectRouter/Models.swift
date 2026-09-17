@@ -114,6 +114,22 @@ struct SuggestedStop: Identifiable {
     var coordinate: CLLocationCoordinate2D { mapItem.placemark.coordinate }
 }
 
+/// Local-time windows when a rider is likely to want food with a fuel stop.
+/// Used to prefer (not require) a gas+food pair when the tank-interval ETA
+/// falls near breakfast, lunch, or dinner.
+struct MealWindow: Equatable, Sendable {
+    /// Minutes from midnight, inclusive.
+    let startMinutes: Int
+    /// Minutes from midnight, exclusive.
+    let endMinutes: Int
+
+    static let breakfast = MealWindow(startMinutes: 7 * 60, endMinutes: 9 * 60 + 30)
+    static let lunch = MealWindow(startMinutes: 11 * 60 + 30, endMinutes: 13 * 60 + 30)
+    static let dinner = MealWindow(startMinutes: 17 * 60 + 30, endMinutes: 20 * 60)
+
+    static let typical = [breakfast, lunch, dinner]
+}
+
 /// A recommended fuel stop together with food found right next to it, so a
 /// rider can refuel and eat in a single stop instead of two. Derived from
 /// `fuelStops` and recomputed when they change — never persisted.
