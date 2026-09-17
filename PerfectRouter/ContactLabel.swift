@@ -9,8 +9,9 @@ import Contacts
 /// therefore gated with `isKeyAvailable` / `areKeysAvailable`.
 enum ContactLabel {
     /// Prefers a formatted full name, then given + family, then organization,
-    /// then `fallback` (formatted address or phone number).
-    static func name(from contact: CNContact, fallback: String) -> String {
+    /// then `fallback` (labeled address or phone). Empty fallback becomes
+    /// `"Contact"` so a waypoint always has a label.
+    static func name(from contact: CNContact, fallback: String = "Contact") -> String {
         if contact.areKeysAvailable([CNContactFormatter.descriptorForRequiredKeys(for: .fullName)]),
            let formatted = CNContactFormatter.string(from: contact, style: .fullName) {
             let trimmed = formatted.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -33,7 +34,8 @@ enum ContactLabel {
             if !org.isEmpty { return org }
         }
 
-        return fallback
+        let trimmedFallback = fallback.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedFallback.isEmpty ? "Contact" : trimmedFallback
     }
 
     /// One-line mailing address for a waypoint label or geocode query.

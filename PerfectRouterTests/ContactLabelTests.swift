@@ -38,6 +38,13 @@ final class ContactLabelTests: XCTestCase {
         XCTAssertEqual(ContactLabel.name(from: contact, fallback: "fallback"), "fallback")
     }
 
+    func testUsesContactWhenNameOrganizationAndFallbackAreEmpty() {
+        let contact = CNMutableContact()
+        XCTAssertEqual(ContactLabel.name(from: contact, fallback: ""), "Contact")
+        XCTAssertEqual(ContactLabel.name(from: contact, fallback: "  "), "Contact")
+        XCTAssertEqual(ContactLabel.name(from: contact), "Contact")
+    }
+
     func testMailingAddressJoinsLines() {
         let address = CNMutablePostalAddress()
         address.street = "1 Infinite Loop"
