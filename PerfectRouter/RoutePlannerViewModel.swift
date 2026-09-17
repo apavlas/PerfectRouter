@@ -277,16 +277,26 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         if waypoints.isEmpty, let here = currentLocation, here.isValidLocation {
             waypoints.append(Waypoint(name: "Current Location", coordinate: here))
         }
-        waypoints.append(waypoint)
+        // Later searches and contact addresses insert before the existing
+        // destination so they become mid-ride stops, matching `addStop`.
+        if waypoints.count >= 2 {
+            waypoints.insert(waypoint, at: waypoints.count - 1)
+        } else {
+            waypoints.append(waypoint)
+        }
         scheduleRecalculation()
     }
 
-    /// Sets an explicit ride origin as the first waypoint. Used when there's
-    /// no location fix to auto-seed the start (e.g. on the simulator, or before
-    /// location permission is granted), so the rider can still plot a route.
+    /// Sets the ride origin. Replaces the first waypoint when one already
+    /// exists (for example the auto-seeded current location) so a long-press
+    /// does not insert a second start.
     func addStart(_ waypoint: Waypoint) {
         guard waypoint.coordinate.isValidLocation else { return }
-        waypoints.insert(waypoint, at: 0)
+        if waypoints.isEmpty {
+            waypoints.append(waypoint)
+        } else {
+            waypoints[0] = waypoint
+        }
         scheduleRecalculation()
     }
 

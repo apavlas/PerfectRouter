@@ -9,9 +9,9 @@ enum NavigationLauncher {
     /// Opens the multi-stop route in Apple Maps with driving directions.
     ///
     /// `MKMapItem.openMaps(with:launchOptions:)` only routes between the first
-    /// two items — extra items are dropped as route stops — so rides with
-    /// intermediate stops go through the Maps URL scheme instead, which keeps
-    /// every stop (at the cost of showing coordinates rather than stop names).
+    /// two items — extra items become a pin list, not stops — so rides with
+    /// intermediate stops use Apple's unified `/directions` URL, which takes
+    /// repeated `waypoint` parameters.
     static func openInAppleMaps(_ waypoints: [Waypoint]) {
         guard waypoints.count >= 2 else { return }
         if waypoints.count > 2, let url = appleMapsMultiStopURL(waypoints) {
@@ -29,25 +29,31 @@ enum NavigationLauncher {
         )
     }
 
-    /// A maps.apple.com driving-directions URL routing through every waypoint.
-    /// Destinations are chained in `daddr` with `+to:` — absent from Apple's
-    /// URL scheme reference but long supported by Maps, and the only URL form
-    /// that preserves mid-ride stops. If Maps ever stops honoring the chain it
-    /// degrades to directions to the first destination, no worse than the
-    /// `openMaps` path.
+    /// Official `maps.apple.com/directions` URL for a driving route through
+    /// every waypoint (`source`, repeated `waypoint`, `destination`).
+    ///
+    /// Built with `percentEncodedQuery` so coordinate commas stay literal
+    /// (matching Apple's examples). The old `daddr=…+to:…` form was unofficial
+    /// and broke when `URLComponents.queryItems` percent-encoded `+` / `:`.
     static func appleMapsMultiStopURL(_ waypoints: [Waypoint]) -> URL? {
-        guard waypoints.count >= 2, let origin = waypoints.first else { return nil }
+        guard waypoints.count >= 2,
+              let origin = waypoints.first,
+              let destination = waypoints.last else { return nil }
         let coordinateText = { (waypoint: Waypoint) in
             "\(waypoint.coordinate.latitude),\(waypoint.coordinate.longitude)"
         }
-        let destinations = waypoints.dropFirst().map(coordinateText).joined(separator: "+to:")
 
-        var components = URLComponents(string: "https://maps.apple.com/")
-        components?.queryItems = [
-            URLQueryItem(name: "saddr", value: coordinateText(origin)),
-            URLQueryItem(name: "daddr", value: destinations),
-            URLQueryItem(name: "dirflg", value: "d"),
+        var parts = [
+            "source=\(coordinateText(origin))",
+            "destination=\(coordinateText(destination))",
+            "mode=driving",
         ]
+        for stop in waypoints.dropFirst().dropLast() {
+            parts.append("waypoint=\(coordinateText(stop))")
+        }
+
+        var components = URLComponents(string: "https://maps.apple.com/directions")
+        components?.percentEncodedQuery = parts.joined(separator: "&")
         return components?.url
     }
 
