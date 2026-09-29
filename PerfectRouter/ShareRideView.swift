@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The sheet shown when the rider shares a planned ride. Lets them pick a saved
 /// rider group to message in one tap (pre-addressed Messages composer), or fall
@@ -16,6 +17,11 @@ struct ShareRideView: View {
     @State private var showingAdHocPicker = false
     @State private var showingSaveGroupDialog = false
     @State private var saveGroupName = ""
+
+    /// Temporary GPX file prepared for the system share sheet.
+    @State private var gpxExportURL: URL?
+    @State private var showingGPXImporter = false
+    @State private var gpxImportFailed = false
 
     private var shareURL: URL? { viewModel.sharedRoute.shareURL }
 
@@ -46,13 +52,23 @@ struct ShareRideView: View {
                             Label("Share via…", systemImage: "square.and.arrow.up")
                         }
                     }
+                    if let gpxExportURL {
+                        ShareLink(item: gpxExportURL) {
+                            Label("Export GPX", systemImage: "doc.badge.arrow.up")
+                        }
+                    }
+                    Button {
+                        showingGPXImporter = true
+                    } label: {
+                        Label("Import GPX", systemImage: "square.and.arrow.down")
+                    }
                     Button {
                         showingManageGroups = true
                     } label: {
                         Label("Manage Rider Groups", systemImage: "person.2")
                     }
                 } footer: {
-                    Text("Use Share via… for Mail, AirDrop, or any other app.")
+                    Text("Share via… sends a PerfectRouter link. Export GPX writes a file other GPS apps can open; Import GPX loads waypoints from Files.")
                 }
             }
             .navigationTitle("Share Ride")
@@ -93,6 +109,45 @@ struct ShareRideView: View {
                     addAdHocRider(name: name, phone: phone)
                 }
             )
+            .onAppear {
+                if gpxExportURL == nil, viewModel.canShareRoute {
+                    gpxExportURL = viewModel.makeGPXFileURL()
+                }
+            }
+            .fileImporter(
+                isPresented: $showingGPXImporter,
+                allowedContentTypes: Self.gpxContentTypes,
+                allowsMultipleSelection: false
+            ) { result in
+                handleGPXImport(result)
+            }
+            .alert("Couldn’t Import GPX", isPresented: $gpxImportFailed) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text("Pick a GPX file that includes at least two waypoints (or a track).")
+            }
+        }
+    }
+
+    private static var gpxContentTypes: [UTType] {
+        var types: [UTType] = [.xml]
+        if let gpx = UTType(filenameExtension: "gpx") {
+            types.insert(gpx, at: 0)
+        }
+        if let topo = UTType("com.topografix.gpx") {
+            types.insert(topo, at: 0)
+        }
+        return types
+    }
+
+    private func handleGPXImport(_ result: Result<[URL], Error>) {
+        guard case .success(let urls) = result, let url = urls.first else {
+            return
+        }
+        if viewModel.importGPX(from: url) {
+            dismiss()
+        } else {
+            gpxImportFailed = true
         }
     }
 
