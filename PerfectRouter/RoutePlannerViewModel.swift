@@ -927,21 +927,76 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     }
 
     /// Loads a ride received from another rider via a `perfectrouter://` link,
-    /// replacing the current waypoints. The sender's suggested stops are
-    /// preserved as-is; if none were shared, fresh ones are generated.
-    /// Returns `false` if the URL isn't a valid shared route.
+    /// or a `.gpx` file (Files / Open In). Replaces the current waypoints.
+    /// Deep-link imports preserve the sender's suggested stops; GPX imports
+    /// map `<wpt>` into plan waypoints and recalculate suggestions.
+    /// Returns `false` if the URL isn't a valid shared route or GPX.
     @discardableResult
     func importRoute(from url: URL) -> Bool {
-        guard let shared = SharedRoute(url: url), shared.stops.count >= 2 else {
-            return false
+        if let shared = SharedRoute(url: url) {
+            return applyImportedRoute(
+                waypoints: shared.waypoints,
+                suggestedStops: shared.suggestedStops,
+                category: shared.suggestionCategory
+            )
         }
-        // Drop any malformed (invalid / NaN) coordinates from the link; a ride
-        // still needs a start and a destination to be routable.
-        let importedWaypoints = shared.waypoints.filter { $0.coordinate.isValidLocation }
+        return importGPX(from: url)
+    }
+
+    /// Writes the current plan to a temporary `.gpx` for the share sheet.
+    /// Includes a `<trk>` when route legs already have a polyline; otherwise
+    /// waypoints-only. Returns `nil` when the plan isn't shareable.
+    func makeGPXFileURL(date: Date = Date()) -> URL? {
+        guard canShareRoute else { return nil }
+        let track = legs.flatMap { RouteGeometry.coordinates(of: $0.polyline) }
+        let data = GPXCodec.encode(
+            waypoints: waypoints,
+            trackCoordinates: track,
+            name: defaultRouteName,
+            date: date
+        )
+        let filename = GPXCodec.suggestedFilename(date: date)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
+        do {
+            try data.write(to: url, options: .atomic)
+            return url
+        } catch {
+            return nil
+        }
+    }
+
+    /// Loads plan waypoints from a GPX file URL (security-scoped when needed).
+    @discardableResult
+    func importGPX(from url: URL) -> Bool {
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer {
+            if accessed { url.stopAccessingSecurityScopedResource() }
+        }
+        guard let data = try? Data(contentsOf: url) else { return false }
+        return importGPX(data: data)
+    }
+
+    /// Loads plan waypoints from GPX bytes. Used by file import and unit tests.
+    @discardableResult
+    func importGPX(data: Data) -> Bool {
+        guard let document = try? GPXCodec.decode(data) else { return false }
+        return applyImportedRoute(waypoints: document.waypoints, suggestedStops: [], category: nil)
+    }
+
+    /// Shared apply path for deep-link and GPX imports.
+    @discardableResult
+    private func applyImportedRoute(
+        waypoints imported: [Waypoint],
+        suggestedStops importedSuggestions: [SuggestedStop],
+        category: StopCategory?
+    ) -> Bool {
+        // Drop any malformed (invalid / NaN) coordinates; a ride still needs a
+        // start and a destination to be routable.
+        let importedWaypoints = imported.filter { $0.coordinate.isValidLocation }
         guard importedWaypoints.count >= 2 else { return false }
         waypoints = importedWaypoints
-        let importedStops = shared.suggestedStops.filter { $0.coordinate.isValidLocation }
-        if let category = shared.suggestionCategory {
+        let importedStops = importedSuggestions.filter { $0.coordinate.isValidLocation }
+        if let category {
             selectedCategory = category
         }
         routeTask?.cancel()
@@ -949,7 +1004,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             await recalculateRoute(refreshingSuggestions: importedStops.isEmpty)
             guard !Task.isCancelled else { return }
             if !importedStops.isEmpty {
-                suggestedStops = importedStops
+                self.suggestedStops = importedStops
             }
         }
         return true
