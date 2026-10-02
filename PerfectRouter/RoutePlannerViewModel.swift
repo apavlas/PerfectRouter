@@ -396,12 +396,14 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
         guard !Task.isCancelled else { return }
         legs = newLegs
-        // Fuel first so the tank-interval gas search is not starved by the
-        // category-chip MKLocalSearch budget (16 lookups at searchIntervalMiles).
+        // Chip suggestions often find pumps the tank-interval search misses
+        // (long interstate). Search gas, then merge those suggestions into
+        // the fuel pool so later tanks still get a recommendation.
         await refreshGasStations()
         if refreshingSuggestions {
             await refreshSuggestions()
         }
+        applyFuelCandidatePool()
         await refreshHighlights()
         await refreshWeather()
     }
@@ -482,9 +484,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             return
         }
 
-        // Search gas (and food) in every tank window along the whole route.
-        // Wider corridor than the chip-suggestion 5 mi so pumps not sitting
-        // on the exact interval point still enter the candidate pool.
+        // Tank-interval gas search. Do not also sweep food here — that burned
+        // the MKLocalSearch budget on a 4-tank interstate before later samples
+        // ran, leaving `fuelStops` empty even when the Gas chip later found
+        // pumps. Food is optional and paired after a rec exists.
         let sampleDistances = Self.fuelSearchDistances(
             totalDistance: totalDistanceMeters,
             range: fuelRangeMeters
@@ -497,26 +500,42 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         )
         guard !Task.isCancelled else { return }
         gasStations = found
+        applyFuelCandidatePool()
+        await refreshFoodNearFuelStops()
+    }
 
-        // Recommendations only consider stops on the rider's side of travel.
-        travelSideGasStations = gasStations.filter {
+    /// Merges every gas list we already have, prefers travel-side pumps, and
+    /// falls back to the full list so an interstate filter cannot zero out recs.
+    func applyFuelCandidatePool() {
+        let extraGas = suggestedStops.filter { $0.category == .gas }
+        gasStations = Self.mergedGasCandidates([gasStations, extraGas])
+        let travelSide = gasStations.filter {
             RouteGeometry.isOnTravelSide($0.coordinate, along: legs)
         }
-
-        let foodAlongRoute = await suggestionService.findStops(
-            category: .food,
-            alongLegs: legs,
-            sampleDistances: sampleDistances,
-            corridorRadiusMeters: Self.fuelSearchCorridorMeters
-        )
-        guard !Task.isCancelled else { return }
-        gasStopsWithFood = Self.gasStopsWithNearbyFood(
-            travelSideGasStations,
-            food: foodAlongRoute
-        )
-
+        travelSideGasStations = Self.preferredFuelPool(from: gasStations, travelSide: travelSide)
         replanFuelStops()
-        await refreshFoodNearFuelStops()
+    }
+
+    /// De-duplicates gas stops by name + rounded coordinate.
+    nonisolated static func mergedGasCandidates(_ lists: [[SuggestedStop]]) -> [SuggestedStop] {
+        var seen = Set<String>()
+        var merged: [SuggestedStop] = []
+        for stop in lists.flatMap({ $0 }) {
+            let coord = stop.coordinate
+            let key = "\(stop.name)|\(round(coord.latitude * 1000))|\(round(coord.longitude * 1000))"
+            guard seen.insert(key).inserted else { continue }
+            merged.append(stop)
+        }
+        return merged.sorted { $0.distanceAlongRoute < $1.distanceAlongRoute }
+    }
+
+    /// Travel-side pumps when any exist; otherwise the unfiltered list so a
+    /// long divided-highway ride still gets tank-interval recommendations.
+    nonisolated static func preferredFuelPool(
+        from stations: [SuggestedStop],
+        travelSide: [SuggestedStop]
+    ) -> [SuggestedStop] {
+        travelSide.isEmpty ? stations : travelSide
     }
 
     /// Re-selects the recommended fuel stops from the already-computed
@@ -750,7 +769,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// in-window pump, that pump wins over gas-only in the same window.
     /// Off-meal or missing food never skips the stop. If the comfort window
     /// is empty, fall back to the hard range. A dry stretch flags `hasGap`
-    /// and advances one tank so later windows along the route are still planned.
+    /// and recommends the next pump down the road so later tanks still appear.
     nonisolated static func planFuelStops(
         from gasStops: [SuggestedStop],
         totalDistance: CLLocationDistance,
@@ -808,12 +827,16 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 continue
             }
 
-            // Dry stretch — keep walking tank-by-tank so a later pump is
-            // still recommended instead of stopping at the first gap.
+            // Dry stretch. Do not teleport `lastRefuel` by one tank — that
+            // can make the destination look in-range of a fictional fill and
+            // drop later pumps (e.g. 271 mi then 375 mi on a 395 mi ride).
+            // Take the next station down the road, flag the gap, and continue.
             hasGap = true
-            let jump = lastRefuel + range
-            guard jump > lastRefuel else { break }
-            lastRefuel = jump
+            guard let next = sorted.first(where: { $0.distanceAlongRoute > lastRefuel }) else {
+                break
+            }
+            chosen.append(next)
+            lastRefuel = next.distanceAlongRoute
         }
 
         return (chosen, hasGap)
@@ -906,7 +929,11 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         )
         guard !Task.isCancelled else { return }
         suggestedStops = found
-    }
+        // Gas-chip hits (often the only pumps MapKit returns on a long
+        // interstate) feed the same tank-interval planner as the fuel search.
+        if selectedCategory == .gas {
+            applyFuelCandidatePool()
+        }
 
     func selectCategory(_ category: StopCategory) {
         selectedCategory = category
