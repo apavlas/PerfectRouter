@@ -113,6 +113,48 @@ final class FuelPlanningTests: XCTestCase {
         XCTAssertEqual(stops.map { Int($0.distanceAlongRoute) }, [200_000])
     }
 
+    func testLongInterstateRidePicksLateChipStations() {
+        // Augusta → Nashville (~395 mi, 100 mi tank). Chip search only returned
+        // pumps at ~271 and ~375 mi. Those must become fuel recs after the
+        // empty early tanks — not an empty list.
+        let mile = AppSettings.metersPerMile
+        let first = gas(at: 271 * mile)
+        let second = gas(at: 375 * mile)
+        let (stops, hasGap) = RoutePlannerViewModel.planFuelStops(
+            from: [first, second],
+            totalDistance: 395 * mile,
+            range: 100 * mile
+        )
+        XCTAssertTrue(hasGap)
+        XCTAssertEqual(stops.map(\.id), [first.id, second.id])
+    }
+
+    func testMergedGasCandidatesDedupesAndKeepsLateStops() {
+        let early = gas(at: 50_000)
+        let late = gas(at: 400_000)
+        let duplicate = SuggestedStop(
+            name: early.name,
+            coordinate: early.coordinate,
+            category: .gas,
+            distanceAlongRoute: early.distanceAlongRoute
+        )
+        let merged = RoutePlannerViewModel.mergedGasCandidates([[early], [duplicate, late]])
+        XCTAssertEqual(merged.map(\.name), [early.name, late.name])
+    }
+
+    func testPreferredFuelPoolFallsBackWhenTravelSideEmpty() {
+        let station = gas(at: 400_000)
+        let pool = RoutePlannerViewModel.preferredFuelPool(from: [station], travelSide: [])
+        XCTAssertEqual(pool.map(\.id), [station.id])
+    }
+
+    func testPreferredFuelPoolKeepsTravelSideWhenPresent() {
+        let onSide = gas(at: 80_000)
+        let offSide = gas(at: 90_000)
+        let pool = RoutePlannerViewModel.preferredFuelPool(from: [onSide, offSide], travelSide: [onSide])
+        XCTAssertEqual(pool.map(\.id), [onSide.id])
+    }
+
     func testNoStationsAtAllFlagsGap() {
         let (stops, hasGap) = RoutePlannerViewModel.planFuelStops(
             from: [],

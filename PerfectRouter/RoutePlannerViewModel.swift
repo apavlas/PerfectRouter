@@ -13,6 +13,11 @@ private struct TwistyPoolEntry {
     var distance: CLLocationDistance
 }
 
+private struct CachedLeg {
+    var routes: [MKRoute]
+    var usedFastestFallback: Bool
+}
+
 @MainActor
 @Observable
 final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
@@ -34,8 +39,17 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     var selectedCategory: StopCategory = .gas
     var isCalculating = false
+    /// Rider-facing line under the route spinner so a long Twisty plan
+    /// doesn't look frozen.
+    var calculationStatus: String?
+    /// True while the tank-interval gas search is in flight.
+    var isSearchingGas = false
     var isLoadingSuggestions = false
     var errorMessage: String?
+
+    /// Gas stops the rider has checked but not applied. The recommendation
+    /// list stays put until `applyBufferedGasStops()`.
+    private(set) var bufferedGasStops: [SuggestedStop] = []
 
     /// Rider's fuel range in meters (default ~100 miles).
     var fuelRangeMeters: CLLocationDistance = 160_900
@@ -47,6 +61,14 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// and nil when every leg found a curvier corridor. Surfaced in the
     /// summary so a Fastest-shaped line is never silently labeled Twisty.
     private(set) var twistyLimitationNote: String?
+
+    /// Routed legs keyed by endpoints + style, so adding a stop does not
+    /// re-probe pairs that did not change.
+    private var legCache: [TwistyLegCacheKey: CachedLeg] = [:]
+
+    /// Polyline of the last successful plan. Fuel stops that sit on it are
+    /// stitched with one directions request instead of a via cascade.
+    private var plannedCorridor: [[CLLocationCoordinate2D]] = []
 
     private var suggestionService = StopSuggestionService()
 
@@ -326,19 +348,111 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     func addStop(from suggestion: SuggestedStop) {
         guard suggestion.coordinate.isValidLocation else { return }
-        // Insert before the final destination so the ride still ends
-        // where the rider intended.
-        let waypoint = Waypoint(
-            name: suggestion.name,
-            coordinate: suggestion.coordinate,
-            isGasFill: suggestion.category == .gas
-        )
+        // Gas is buffered (AC-C5). Checking a pump must not re-route; Apply
+        // inserts the set once. Food, sights, and other categories still
+        // insert immediately.
+        if suggestion.category == .gas {
+            toggleBufferedGasStop(suggestion)
+            return
+        }
+        insertStop(suggestion)
+        scheduleRecalculation()
+    }
+
+    /// Checks or unchecks a gas stop. Does not change waypoints or legs.
+    func toggleBufferedGasStop(_ stop: SuggestedStop) {
+        guard stop.coordinate.isValidLocation, stop.category == .gas else { return }
+        if let index = bufferedGasStops.firstIndex(where: { Self.samePlace($0, stop) }) {
+            bufferedGasStops.remove(at: index)
+        } else {
+            bufferedGasStops.append(stop)
+        }
+    }
+
+    func isGasBuffered(_ stop: SuggestedStop) -> Bool {
+        bufferedGasStops.contains { Self.samePlace($0, stop) }
+    }
+
+    /// Drops the checked set. The planned route is unchanged.
+    func clearBufferedGasStops() {
+        bufferedGasStops = []
+    }
+
+    /// Inserts every checked gas stop in ride order, then routes once.
+    func applyBufferedGasStops() {
+        let stops = bufferedGasStops.sorted { $0.distanceAlongRoute < $1.distanceAlongRoute }
+        guard !stops.isEmpty else { return }
+        bufferedGasStops = []
+        let polylines = plannedCorridor
+        if waypoints.count >= 2, !polylines.isEmpty {
+            waypoints = Self.waypoints(
+                waypoints,
+                inserting: stops,
+                along: polylines,
+                totalDistance: totalDistanceMeters
+            )
+        } else {
+            for stop in stops {
+                insertStop(stop)
+            }
+        }
+        scheduleRecalculation()
+    }
+
+    /// Places `stops` among existing waypoints by distance along `polylines`.
+    /// The destination stays last.
+    nonisolated static func waypoints(
+        _ waypoints: [Waypoint],
+        inserting stops: [SuggestedStop],
+        along polylines: [[CLLocationCoordinate2D]],
+        totalDistance: CLLocationDistance
+    ) -> [Waypoint] {
+        guard waypoints.count >= 2 else {
+            return waypoints + stops.map { waypoint(from: $0) }
+        }
+        var placed: [(distance: CLLocationDistance, waypoint: Waypoint)] = []
+        for (index, waypoint) in waypoints.enumerated() {
+            let distance: CLLocationDistance
+            if index == 0 {
+                distance = 0
+            } else if index == waypoints.count - 1 {
+                distance = .greatestFiniteMagnitude
+            } else if polylines.isEmpty {
+                distance = totalDistance * Double(index) / Double(waypoints.count)
+            } else {
+                distance = RouteGeometry.distanceAlongRoute(of: waypoint.coordinate, alongPolylines: polylines)
+            }
+            placed.append((distance, waypoint))
+        }
+        for stop in stops.sorted(by: { $0.distanceAlongRoute < $1.distanceAlongRoute }) {
+            let waypoint = waypoint(from: stop)
+            let index = placed.firstIndex { $0.distance > stop.distanceAlongRoute } ?? placed.count
+            placed.insert((stop.distanceAlongRoute, waypoint), at: index)
+        }
+        return placed.map(\.waypoint)
+    }
+
+    private func insertStop(_ suggestion: SuggestedStop) {
+        let waypoint = Self.waypoint(from: suggestion)
         if waypoints.count >= 2 {
             waypoints.insert(waypoint, at: waypoints.count - 1)
         } else {
             waypoints.append(waypoint)
         }
-        scheduleRecalculation()
+    }
+
+    private static func waypoint(from suggestion: SuggestedStop) -> Waypoint {
+        Waypoint(
+            name: suggestion.name,
+            coordinate: suggestion.coordinate,
+            isGasFill: suggestion.category == .gas
+        )
+    }
+
+    nonisolated static func samePlace(_ lhs: SuggestedStop, _ rhs: SuggestedStop) -> Bool {
+        lhs.name == rhs.name
+            && Int((lhs.coordinate.latitude * 1000).rounded()) == Int((rhs.coordinate.latitude * 1000).rounded())
+            && Int((lhs.coordinate.longitude * 1000).rounded()) == Int((rhs.coordinate.longitude * 1000).rounded())
     }
 
     func removeWaypoint(at offsets: IndexSet) {
@@ -370,28 +484,60 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         }
 
         isCalculating = true
-        defer { isCalculating = false }
+        calculationStatus = routeStyle == .twisty
+            ? "Calculating Twisty route…"
+            : "Calculating route…"
+        defer {
+            isCalculating = false
+            calculationStatus = nil
+        }
 
         var newLegs: [MKRoute] = []
         var missedTwistyLegs = 0
         let legCount = waypoints.count - 1
+        let corridor = plannedCorridor
 
         for i in 0..<legCount {
             let origin = waypoints[i]
             let destination = waypoints[i + 1]
+            guard !Task.isCancelled else { return }
+            calculationStatus = routeProgress(index: i, count: legCount)
+            let key = TwistyRouting.legCacheKey(
+                from: origin.coordinate,
+                to: destination.coordinate,
+                style: routeStyle,
+                departure: effectiveDeparture
+            )
             do {
-                if routeStyle == .twisty {
-                    let outcome = try await twistyLeg(from: origin, to: destination)
-                    // MKDirections isn't cancellation-aware, so a superseded
-                    // recalculation still gets its response — drop it here rather
-                    // than let stale legs overwrite the newer plan's results.
-                    guard !Task.isCancelled else { return }
-                    guard !outcome.routes.isEmpty else {
-                        failRoute(between: origin, and: destination)
-                        return
+                let outcome: (routes: [MKRoute], usedFastestFallback: Bool)
+                if let cached = legCache[key] {
+                    outcome = (cached.routes, cached.usedFastestFallback)
+                } else if routeStyle == .twisty {
+                    let straight = CLLocation(
+                        latitude: origin.coordinate.latitude,
+                        longitude: origin.coordinate.longitude
+                    ).distance(from: CLLocation(
+                        latitude: destination.coordinate.latitude,
+                        longitude: destination.coordinate.longitude
+                    ))
+                    let onCorridor = TwistyRouting.liesOnPlannedCorridor(
+                        from: origin.coordinate,
+                        to: destination.coordinate,
+                        polylines: corridor
+                    )
+                    let plan = TwistyRouting.fetchPlan(
+                        straightMeters: straight,
+                        liesOnPlannedCorridor: onCorridor
+                    )
+                    if plan.offsetVias {
+                        calculationStatus = "Looking for a curvier road… (\(i + 1) of \(legCount))"
                     }
-                    if outcome.usedFastestFallback { missedTwistyLegs += 1 }
-                    newLegs.append(contentsOf: outcome.routes)
+                    outcome = try await twistyLeg(
+                        from: origin,
+                        to: destination,
+                        avoidHighwayAlternates: plan.avoidHighwayAlternates,
+                        probeOffsetVias: plan.offsetVias
+                    )
                 } else {
                     let routes = try await calculateRoutes(
                         from: origin.coordinate,
@@ -400,13 +546,26 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                         avoidsTolls: routeStyle.avoidsTolls,
                         alternates: routeStyle.prefersAlternates
                     )
-                    guard !Task.isCancelled else { return }
                     guard let route = Self.preferredRoute(from: routes, style: routeStyle) else {
                         failRoute(between: origin, and: destination)
                         return
                     }
-                    newLegs.append(route)
+                    outcome = ([route], false)
                 }
+                // MKDirections isn't cancellation-aware, so a superseded
+                // recalculation still gets its response — drop it here rather
+                // than let stale legs overwrite the newer plan's results.
+                guard !Task.isCancelled else { return }
+                guard !outcome.routes.isEmpty else {
+                    failRoute(between: origin, and: destination)
+                    return
+                }
+                legCache[key] = CachedLeg(
+                    routes: outcome.routes,
+                    usedFastestFallback: outcome.usedFastestFallback
+                )
+                if outcome.usedFastestFallback { missedTwistyLegs += 1 }
+                newLegs.append(contentsOf: outcome.routes)
             } catch {
                 guard !Task.isCancelled else { return }
                 errorMessage = "Routing failed: \(error.localizedDescription)"
@@ -419,17 +578,31 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
         guard !Task.isCancelled else { return }
         legs = newLegs
+        plannedCorridor = newLegs.map { RouteGeometry.coordinates(of: $0.polyline) }
         twistyLimitationNote = routeStyle == .twisty
             ? Self.twistyLimitationNote(missedLegs: missedTwistyLegs, totalLegs: legCount)
             : nil
-        // Fuel first so the tank-interval gas search is not starved by the
-        // category-chip MKLocalSearch budget (16 lookups at searchIntervalMiles).
+        // Chip suggestions often find pumps the tank-interval search misses
+        // (long interstate). Search gas, then merge those suggestions into
+        // the fuel pool so later tanks still get a recommendation.
+        calculationStatus = "Searching for gas along the route…"
         await refreshGasStations()
         if refreshingSuggestions {
+            calculationStatus = "Searching along the route…"
             await refreshSuggestions()
         }
+        guard !Task.isCancelled else { return }
+        applyFuelCandidatePool()
         await refreshHighlights()
         await refreshWeather()
+    }
+
+    private func routeProgress(index: Int, count: Int) -> String {
+        let step = "(\(index + 1) of \(count))"
+        if routeStyle == .twisty {
+            return "Calculating Twisty route… \(step)"
+        }
+        return "Calculating route… \(step)"
     }
 
     /// Changes the route style, remembers it as the rider's new default, and
@@ -474,17 +647,49 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// alternate or a stitch through an offset corridor. Downstream fuel,
     /// food, highlights, and the map all read `legs`, so the chosen geometry
     /// is the plan — the style is not swapped back to Fastest.
+    ///
+    /// Fastest alternates and avoid-highway alternates run together. Offset
+    /// vias stop at the first corridor that actually beats Fastest.
     private func twistyLeg(
         from origin: Waypoint,
-        to destination: Waypoint
+        to destination: Waypoint,
+        avoidHighwayAlternates: Bool,
+        probeOffsetVias: Bool
     ) async throws -> (routes: [MKRoute], usedFastestFallback: Bool) {
-        let direct = try await calculateRoutes(
-            from: origin.coordinate,
-            to: destination.coordinate,
-            avoidsHighways: false,
-            avoidsTolls: false,
-            alternates: true
-        )
+        let direct: [MKRoute]
+        let avoided: [MKRoute]
+        if avoidHighwayAlternates {
+            async let directTask = calculateRoutes(
+                from: origin.coordinate,
+                to: destination.coordinate,
+                avoidsHighways: false,
+                avoidsTolls: false,
+                alternates: true
+            )
+            async let avoidedTask = calculateRoutes(
+                from: origin.coordinate,
+                to: destination.coordinate,
+                avoidsHighways: true,
+                avoidsTolls: false,
+                alternates: true
+            )
+            do {
+                direct = try await directTask
+            } catch {
+                _ = try? await avoidedTask
+                throw error
+            }
+            avoided = (try? await avoidedTask) ?? []
+        } else {
+            direct = try await calculateRoutes(
+                from: origin.coordinate,
+                to: destination.coordinate,
+                avoidsHighways: false,
+                avoidsTolls: false,
+                alternates: true
+            )
+            avoided = []
+        }
         guard !Task.isCancelled else { throw CancellationError() }
         guard let fastest = direct.first else { return ([], false) }
 
@@ -505,27 +710,14 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         // Non-highway alternates are candidates, not the decision. Scenic
         // would keep the longest of these; Twisty only keeps one if it is
         // actually curvier than Fastest.
-        do {
-            let avoided = try await calculateRoutes(
-                from: origin.coordinate,
-                to: destination.coordinate,
-                avoidsHighways: true,
-                avoidsTolls: false,
-                alternates: true
-            )
-            guard !Task.isCancelled else { throw CancellationError() }
-            for route in avoided {
-                append([route])
-            }
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            guard !Task.isCancelled else { throw CancellationError() }
+        for route in avoided {
+            append([route])
         }
 
         if let chosen = Self.chosenTwisty(in: pool, fastestID: fastestID) {
             return (chosen, false)
         }
+        guard probeOffsetVias else { return ([fastest], true) }
 
         let corridors = TwistyRouting.biasCorridors(
             from: origin.coordinate,
@@ -540,6 +732,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                     to: destination.coordinate
                 ) {
                     append(stitched)
+                    if let chosen = Self.chosenTwisty(in: pool, fastestID: fastestID) {
+                        return (chosen, false)
+                    }
                 }
             } catch is CancellationError {
                 throw CancellationError()
@@ -548,9 +743,6 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             }
         }
 
-        if let chosen = Self.chosenTwisty(in: pool, fastestID: fastestID) {
-            return (chosen, false)
-        }
         return ([fastest], true)
     }
 
@@ -684,9 +876,12 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             return
         }
 
-        // Search gas (and food) in every tank window along the whole route.
-        // Wider corridor than the chip-suggestion 5 mi so pumps not sitting
-        // on the exact interval point still enter the candidate pool.
+        // Tank-interval gas search. Do not also sweep food here — that burned
+        // the MKLocalSearch budget on a long interstate before later samples
+        // ran, leaving fuel stops empty even when pumps exist. Food is paired
+        // after a recommendation exists.
+        isSearchingGas = true
+        defer { isSearchingGas = false }
         let sampleDistances = Self.fuelSearchDistances(
             totalDistance: totalDistanceMeters,
             range: fuelRangeMeters
@@ -699,26 +894,43 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         )
         guard !Task.isCancelled else { return }
         gasStations = found
+        gasStopsWithFood = []
+        applyFuelCandidatePool()
+        await refreshFoodNearFuelStops()
+    }
 
-        // Recommendations only consider stops on the rider's side of travel.
-        travelSideGasStations = gasStations.filter {
+    /// Merges every gas list we already have, prefers travel-side pumps, and
+    /// falls back to the full list so an interstate filter cannot zero out recs.
+    func applyFuelCandidatePool() {
+        let extraGas = suggestedStops.filter { $0.category == .gas }
+        gasStations = Self.mergedGasCandidates([gasStations, extraGas])
+        let travelSide = gasStations.filter {
             RouteGeometry.isOnTravelSide($0.coordinate, along: legs)
         }
-
-        let foodAlongRoute = await suggestionService.findStops(
-            category: .food,
-            alongLegs: legs,
-            sampleDistances: sampleDistances,
-            corridorRadiusMeters: Self.fuelSearchCorridorMeters
-        )
-        guard !Task.isCancelled else { return }
-        gasStopsWithFood = Self.gasStopsWithNearbyFood(
-            travelSideGasStations,
-            food: foodAlongRoute
-        )
-
+        travelSideGasStations = Self.preferredFuelPool(from: gasStations, travelSide: travelSide)
         replanFuelStops()
-        await refreshFoodNearFuelStops()
+    }
+
+    /// De-duplicates gas stops by name + rounded coordinate.
+    nonisolated static func mergedGasCandidates(_ lists: [[SuggestedStop]]) -> [SuggestedStop] {
+        var seen = Set<String>()
+        var merged: [SuggestedStop] = []
+        for stop in lists.flatMap({ $0 }) {
+            let coord = stop.coordinate
+            let key = "\(stop.name)|\(round(coord.latitude * 1000))|\(round(coord.longitude * 1000))"
+            guard seen.insert(key).inserted else { continue }
+            merged.append(stop)
+        }
+        return merged.sorted { $0.distanceAlongRoute < $1.distanceAlongRoute }
+    }
+
+    /// Travel-side pumps when any exist; otherwise the unfiltered list so a
+    /// long divided-highway ride still gets tank-interval recommendations.
+    nonisolated static func preferredFuelPool(
+        from stations: [SuggestedStop],
+        travelSide: [SuggestedStop]
+    ) -> [SuggestedStop] {
+        travelSide.isEmpty ? stations : travelSide
     }
 
     /// Re-selects the recommended fuel stops from the already-computed
@@ -952,7 +1164,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// in-window pump, that pump wins over gas-only in the same window.
     /// Off-meal or missing food never skips the stop. If the comfort window
     /// is empty, fall back to the hard range. A dry stretch flags `hasGap`
-    /// and advances one tank so later windows along the route are still planned.
+    /// and recommends the next pump down the road so later tanks still appear.
     nonisolated static func planFuelStops(
         from gasStops: [SuggestedStop],
         totalDistance: CLLocationDistance,
@@ -1010,12 +1222,16 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 continue
             }
 
-            // Dry stretch — keep walking tank-by-tank so a later pump is
-            // still recommended instead of stopping at the first gap.
+            // Dry stretch. Do not teleport `lastRefuel` by one tank — that
+            // can make the destination look in-range of a fictional fill and
+            // drop later pumps (e.g. 271 mi then 375 mi on a 395 mi ride).
+            // Take the next station down the road, flag the gap, and continue.
             hasGap = true
-            let jump = lastRefuel + range
-            guard jump > lastRefuel else { break }
-            lastRefuel = jump
+            guard let next = sorted.first(where: { $0.distanceAlongRoute > lastRefuel }) else {
+                break
+            }
+            chosen.append(next)
+            lastRefuel = next.distanceAlongRoute
         }
 
         return (chosen, hasGap)
@@ -1108,6 +1324,11 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         )
         guard !Task.isCancelled else { return }
         suggestedStops = found
+        // Gas-chip hits (often the only pumps MapKit returns on a long
+        // interstate) feed the same tank-interval planner as the fuel search.
+        if selectedCategory == .gas {
+            applyFuelCandidatePool()
+        }
     }
 
     func selectCategory(_ category: StopCategory) {

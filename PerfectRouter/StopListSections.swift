@@ -8,7 +8,10 @@ struct GasStationsSection: View {
 
     var body: some View {
         Section("Recommended fuel") {
-            if viewModel.fuelStops.isEmpty && viewModel.gasStations.isEmpty {
+            BufferedGasApplyRow(viewModel: viewModel)
+            if viewModel.isSearchingGas || (viewModel.isCalculating && viewModel.gasStations.isEmpty) {
+                ProgressView("Searching for gas along the route…")
+            } else if viewModel.fuelStops.isEmpty && viewModel.gasStations.isEmpty {
                 Text("No gas stations found along this route.")
                     .foregroundStyle(.secondary)
             }
@@ -34,7 +37,7 @@ struct GasStationsSection: View {
     /// Same green/recommended row used for auto picks; tap adds the stop.
     private func gasRow(_ stop: SuggestedStop, recommended: Bool) -> some View {
         Button {
-            viewModel.addStop(from: stop)
+            viewModel.toggleBufferedGasStop(stop)
         } label: {
             HStack {
                 Image(systemName: "fuelpump.fill")
@@ -51,8 +54,10 @@ struct GasStationsSection: View {
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.green)
                 }
-                Image(systemName: "plus.circle.fill")
-                    .foregroundStyle(.blue)
+                Image(systemName: viewModel.isGasBuffered(stop)
+                      ? "checkmark.circle.fill"
+                      : "circle")
+                    .foregroundStyle(viewModel.isGasBuffered(stop) ? Color.green : Color.secondary)
             }
         }
         .buttonStyle(.plain)
@@ -102,18 +107,33 @@ struct SuggestionsSection: View {
 
     var body: some View {
         Section("Suggested \(viewModel.selectedCategory.rawValue) Stops") {
+            if viewModel.selectedCategory == .gas {
+                BufferedGasApplyRow(viewModel: viewModel)
+            }
             if viewModel.isLoadingSuggestions {
                 ProgressView("Searching along your route…")
             } else if viewModel.suggestedStops.isEmpty && !viewModel.legs.isEmpty {
-                Text("No \(viewModel.selectedCategory.rawValue.lowercased()) stops found near this route.")
-                    .foregroundStyle(.secondary)
+                if viewModel.isCalculating || viewModel.isSearchingGas {
+                    ProgressView("Searching along your route…")
+                } else if viewModel.selectedCategory == .gas,
+                          !viewModel.fuelStops.isEmpty || !viewModel.gasStations.isEmpty {
+                    Text("Gas along this ride is listed with the fuel stops above.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("No \(viewModel.selectedCategory.rawValue.lowercased()) stops found near this route.")
+                        .foregroundStyle(.secondary)
+                }
             } else if viewModel.legs.isEmpty {
                 Text("Add at least two stops to see suggestions.")
                     .foregroundStyle(.secondary)
             }
             ForEach(viewModel.suggestedStops.prefix(15)) { stop in
                 Button {
-                    viewModel.addStop(from: stop)
+                    if stop.category == .gas {
+                        viewModel.toggleBufferedGasStop(stop)
+                    } else {
+                        viewModel.addStop(from: stop)
+                    }
                 } label: {
                     HStack {
                         Image(systemName: stop.category.systemImage)
@@ -124,11 +144,36 @@ struct SuggestionsSection: View {
                                 .foregroundStyle(.secondary)
                         }
                         Spacer()
-                        Image(systemName: "plus.circle.fill")
-                            .foregroundStyle(.blue)
+                        Image(systemName: stop.category == .gas && viewModel.isGasBuffered(stop)
+                              ? "checkmark.circle.fill"
+                              : "plus.circle.fill")
+                            .foregroundStyle(stop.category == .gas && viewModel.isGasBuffered(stop) ? Color.green : Color.blue)
                     }
                 }
                 .buttonStyle(.plain)
+            }
+        }
+    }
+}
+
+/// Checked gas stops wait here until the rider applies them in one route update.
+struct BufferedGasApplyRow: View {
+    let viewModel: RoutePlannerViewModel
+
+    var body: some View {
+        if !viewModel.bufferedGasStops.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Button {
+                    viewModel.applyBufferedGasStops()
+                } label: {
+                    Label("Apply \(viewModel.bufferedGasStops.count) stops", systemImage: "checkmark.circle.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button("Clear selection") {
+                    viewModel.clearBufferedGasStops()
+                }
             }
         }
     }

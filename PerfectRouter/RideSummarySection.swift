@@ -10,25 +10,27 @@ struct RideSummarySection: View {
     var body: some View {
         Section {
             if viewModel.isCalculating {
-                ProgressView("Calculating route…")
+                ProgressView(viewModel.calculationStatus ?? "Calculating route…")
             } else if !viewModel.legs.isEmpty {
                 HStack {
                     Label(formattedRideDistance(viewModel.totalDistanceMeters), systemImage: "road.lanes")
                     Spacer()
                     Label(formattedDuration(viewModel.totalExpectedTravelTime), systemImage: "clock")
                 }
+                BufferedGasApplyRow(viewModel: viewModel)
                 ForEach(Array(viewModel.fuelStops.enumerated()), id: \.element.id) { index, fuelStop in
-                    // Same addStop path as map / list suggestions — tap to
-                    // insert the stop and re-route.
+                    // Check stops into a buffer. Apply routes them once.
                     Button {
-                        viewModel.addStop(from: fuelStop)
+                        viewModel.toggleBufferedGasStop(fuelStop)
                     } label: {
                         HStack {
                             Label("Fuel stop \(index + 1): \(fuelStop.name) (~\(formattedRideDistance(fuelStop.distanceAlongRoute)) in)",
                                   systemImage: "fuelpump.fill")
                             Spacer()
-                            Image(systemName: "plus.circle.fill")
-                                .foregroundStyle(.blue)
+                            Image(systemName: viewModel.isGasBuffered(fuelStop)
+                                  ? "checkmark.circle.fill"
+                                  : "circle")
+                                .foregroundStyle(viewModel.isGasBuffered(fuelStop) ? Color.green : Color.secondary)
                         }
                     }
                     .buttonStyle(.plain)
@@ -53,7 +55,10 @@ struct RideSummarySection: View {
                         .foregroundStyle(.secondary)
                     }
                 }
-                if viewModel.hasFuelGap {
+                if viewModel.isSearchingGas && viewModel.fuelStops.isEmpty {
+                    ProgressView("Searching for gas along the route…")
+                }
+                if viewModel.hasFuelGap && !viewModel.isSearchingGas {
                     Label("No gas station found within your fuel range on part of this route — consider a different path.",
                           systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)

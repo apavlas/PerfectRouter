@@ -24,6 +24,17 @@ struct TwistyCorridor {
     var vias: [CLLocationCoordinate2D]
 }
 
+/// Identity of a routed waypoint pair. Same key means the geometry can be
+/// reused instead of calling MapKit again.
+struct TwistyLegCacheKey: Hashable {
+    var startLatitudeE4: Int
+    var startLongitudeE4: Int
+    var endLatitudeE4: Int
+    var endLongitudeE4: Int
+    var style: String
+    var departureSlot: Int
+}
+
 /// Picks a twistier driving line than Fastest.
 ///
 /// MapKit has no motorcycle-curvature preference. Twisty therefore scores
@@ -48,6 +59,15 @@ enum TwistyRouting {
     /// Straight-line length below which an offset corridor isn't worth a
     /// routing probe — the endpoints are already in the same neighborhood.
     static let minimumBiasLegMeters: CLLocationDistance = 8_000
+
+    /// Above this, offset-via probes are skipped. A ~22 km bulge does not
+    /// move the median of a multi-hundred-mile line, and each via is another
+    /// continental `MKDirections` round trip. Alternates can still win.
+    static let maximumViaProbeMeters: CLLocationDistance = 400_000
+
+    /// How far a new endpoint may sit from the already-planned line and still
+    /// count as a split of that corridor (fuel stops along the ride).
+    static let plannedCorridorSlackMeters: CLLocationDistance = 8_000
 
     /// Returns the curviest candidate that meaningfully beats `fastestID`.
     /// Nil means nothing qualified — callers must not relabel Fastest.
@@ -172,6 +192,68 @@ enum TwistyRouting {
             }
             return TwistyCorridor(vias: vias)
         }
+    }
+
+    /// What extra MapKit work a Twisty leg is worth.
+    ///
+    /// Splits of an already-planned corridor (a fuel stop on the line) get
+    /// one alternate request and no via cascade. Very long fresh legs still
+    /// compare highway and non-highway alternates, but skip offset vias.
+    /// A fresh medium leg probes vias until one corridor qualifies.
+    static func fetchPlan(
+        straightMeters: CLLocationDistance,
+        liesOnPlannedCorridor: Bool
+    ) -> (avoidHighwayAlternates: Bool, offsetVias: Bool) {
+        if liesOnPlannedCorridor {
+            return (false, false)
+        }
+        if straightMeters > maximumViaProbeMeters {
+            return (true, false)
+        }
+        return (true, true)
+    }
+
+    /// A leg split out of the route already on screen (a fuel stop on that
+    /// line). The original A→B, whose ends are the corridor ends, is not a
+    /// split — switching style must still run a real Twisty probe.
+    static func liesOnPlannedCorridor(
+        from start: CLLocationCoordinate2D,
+        to end: CLLocationCoordinate2D,
+        polylines: [[CLLocationCoordinate2D]],
+        slackMeters: CLLocationDistance = plannedCorridorSlackMeters
+    ) -> Bool {
+        guard let corridorStart = polylines.first?.first,
+              let corridorEnd = polylines.last?.last else { return false }
+        let startGap = RouteGeometry.distanceFromRoute(of: start, alongPolylines: polylines)
+        let endGap = RouteGeometry.distanceFromRoute(of: end, alongPolylines: polylines)
+        guard startGap <= slackMeters, endGap <= slackMeters else { return false }
+        let startIsEnd = meters(from: start, to: corridorStart) <= slackMeters
+            || meters(from: start, to: corridorEnd) <= slackMeters
+        let endIsEnd = meters(from: end, to: corridorStart) <= slackMeters
+            || meters(from: end, to: corridorEnd) <= slackMeters
+        return !(startIsEnd && endIsEnd)
+    }
+
+    /// Stable identity for a routed leg so an unchanged A→B pair is not
+    /// probed again. Coordinates are rounded to about 11 m.
+    static func legCacheKey(
+        from start: CLLocationCoordinate2D,
+        to end: CLLocationCoordinate2D,
+        style: RouteStyle,
+        departure: Date
+    ) -> TwistyLegCacheKey {
+        TwistyLegCacheKey(
+            startLatitudeE4: roundedE4(start.latitude),
+            startLongitudeE4: roundedE4(start.longitude),
+            endLatitudeE4: roundedE4(end.latitude),
+            endLongitudeE4: roundedE4(end.longitude),
+            style: style.rawValue,
+            departureSlot: Int(departure.timeIntervalSince1970 / 300)
+        )
+    }
+
+    private static func roundedE4(_ degrees: CLLocationDegrees) -> Int {
+        Int((degrees * 10_000).rounded())
     }
 
     // MARK: - Geometry

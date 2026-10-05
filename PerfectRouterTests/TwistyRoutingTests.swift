@@ -120,6 +120,54 @@ final class TwistyRoutingTests: XCTestCase {
         XCTAssertTrue(TwistyRouting.biasCorridors(from: start, to: end).isEmpty)
     }
 
+    func testFuelSplitSkipsTheViaCascade() {
+        let plan = TwistyRouting.fetchPlan(straightMeters: 160_000, liesOnPlannedCorridor: true)
+        XCTAssertFalse(plan.avoidHighwayAlternates)
+        XCTAssertFalse(plan.offsetVias)
+    }
+
+    func testVeryLongFreshLegSkipsOffsetViasButKeepsAlternates() {
+        let plan = TwistyRouting.fetchPlan(straightMeters: 1_600_000, liesOnPlannedCorridor: false)
+        XCTAssertTrue(plan.avoidHighwayAlternates)
+        XCTAssertFalse(plan.offsetVias)
+    }
+
+    func testFreshMediumLegProbesOffsetVias() {
+        let plan = TwistyRouting.fetchPlan(straightMeters: 80_000, liesOnPlannedCorridor: false)
+        XCTAssertTrue(plan.avoidHighwayAlternates)
+        XCTAssertTrue(plan.offsetVias)
+    }
+
+    func testOriginalEndpointsAreNotTreatedAsACorridorSplit() {
+        let start = CLLocationCoordinate2D(latitude: 33.0, longitude: -84.0)
+        let end = CLLocationCoordinate2D(latitude: 33.0, longitude: -83.0)
+        let onEnds = TwistyRouting.liesOnPlannedCorridor(
+            from: start,
+            to: end,
+            polylines: [[start, end]]
+        )
+        XCTAssertFalse(onEnds)
+        let mid = CLLocationCoordinate2D(latitude: 33.0, longitude: -83.5)
+        let split = TwistyRouting.liesOnPlannedCorridor(
+            from: start,
+            to: mid,
+            polylines: [[start, end]]
+        )
+        XCTAssertTrue(split)
+    }
+
+    func testLegCacheKeyIgnoresTinyCoordinateNoise() {
+        let start = CLLocationCoordinate2D(latitude: 33.47351, longitude: -82.01051)
+        let end = CLLocationCoordinate2D(latitude: 34.05, longitude: -83.25)
+        let departure = Date(timeIntervalSince1970: 1_700_000_000)
+        let first = TwistyRouting.legCacheKey(from: start, to: end, style: .twisty, departure: departure)
+        let nudged = CLLocationCoordinate2D(latitude: 33.47354, longitude: -82.01054)
+        let second = TwistyRouting.legCacheKey(from: nudged, to: end, style: .twisty, departure: departure)
+        XCTAssertEqual(first, second)
+        let otherStyle = TwistyRouting.legCacheKey(from: start, to: end, style: .fastest, departure: departure)
+        XCTAssertNotEqual(first, otherStyle)
+    }
+
     func testMediumLegUsesASingleViaPerSide() {
         let start = CLLocationCoordinate2D(latitude: 33.5, longitude: -84.0)
         let end = CLLocationCoordinate2D(latitude: 33.64, longitude: -84.0)

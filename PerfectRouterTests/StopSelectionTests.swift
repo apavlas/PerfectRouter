@@ -37,17 +37,59 @@ final class StopSelectionTests: XCTestCase {
         XCTAssertFalse(viewModel.waypoints[1].isGasFill)
     }
 
-    func testAddStopInsertsFuelBeforeDestination() {
+    func testAddStopBuffersFuelUntilApply() {
         let viewModel = RoutePlannerViewModel()
         viewModel.waypoints = [
             waypoint("Start", lat: 33.0, lon: -82.0),
             waypoint("End", lat: 34.0, lon: -81.0),
         ]
+        let pump = suggestion("Gas-N-Go", category: .gas, lat: 33.4, lon: -81.6)
 
-        viewModel.addStop(from: suggestion("Gas-N-Go", category: .gas, lat: 33.4, lon: -81.6))
+        viewModel.addStop(from: pump)
 
+        XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "End"])
+        XCTAssertTrue(viewModel.isGasBuffered(pump))
+        XCTAssertEqual(viewModel.bufferedGasStops.count, 1)
+
+        viewModel.clearBufferedGasStops()
+        XCTAssertTrue(viewModel.bufferedGasStops.isEmpty)
+        XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "End"])
+
+        viewModel.addStop(from: pump)
+        viewModel.applyBufferedGasStops()
         XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "Gas-N-Go", "End"])
         XCTAssertTrue(viewModel.waypoints[1].isGasFill)
+        XCTAssertTrue(viewModel.bufferedGasStops.isEmpty)
+    }
+
+    func testApplyBufferedGasStopsKeepsRideOrder() {
+        let start = waypoint("Start", lat: 33.0, lon: -82.0)
+        let end = waypoint("End", lat: 35.0, lon: -80.0)
+        let early = SuggestedStop(
+            name: "Early",
+            coordinate: CLLocationCoordinate2D(latitude: 33.4, longitude: -81.6),
+            category: .gas,
+            distanceAlongRoute: 50_000
+        )
+        let late = SuggestedStop(
+            name: "Late",
+            coordinate: CLLocationCoordinate2D(latitude: 34.2, longitude: -81.0),
+            category: .gas,
+            distanceAlongRoute: 180_000
+        )
+        let line = [
+            start.coordinate,
+            CLLocationCoordinate2D(latitude: 34.0, longitude: -81.0),
+            end.coordinate,
+        ]
+        let merged = RoutePlannerViewModel.waypoints(
+            [start, end],
+            inserting: [late, early],
+            along: [line],
+            totalDistance: 300_000
+        )
+        XCTAssertEqual(merged.map(\.name), ["Start", "Early", "Late", "End"])
+        XCTAssertEqual(merged.map(\.isGasFill), [false, true, true, false])
     }
 
     func testAddWaypointInsertsBeforeDestination() {

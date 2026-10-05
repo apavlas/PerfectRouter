@@ -75,12 +75,12 @@ struct ContentView: View {
                 ForEach(viewModel.gasStations.filter { !viewModel.isRecommendedFuelStop($0) }) { stop in
                     Annotation(stop.name, coordinate: stop.coordinate) {
                         Button {
-                            viewModel.addStop(from: stop)
+                            viewModel.toggleBufferedGasStop(stop)
                         } label: {
-                            Image(systemName: "fuelpump.fill")
+                            Image(systemName: viewModel.isGasBuffered(stop) ? "checkmark" : "fuelpump.fill")
                                 .font(.caption)
                                 .padding(6)
-                                .background(Color.gray, in: Circle())
+                                .background(viewModel.isGasBuffered(stop) ? Color.blue : Color.gray, in: Circle())
                                 .foregroundStyle(.white)
                         }
                     }
@@ -97,7 +97,9 @@ struct ContentView: View {
                     Button {
                         viewModel.addStop(from: stop)
                     } label: {
-                        Image(systemName: stop.category.systemImage)
+                        Image(systemName: stop.category == .gas && viewModel.isGasBuffered(stop)
+                              ? "checkmark"
+                              : stop.category.systemImage)
                             .padding(6)
                             .background(.thinMaterial, in: Circle())
                     }
@@ -129,13 +131,13 @@ struct ContentView: View {
             ForEach(viewModel.fuelStops) { stop in
                 Annotation(stop.name, coordinate: stop.coordinate) {
                     Button {
-                        viewModel.addStop(from: stop)
+                        viewModel.toggleBufferedGasStop(stop)
                     } label: {
-                        Image(systemName: "fuelpump.fill")
+                        Image(systemName: viewModel.isGasBuffered(stop) ? "checkmark" : "fuelpump.fill")
                             .font(.headline)
                             .foregroundStyle(.white)
                             .padding(9)
-                            .background(.green, in: Circle())
+                            .background(viewModel.isGasBuffered(stop) ? Color.blue : Color.green, in: Circle())
                             .overlay(Circle().stroke(.white, lineWidth: 2.5))
                             .shadow(radius: 3)
                     }
