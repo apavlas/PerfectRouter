@@ -456,7 +456,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         }
     }
 
-    private static func waypoint(from suggestion: SuggestedStop) -> Waypoint {
+    private nonisolated static func waypoint(from suggestion: SuggestedStop) -> Waypoint {
         Waypoint(
             name: suggestion.name,
             coordinate: suggestion.coordinate,
