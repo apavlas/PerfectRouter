@@ -108,10 +108,129 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// waypoint list — can finish last and overwrite the newer results.
     private var routeTask: Task<Void, Never>?
 
-    /// Cancels any in-flight recalculation and starts a fresh one.
+    /// Gas search started on its own (fuel-range commit after the line is
+    /// already drawn). Cancelled together with `routeTask` so a mid-plan
+    /// tweak cannot leave two searches writing the station list.
+    private var gasTask: Task<Void, Never>?
+
+    /// Category-chip search. Cancelled when the rider switches chips so a
+    /// slow empty result cannot land after the next search.
+    private var suggestionTask: Task<Void, Never>?
+    private var suggestionGeneration = 0
+
+    /// Bumped whenever a route plan is replaced. A superseded calculation
+    /// must not clear `isCalculating` or publish legs.
+    private var calculatingGeneration = 0
+
+    /// Bumped whenever a gas search is replaced. A superseded search must
+    /// not publish an empty station list or drop `isSearchingGas`.
+    private var gasGeneration = 0
+
+    /// True only after the current generation's gas search finished and
+    /// wrote its list. A cancel leaves this false, so the sheet keeps
+    /// showing progress instead of "no gas stations".
+    private(set) var gasSearchDidFinish = false
+
+    /// Cancels any in-flight route or gas work and starts one fresh route plan.
     private func scheduleRecalculation(refreshingSuggestions: Bool = true) {
+        calculatingGeneration += 1
+        gasGeneration += 1
+        let calcGen = calculatingGeneration
+        let gasGen = gasGeneration
+        gasTask?.cancel()
         routeTask?.cancel()
-        routeTask = Task { await recalculateRoute(refreshingSuggestions: refreshingSuggestions) }
+        suggestionTask?.cancel()
+        isCalculating = true
+        // The cancelled search's defer will not clear this flag (its
+        // generation no longer matches), so clear it here. Geometry is
+        // running; the empty-state copy keys off `isCalculating`.
+        isSearchingGas = false
+        gasSearchDidFinish = false
+        calculationStatus = routeStyle == .twisty
+            ? "Calculating Twisty route…"
+            : "Calculating route…"
+        routeTask = Task {
+            await recalculateRoute(
+                refreshingSuggestions: refreshingSuggestions,
+                calcGen: calcGen,
+                gasGen: gasGen
+            )
+        }
+    }
+
+    /// Cancels in-flight gas (and a route task still in its gas tail) and
+    /// starts one search on the line already drawn.
+    private func scheduleGasSearch() {
+        gasGeneration += 1
+        let gasGen = gasGeneration
+        routeTask?.cancel()
+        gasTask?.cancel()
+        suggestionTask?.cancel()
+        isSearchingGas = true
+        gasSearchDidFinish = false
+        gasTask = Task { await refreshGasStations(generation: gasGen) }
+    }
+
+    /// Fuel-range drag ended. One cancel, one restart: the route if it is
+    /// still being drawn, otherwise a single gas search at the new range.
+    func commitFuelRange() {
+        guard waypoints.count >= 2 else { return }
+        switch Self.planRestartForFuelRangeChange(isCalculating: isCalculating) {
+        case .route:
+            scheduleRecalculation()
+        case .gas:
+            scheduleGasSearch()
+        }
+    }
+
+    /// While the line is still calculating, a tank change restarts that plan
+    /// once so its gas tail uses the new range. After the line exists, only
+    /// the gas search restarts.
+    nonisolated static func planRestartForFuelRangeChange(isCalculating: Bool) -> PlanRestart {
+        isCalculating ? .route : .gas
+    }
+
+    enum PlanRestart: Equatable {
+        case route
+        case gas
+    }
+
+    /// Empty-state copy is allowed only after the gas search that owns the
+    /// screen actually finished and found nothing. Calculating, searching,
+    /// and a cancel that has not been replaced by a finished search stay quiet.
+    var showsNoGasStationsMessage: Bool {
+        Self.shouldShowNoGasStations(
+            isCalculating: isCalculating,
+            isSearchingGas: isSearchingGas,
+            searchDidFinish: gasSearchDidFinish,
+            gasStationCount: gasStations.count,
+            fuelStopCount: fuelStops.count
+        )
+    }
+
+    nonisolated static func shouldShowNoGasStations(
+        isCalculating: Bool,
+        isSearchingGas: Bool,
+        searchDidFinish: Bool,
+        gasStationCount: Int,
+        fuelStopCount: Int
+    ) -> Bool {
+        searchDidFinish
+            && !isCalculating
+            && !isSearchingGas
+            && gasStationCount == 0
+            && fuelStopCount == 0
+    }
+
+    /// A gas search may publish only if it is still the latest generation
+    /// and was not cancelled. Otherwise an older empty result overwrites
+    /// the restarted search.
+    nonisolated static func shouldCommitGasSearch(
+        generation: Int,
+        currentGeneration: Int,
+        wasCancelled: Bool
+    ) -> Bool {
+        generation == currentGeneration && !wasCancelled
     }
 
     override init() {
@@ -163,9 +282,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             routeStyle = newStyle
             scheduleRecalculation()
         } else if seedFuelRange, !waypoints.isEmpty {
-            // Tank miles changed the search grid — find gas/food at the new
-            // intervals instead of re-picking from a 25-mile sample set.
-            Task { await refreshGasStations() }
+            // Tank miles changed the search grid — one gas search at the new
+            // intervals, cancelling anything already in flight.
+            commitFuelRange()
         }
     }
 
@@ -294,6 +413,11 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     func setDeparture(_ date: Date?) {
         guard date != departureDate else { return }
         departureDate = date
+        // A DatePicker fires on every tick. Don't restart a long route for
+        // each one. An in-flight plan reads `effectiveDeparture` when it
+        // replans; starting a second gas search here is what raced the list.
+        guard !isCalculating, !isSearchingGas else { return }
+        guard waypoints.count >= 2, !legs.isEmpty else { return }
         replanFuelStops()
         Task { await refreshWeather() }
     }
@@ -485,7 +609,12 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// Routes each consecutive pair of waypoints. Fastest, Avoid Highways,
     /// and Scenic use one request per leg. Twisty may use alternates and an
     /// offset corridor, then keeps that geometry for fuel, food, and highlights.
-    func recalculateRoute(refreshingSuggestions: Bool = true) async {
+    func recalculateRoute(
+        refreshingSuggestions: Bool = true,
+        calcGen: Int,
+        gasGen: Int
+    ) async {
+        guard calcGen == calculatingGeneration else { return }
         suggestedStops = []
         errorMessage = nil
         rainForecast = nil
@@ -494,6 +623,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             legs = []
             twistyLimitationNote = nil
             clearStopRecommendations()
+            if calcGen == calculatingGeneration {
+                isCalculating = false
+                calculationStatus = nil
+            }
             await weatherNotifier.updateRainWarning(nil)
             return
         }
@@ -503,8 +636,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             ? "Calculating Twisty route…"
             : "Calculating route…"
         defer {
-            isCalculating = false
-            calculationStatus = nil
+            if calcGen == calculatingGeneration {
+                isCalculating = false
+                calculationStatus = nil
+            }
         }
 
         var newLegs: [MKRoute] = []
@@ -515,7 +650,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         for i in 0..<legCount {
             let origin = waypoints[i]
             let destination = waypoints[i + 1]
-            guard !Task.isCancelled else { return }
+            guard calcGen == calculatingGeneration, !Task.isCancelled else { return }
             calculationStatus = routeProgress(index: i, count: legCount)
             let key = TwistyRouting.legCacheKey(
                 from: origin.coordinate,
@@ -562,6 +697,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                         alternates: routeStyle.prefersAlternates
                     )
                     guard let route = Self.preferredRoute(from: routes, style: routeStyle) else {
+                        guard calcGen == calculatingGeneration, !Task.isCancelled else { return }
                         failRoute(between: origin, and: destination)
                         return
                     }
@@ -570,8 +706,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 // MKDirections isn't cancellation-aware, so a superseded
                 // recalculation still gets its response — drop it here rather
                 // than let stale legs overwrite the newer plan's results.
-                guard !Task.isCancelled else { return }
+                guard calcGen == calculatingGeneration, !Task.isCancelled else { return }
                 guard !outcome.routes.isEmpty else {
+                    guard calcGen == calculatingGeneration else { return }
                     failRoute(between: origin, and: destination)
                     return
                 }
@@ -581,8 +718,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 )
                 if outcome.usedFastestFallback { missedTwistyLegs += 1 }
                 newLegs.append(contentsOf: outcome.routes)
+            } catch is CancellationError {
+                return
             } catch {
-                guard !Task.isCancelled else { return }
+                guard calcGen == calculatingGeneration, !Task.isCancelled else { return }
                 errorMessage = "Routing failed: \(error.localizedDescription)"
                 legs = []
                 twistyLimitationNote = nil
@@ -591,24 +730,31 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             }
         }
 
-        guard !Task.isCancelled else { return }
+        guard calcGen == calculatingGeneration, !Task.isCancelled else { return }
         legs = newLegs
         plannedCorridor = newLegs.map { RouteGeometry.coordinates(of: $0.polyline) }
         twistyLimitationNote = routeStyle == .twisty
             ? Self.twistyLimitationNote(missedLegs: missedTwistyLegs, totalLegs: legCount)
             : nil
+        // Geometry is committed. Drop the calculating flag before gas so a
+        // tank-range tweak restarts the search once instead of the whole line.
+        if calcGen == calculatingGeneration {
+            isCalculating = false
+            calculationStatus = nil
+        }
+        guard calcGen == calculatingGeneration, gasGen == gasGeneration, !Task.isCancelled else { return }
         // Chip suggestions often find pumps the tank-interval search misses
         // (long interstate). Search gas, then merge those suggestions into
         // the fuel pool so later tanks still get a recommendation.
-        calculationStatus = "Searching for gas along the route…"
-        await refreshGasStations()
+        await refreshGasStations(generation: gasGen)
+        guard gasGen == gasGeneration, !Task.isCancelled else { return }
         if refreshingSuggestions {
-            calculationStatus = "Searching along the route…"
             await refreshSuggestions()
         }
-        guard !Task.isCancelled else { return }
+        guard gasGen == gasGeneration, !Task.isCancelled else { return }
         applyFuelCandidatePool()
         await refreshHighlights()
+        guard gasGen == gasGeneration, !Task.isCancelled else { return }
         await refreshWeather()
     }
 
@@ -862,9 +1008,6 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     // MARK: - Gas stations & automatic fuel planning
 
-    /// Finds every gas station along the route (independent of the selected
-    /// category) so the rider can pick any of them, then plans which ones to
-    /// recommend as fuel stops.
     /// Clears every route-derived stop recommendation, so a cleared or failed
     /// route doesn't leave stale pins and rows behind.
     private func clearStopRecommendations() {
@@ -877,17 +1020,28 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         pairedFuelStopIDs = []
         rideHighlights = []
         isShowingAllGasOnRoute = false
+        // A failed or cleared route did not finish a gas search. Leaving
+        // `gasSearchDidFinish` true would show "no gas stations" for a
+        // route that never got one.
+        gasSearchDidFinish = false
     }
 
-    func refreshGasStations() async {
+    /// Finds every gas station along the route (independent of the selected
+    /// category) so the rider can pick any of them, then plans which ones to
+    /// recommend as fuel stops. `generation` must still be current when the
+    /// search returns; a cancelled or replaced search does not write.
+    func refreshGasStations(generation: Int) async {
+        guard Self.shouldCommitGasSearch(
+            generation: generation,
+            currentGeneration: gasGeneration,
+            wasCancelled: Task.isCancelled
+        ) else { return }
         guard !legs.isEmpty else {
-            gasStations = []
-            travelSideGasStations = []
-            gasStopsWithFood = []
-            fuelStops = []
-            hasFuelGap = false
-            fuelFoodStops = []
-            pairedFuelStopIDs = []
+            // Nothing to search. Drop the spinner `scheduleGasSearch` raised
+            // so a later finished search is the only thing that can say empty.
+            if generation == gasGeneration {
+                isSearchingGas = false
+            }
             return
         }
 
@@ -896,20 +1050,31 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         // ran, leaving fuel stops empty even when pumps exist. Food is paired
         // after a recommendation exists.
         isSearchingGas = true
-        defer { isSearchingGas = false }
+        gasSearchDidFinish = false
+        defer {
+            if generation == gasGeneration {
+                isSearchingGas = false
+            }
+        }
         let sampleDistances = Self.fuelSearchDistances(
             totalDistance: totalDistanceMeters,
             range: fuelRangeMeters
         )
+        let legsAtSearch = legs
         let found = await suggestionService.findStops(
             category: .gas,
-            alongLegs: legs,
+            alongLegs: legsAtSearch,
             sampleDistances: sampleDistances,
             corridorRadiusMeters: Self.fuelSearchCorridorMeters
         )
-        guard !Task.isCancelled else { return }
+        guard Self.shouldCommitGasSearch(
+            generation: generation,
+            currentGeneration: gasGeneration,
+            wasCancelled: Task.isCancelled
+        ) else { return }
         gasStations = found
         gasStopsWithFood = []
+        gasSearchDidFinish = true
         applyFuelCandidatePool()
         await refreshFoodNearFuelStops()
     }
@@ -1331,13 +1496,19 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     func refreshSuggestions() async {
         guard !legs.isEmpty else { return }
+        suggestionGeneration += 1
+        let generation = suggestionGeneration
         isLoadingSuggestions = true
-        defer { isLoadingSuggestions = false }
+        defer {
+            if generation == suggestionGeneration {
+                isLoadingSuggestions = false
+            }
+        }
         let found = await suggestionService.findStops(
             category: selectedCategory,
             alongLegs: legs
         )
-        guard !Task.isCancelled else { return }
+        guard generation == suggestionGeneration, !Task.isCancelled else { return }
         suggestedStops = found
         // Gas-chip hits (often the only pumps MapKit returns on a long
         // interstate) feed the same tank-interval planner as the fuel search.
@@ -1348,7 +1519,11 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     func selectCategory(_ category: StopCategory) {
         selectedCategory = category
-        Task { await refreshSuggestions() }
+        // The in-flight plan already refreshes suggestions when it finishes.
+        // A second search here races MKLocalSearch and can come back empty.
+        guard !isCalculating, !isSearchingGas else { return }
+        suggestionTask?.cancel()
+        suggestionTask = Task { await refreshSuggestions() }
     }
 
     // MARK: - Sharing
@@ -1437,11 +1612,14 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         if let category {
             selectedCategory = category
         }
-        routeTask?.cancel()
-        routeTask = Task {
-            await recalculateRoute(refreshingSuggestions: importedStops.isEmpty)
-            guard !Task.isCancelled else { return }
-            if !importedStops.isEmpty {
+        let preserveImportedSuggestions = !importedStops.isEmpty
+        scheduleRecalculation(refreshingSuggestions: !preserveImportedSuggestions)
+        if preserveImportedSuggestions {
+            let planned = routeTask
+            let calcGen = calculatingGeneration
+            Task {
+                await planned?.value
+                guard calcGen == calculatingGeneration, !Task.isCancelled else { return }
                 self.suggestedStops = importedStops
             }
         }
@@ -1508,11 +1686,14 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         if let category = saved.route.suggestionCategory {
             selectedCategory = category
         }
-        routeTask?.cancel()
-        routeTask = Task {
-            await recalculateRoute(refreshingSuggestions: savedStops.isEmpty)
-            guard !Task.isCancelled else { return }
-            if !savedStops.isEmpty {
+        let preserveSavedSuggestions = !savedStops.isEmpty
+        scheduleRecalculation(refreshingSuggestions: !preserveSavedSuggestions)
+        if preserveSavedSuggestions {
+            let planned = routeTask
+            let calcGen = calculatingGeneration
+            Task {
+                await planned?.value
+                guard calcGen == calculatingGeneration, !Task.isCancelled else { return }
                 suggestedStops = savedStops
             }
         }

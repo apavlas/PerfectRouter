@@ -9,9 +9,9 @@ struct GasStationsSection: View {
     var body: some View {
         Section("Recommended fuel") {
             BufferedGasApplyRow(viewModel: viewModel)
-            if viewModel.isSearchingGas || (viewModel.isCalculating && viewModel.gasStations.isEmpty) {
+            if viewModel.isCalculating || viewModel.isSearchingGas || !viewModel.gasSearchDidFinish {
                 ProgressView("Searching for gas along the route…")
-            } else if viewModel.fuelStops.isEmpty && viewModel.gasStations.isEmpty {
+            } else if viewModel.showsNoGasStationsMessage {
                 Text("No gas stations found along this route.")
                     .foregroundStyle(.secondary)
             }
@@ -113,12 +113,14 @@ struct SuggestionsSection: View {
             if viewModel.isLoadingSuggestions {
                 ProgressView("Searching along your route…")
             } else if viewModel.suggestedStops.isEmpty && !viewModel.legs.isEmpty {
-                if viewModel.isCalculating || viewModel.isSearchingGas {
+                if viewModel.isCalculating || viewModel.isSearchingGas || viewModel.isLoadingSuggestions {
                     ProgressView("Searching along your route…")
                 } else if viewModel.selectedCategory == .gas,
                           !viewModel.fuelStops.isEmpty || !viewModel.gasStations.isEmpty {
                     Text("Gas along this ride is listed with the fuel stops above.")
                         .foregroundStyle(.secondary)
+                } else if viewModel.selectedCategory == .gas, !viewModel.showsNoGasStationsMessage {
+                    ProgressView("Searching along your route…")
                 } else {
                     Text("No \(viewModel.selectedCategory.rawValue.lowercased()) stops found near this route.")
                         .foregroundStyle(.secondary)

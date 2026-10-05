@@ -58,9 +58,18 @@ struct StopSuggestionService {
         var results: [SuggestedStop] = []
 
         for (index, sample) in samples.enumerated() {
+            // A mid-plan tweak cancels this task. Swallowing the sleep's
+            // cancellation kept the old search burning MKLocalSearch quota,
+            // and the restarted search then came back empty.
+            if Task.isCancelled { return [] }
             if index > 0 {
-                try? await Task.sleep(for: interSearchDelay)
+                do {
+                    try await Task.sleep(for: interSearchDelay)
+                } catch is CancellationError {
+                    return []
+                }
             }
+            if Task.isCancelled { return [] }
             let request = MKLocalSearch.Request()
             request.naturalLanguageQuery = category.searchQuery
             request.resultTypes = .pointOfInterest
@@ -70,7 +79,12 @@ struct StopSuggestionService {
                 longitudinalMeters: corridor * 2
             )
 
-            guard let response = try? await MKLocalSearch(request: request).start() else {
+            let response: MKLocalSearch.Response
+            do {
+                response = try await MKLocalSearch(request: request).start()
+            } catch is CancellationError {
+                return []
+            } catch {
                 continue
             }
 
