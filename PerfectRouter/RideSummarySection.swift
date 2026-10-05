@@ -65,6 +65,21 @@ struct RideSummarySection: View {
                     Label("Checking weather along your route…", systemImage: "cloud.sun.fill")
                         .foregroundStyle(.secondary)
                 }
+                // Active style sits immediately above Navigate so the rider
+                // can see which line they're about to hand off.
+                VStack(alignment: .leading, spacing: 2) {
+                    Label(viewModel.routeStyle.rawValue, systemImage: viewModel.routeStyle.systemImage)
+                        .font(.subheadline.weight(.semibold))
+                    Text(viewModel.routeStyle.detail)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    if let note = viewModel.twistyLimitationNote {
+                        Text(note)
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 // Primary, one-tap hand-off. Apple Maps is CarPlay-native, so
                 // its turn-by-turn guidance automatically continues on the car
                 // display once the rider connects to CarPlay.

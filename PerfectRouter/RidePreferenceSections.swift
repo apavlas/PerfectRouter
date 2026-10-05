@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Lets the rider pick Fastest, Avoid Highways, or Scenic. Changing the
-/// style re-plans the current ride immediately.
+/// Lets the rider pick Fastest, Avoid Highways, Scenic, or Twisty. Changing
+/// the style re-plans the current ride immediately.
 struct RouteStyleSection: View {
     let viewModel: RoutePlannerViewModel
 

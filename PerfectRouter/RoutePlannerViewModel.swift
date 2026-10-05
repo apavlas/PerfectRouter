@@ -4,6 +4,15 @@ import MapKit
 import Observation
 import SwiftUI
 
+/// One scored option inside a Twisty leg: either a single `MKRoute` alternate
+/// or several routes stitched through an offset corridor.
+private struct TwistyPoolEntry {
+    var id: Int
+    var routes: [MKRoute]
+    var coordinates: [CLLocationCoordinate2D]
+    var distance: CLLocationDistance
+}
+
 @MainActor
 @Observable
 final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
@@ -31,8 +40,13 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// Rider's fuel range in meters (default ~100 miles).
     var fuelRangeMeters: CLLocationDistance = 160_900
 
-    /// How routes are biased — fastest, avoiding highways, or scenic (Apple alternates).
+    /// How routes are biased — fastest, avoiding highways, scenic, or twisty.
     var routeStyle: RouteStyle = .fastest
+
+    /// Set when Twisty could not beat Fastest on a leg. Nil for other styles,
+    /// and nil when every leg found a curvier corridor. Surfaced in the
+    /// summary so a Fastest-shaped line is never silently labeled Twisty.
+    private(set) var twistyLimitationNote: String?
 
     private var suggestionService = StopSuggestionService()
 
@@ -339,8 +353,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     // MARK: - Routing
 
-    /// One MKDirections request per consecutive pair of waypoints,
-    /// giving a full multi-stop route.
+    /// Routes each consecutive pair of waypoints. Fastest, Avoid Highways,
+    /// and Scenic use one request per leg. Twisty may use alternates and an
+    /// offset corridor, then keeps that geometry for fuel, food, and highlights.
     func recalculateRoute(refreshingSuggestions: Bool = true) async {
         suggestedStops = []
         errorMessage = nil
@@ -348,6 +363,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
         guard waypoints.count >= 2 else {
             legs = []
+            twistyLimitationNote = nil
             clearStopRecommendations()
             await weatherNotifier.updateRainWarning(nil)
             return
@@ -357,38 +373,45 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         defer { isCalculating = false }
 
         var newLegs: [MKRoute] = []
+        var missedTwistyLegs = 0
+        let legCount = waypoints.count - 1
 
-        for i in 0..<(waypoints.count - 1) {
-            let request = MKDirections.Request()
-            request.source = MKMapItem(placemark: MKPlacemark(coordinate: waypoints[i].coordinate))
-            request.destination = MKMapItem(placemark: MKPlacemark(coordinate: waypoints[i + 1].coordinate))
-            request.transportType = .automobile
-            // Let MapKit factor predicted traffic for the planned departure
-            // into the route choice and travel-time estimates.
-            request.departureDate = effectiveDeparture
-            // Bias the route to the rider's chosen style.
-            request.highwayPreference = routeStyle.avoidsHighways ? .avoid : .any
-            request.tollPreference = routeStyle.avoidsTolls ? .avoid : .any
-            // Scenic rides ask for alternates so we can pick the most scenic one.
-            request.requestsAlternateRoutes = routeStyle.prefersAlternates
-
+        for i in 0..<legCount {
+            let origin = waypoints[i]
+            let destination = waypoints[i + 1]
             do {
-                let response = try await MKDirections(request: request).calculate()
-                // MKDirections isn't cancellation-aware, so a superseded
-                // recalculation still gets its response — drop it here rather
-                // than let stale legs overwrite the newer plan's results.
-                guard !Task.isCancelled else { return }
-                guard let route = Self.preferredRoute(from: response.routes, style: routeStyle) else {
-                    errorMessage = "No route found between \(waypoints[i].name) and \(waypoints[i + 1].name)."
-                    legs = []
-                    clearStopRecommendations()
-                    return
+                if routeStyle == .twisty {
+                    let outcome = try await twistyLeg(from: origin, to: destination)
+                    // MKDirections isn't cancellation-aware, so a superseded
+                    // recalculation still gets its response — drop it here rather
+                    // than let stale legs overwrite the newer plan's results.
+                    guard !Task.isCancelled else { return }
+                    guard !outcome.routes.isEmpty else {
+                        failRoute(between: origin, and: destination)
+                        return
+                    }
+                    if outcome.usedFastestFallback { missedTwistyLegs += 1 }
+                    newLegs.append(contentsOf: outcome.routes)
+                } else {
+                    let routes = try await calculateRoutes(
+                        from: origin.coordinate,
+                        to: destination.coordinate,
+                        avoidsHighways: routeStyle.avoidsHighways,
+                        avoidsTolls: routeStyle.avoidsTolls,
+                        alternates: routeStyle.prefersAlternates
+                    )
+                    guard !Task.isCancelled else { return }
+                    guard let route = Self.preferredRoute(from: routes, style: routeStyle) else {
+                        failRoute(between: origin, and: destination)
+                        return
+                    }
+                    newLegs.append(route)
                 }
-                newLegs.append(route)
             } catch {
                 guard !Task.isCancelled else { return }
                 errorMessage = "Routing failed: \(error.localizedDescription)"
                 legs = []
+                twistyLimitationNote = nil
                 clearStopRecommendations()
                 return
             }
@@ -396,6 +419,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
         guard !Task.isCancelled else { return }
         legs = newLegs
+        twistyLimitationNote = routeStyle == .twisty
+            ? Self.twistyLimitationNote(missedLegs: missedTwistyLegs, totalLegs: legCount)
+            : nil
         // Fuel first so the tank-interval gas search is not starved by the
         // category-chip MKLocalSearch budget (16 lookups at searchIntervalMiles).
         await refreshGasStations()
@@ -418,12 +444,188 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// Picks which of MapKit's returned routes to use for a leg. For scenic
     /// rides we prefer a route that avoids highways, and among those the longest
     /// — back-roads detours tend to be the more scenic option. Otherwise we take
-    /// MapKit's top recommendation.
+    /// MapKit's top recommendation. Twisty does not use this; it scores
+    /// curvature in `twistyLeg`.
     nonisolated static func preferredRoute(from routes: [MKRoute], style: RouteStyle) -> MKRoute? {
         guard style.prefersAlternates else { return routes.first }
         let withoutHighways = routes.filter { !$0.hasHighways }
         let candidates = withoutHighways.isEmpty ? routes : withoutHighways
         return candidates.max(by: { $0.distance < $1.distance }) ?? routes.first
+    }
+
+    /// Honest copy when Twisty had to keep Fastest's geometry. `nil` when
+    /// every leg found a curvier corridor, or when no leg was missed.
+    nonisolated static func twistyLimitationNote(missedLegs: Int, totalLegs: Int) -> String? {
+        guard missedLegs > 0, totalLegs > 0 else { return nil }
+        if missedLegs >= totalLegs {
+            return "MapKit didn't offer a curvier corridor between these stops, so this line matches Fastest."
+        }
+        return "Part of this ride stayed on the fastest roads — MapKit didn't offer a curvier corridor there."
+    }
+
+    private func failRoute(between origin: Waypoint, and destination: Waypoint) {
+        errorMessage = "No route found between \(origin.name) and \(destination.name)."
+        legs = []
+        twistyLimitationNote = nil
+        clearStopRecommendations()
+    }
+
+    /// One or more `MKRoute`s for a Twisty leg. May be a single MapKit
+    /// alternate or a stitch through an offset corridor. Downstream fuel,
+    /// food, highlights, and the map all read `legs`, so the chosen geometry
+    /// is the plan — the style is not swapped back to Fastest.
+    private func twistyLeg(
+        from origin: Waypoint,
+        to destination: Waypoint
+    ) async throws -> (routes: [MKRoute], usedFastestFallback: Bool) {
+        let direct = try await calculateRoutes(
+            from: origin.coordinate,
+            to: destination.coordinate,
+            avoidsHighways: false,
+            avoidsTolls: false,
+            alternates: true
+        )
+        guard !Task.isCancelled else { throw CancellationError() }
+        guard let fastest = direct.first else { return ([], false) }
+
+        var pool: [TwistyPoolEntry] = []
+        func append(_ routes: [MKRoute]) {
+            pool.append(TwistyPoolEntry(
+                id: pool.count,
+                routes: routes,
+                coordinates: Self.joinedCoordinates(routes),
+                distance: routes.reduce(0) { $0 + $1.distance }
+            ))
+        }
+        for route in direct {
+            append([route])
+        }
+        let fastestID = 0
+
+        // Non-highway alternates are candidates, not the decision. Scenic
+        // would keep the longest of these; Twisty only keeps one if it is
+        // actually curvier than Fastest.
+        do {
+            let avoided = try await calculateRoutes(
+                from: origin.coordinate,
+                to: destination.coordinate,
+                avoidsHighways: true,
+                avoidsTolls: false,
+                alternates: true
+            )
+            guard !Task.isCancelled else { throw CancellationError() }
+            for route in avoided {
+                append([route])
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            guard !Task.isCancelled else { throw CancellationError() }
+        }
+
+        if let chosen = Self.chosenTwisty(in: pool, fastestID: fastestID) {
+            return (chosen, false)
+        }
+
+        let corridors = TwistyRouting.biasCorridors(
+            from: origin.coordinate,
+            to: destination.coordinate
+        )
+        for corridor in corridors {
+            guard !Task.isCancelled else { throw CancellationError() }
+            do {
+                if let stitched = try await routeThrough(
+                    vias: corridor.vias,
+                    from: origin.coordinate,
+                    to: destination.coordinate
+                ) {
+                    append(stitched)
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                guard !Task.isCancelled else { throw CancellationError() }
+            }
+        }
+
+        if let chosen = Self.chosenTwisty(in: pool, fastestID: fastestID) {
+            return (chosen, false)
+        }
+        return ([fastest], true)
+    }
+
+    /// Routes A → vias → B with ordinary driving preference (highways allowed).
+    /// The vias are what leave the fast corridor; curvature scoring decides
+    /// whether the resulting roads are actually twistier.
+    private func routeThrough(
+        vias: [CLLocationCoordinate2D],
+        from origin: CLLocationCoordinate2D,
+        to destination: CLLocationCoordinate2D
+    ) async throws -> [MKRoute]? {
+        var routes: [MKRoute] = []
+        var cursor = origin
+        for stop in vias + [destination] {
+            let piece = try await calculateRoutes(
+                from: cursor,
+                to: stop,
+                avoidsHighways: false,
+                avoidsTolls: false,
+                alternates: false
+            )
+            guard !Task.isCancelled else { throw CancellationError() }
+            guard let route = piece.first else { return nil }
+            routes.append(route)
+            cursor = stop
+        }
+        return routes
+    }
+
+    private func calculateRoutes(
+        from origin: CLLocationCoordinate2D,
+        to destination: CLLocationCoordinate2D,
+        avoidsHighways: Bool,
+        avoidsTolls: Bool,
+        alternates: Bool
+    ) async throws -> [MKRoute] {
+        guard origin.isValidLocation, destination.isValidLocation else { return [] }
+        let request = MKDirections.Request()
+        request.source = MKMapItem(placemark: MKPlacemark(coordinate: origin))
+        request.destination = MKMapItem(placemark: MKPlacemark(coordinate: destination))
+        request.transportType = .automobile
+        // Let MapKit factor predicted traffic for the planned departure
+        // into the route choice and travel-time estimates.
+        request.departureDate = effectiveDeparture
+        request.highwayPreference = avoidsHighways ? .avoid : .any
+        request.tollPreference = avoidsTolls ? .avoid : .any
+        request.requestsAlternateRoutes = alternates
+        return try await MKDirections(request: request).calculate().routes
+    }
+
+    private static func chosenTwisty(in pool: [TwistyPoolEntry], fastestID: Int) -> [MKRoute]? {
+        let selection = TwistyRouting.select(
+            candidates: pool.map {
+                TwistyRouteCandidate(id: $0.id, coordinates: $0.coordinates, distance: $0.distance)
+            },
+            fastestID: fastestID
+        )
+        guard let selection else { return nil }
+        return pool.first { $0.id == selection.candidateID }?.routes
+    }
+
+    private static func joinedCoordinates(_ routes: [MKRoute]) -> [CLLocationCoordinate2D] {
+        var coordinates: [CLLocationCoordinate2D] = []
+        for route in routes {
+            var leg = RouteGeometry.coordinates(of: route.polyline)
+            if let last = coordinates.last, let first = leg.first {
+                let gap = CLLocation(latitude: last.latitude, longitude: last.longitude)
+                    .distance(from: CLLocation(latitude: first.latitude, longitude: first.longitude))
+                if gap < 40 {
+                    leg.removeFirst()
+                }
+            }
+            coordinates.append(contentsOf: leg)
+        }
+        return coordinates
     }
 
     // MARK: - Weather
