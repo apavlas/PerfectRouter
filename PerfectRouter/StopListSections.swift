@@ -74,7 +74,7 @@ struct WaypointsSection: View {
     let onUseMapCenterAsStart: () -> Void
 
     var body: some View {
-        Section("Route (\(viewModel.waypoints.count) stops)") {
+        Section(viewModel.routeStopsTitle) {
             if viewModel.waypoints.isEmpty {
                 Text(viewModel.currentLocation == nil
                      ? "Long-press the map or use the button below to set a start, then search for your destination."
@@ -124,7 +124,7 @@ struct SuggestionsSection: View {
                         .foregroundStyle(.secondary)
                 }
             } else if viewModel.legs.isEmpty {
-                Text("Add at least two stops to see suggestions.")
+                Text("Add a start and a destination to see suggestions.")
                     .foregroundStyle(.secondary)
             }
             ForEach(viewModel.suggestedStops.prefix(15)) { stop in

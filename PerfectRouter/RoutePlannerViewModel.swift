@@ -27,6 +27,21 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// Ordered ride: first = start, last = destination, middle = stops.
     var waypoints: [Waypoint] = []
 
+    /// Intermediate stops only. Start and destination are not stops
+    /// (Apple/Google Maps). A ride of start + 5 mids + end is 5 stops.
+    var intermediateStopCount: Int {
+        max(0, waypoints.count - 2)
+    }
+
+    /// Route-list title. Uses "stops" for the intermediate count only.
+    var routeStopsTitle: String {
+        switch intermediateStopCount {
+        case 0: return "Route"
+        case 1: return "Route (1 stop)"
+        default: return "Route (\(intermediateStopCount) stops)"
+        }
+    }
+
     /// The rider's most recent known coordinate, used to auto-seed the ride
     /// start. `nil` until a location fix arrives (or if permission is denied).
     private(set) var currentLocation: CLLocationCoordinate2D?

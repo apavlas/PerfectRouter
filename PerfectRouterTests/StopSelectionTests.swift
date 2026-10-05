@@ -179,4 +179,34 @@ final class StopSelectionTests: XCTestCase {
 
         XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "End"])
     }
+
+    func testStopsCountIntermediateOnly() {
+        let viewModel = RoutePlannerViewModel()
+        viewModel.waypoints = [
+            waypoint("Start", lat: 33.0, lon: -82.0),
+            waypoint("One", lat: 33.2, lon: -81.8),
+            waypoint("Two", lat: 33.4, lon: -81.6),
+            waypoint("Three", lat: 33.6, lon: -81.4),
+            waypoint("Four", lat: 33.8, lon: -81.2),
+            waypoint("Five", lat: 34.0, lon: -81.0),
+            waypoint("End", lat: 34.2, lon: -80.8),
+        ]
+
+        XCTAssertEqual(viewModel.intermediateStopCount, 5)
+        XCTAssertEqual(viewModel.routeStopsTitle, "Route (5 stops)")
+    }
+
+    func testStopsTitleOmitsZeroAndSingularizesOne() {
+        let viewModel = RoutePlannerViewModel()
+        viewModel.waypoints = [
+            waypoint("Start", lat: 33.0, lon: -82.0),
+            waypoint("End", lat: 34.0, lon: -81.0),
+        ]
+        XCTAssertEqual(viewModel.intermediateStopCount, 0)
+        XCTAssertEqual(viewModel.routeStopsTitle, "Route")
+
+        viewModel.waypoints.insert(waypoint("Café", lat: 33.5, lon: -81.5), at: 1)
+        XCTAssertEqual(viewModel.intermediateStopCount, 1)
+        XCTAssertEqual(viewModel.routeStopsTitle, "Route (1 stop)")
+    }
 }
