@@ -65,7 +65,10 @@ struct StopSuggestionService {
             if index > 0 {
                 do {
                     try await Task.sleep(for: interSearchDelay)
-                } catch is CancellationError {
+                } catch {
+                    // `sleep` throws CancellationError when this search is
+                    // replaced. Stop either way — the function itself doesn't
+                    // throw, so the catch has to cover every error.
                     return []
                 }
             }

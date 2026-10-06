@@ -18,6 +18,13 @@ private struct CachedLeg {
     var usedFastestFallback: Bool
 }
 
+/// What a fuel-range commit restarts. File-level so a nonisolated helper can
+/// return it; a type nested in the main-actor view model would be isolated too.
+enum PlanRestart: Equatable {
+    case route
+    case gas
+}
+
 @MainActor
 @Observable
 final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
@@ -188,11 +195,6 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// the gas search restarts.
     nonisolated static func planRestartForFuelRangeChange(isCalculating: Bool) -> PlanRestart {
         isCalculating ? .route : .gas
-    }
-
-    enum PlanRestart: Equatable {
-        case route
-        case gas
     }
 
     /// Empty-state copy is allowed only after the gas search that owns the
@@ -1617,7 +1619,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         if preserveImportedSuggestions {
             let planned = routeTask
             let calcGen = calculatingGeneration
-            Task {
+            Task { @MainActor in
                 await planned?.value
                 guard calcGen == calculatingGeneration, !Task.isCancelled else { return }
                 self.suggestedStops = importedStops
@@ -1691,7 +1693,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         if preserveSavedSuggestions {
             let planned = routeTask
             let calcGen = calculatingGeneration
-            Task {
+            Task { @MainActor in
                 await planned?.value
                 guard calcGen == calculatingGeneration, !Task.isCancelled else { return }
                 suggestedStops = savedStops
