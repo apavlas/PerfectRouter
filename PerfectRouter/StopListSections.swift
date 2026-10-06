@@ -9,8 +9,10 @@ struct GasStationsSection: View {
     var body: some View {
         Section("Recommended fuel") {
             BufferedGasApplyRow(viewModel: viewModel)
-            if viewModel.isCalculating || viewModel.isSearchingGas || !viewModel.gasSearchDidFinish {
+            if viewModel.isCalculating || viewModel.isSearchingGas || viewModel.gasLoadState == .pending {
                 ProgressView("Searching for gas along the route…")
+            } else if viewModel.showsGasLoadFailed {
+                GasLoadFailedButton(viewModel: viewModel)
             } else if viewModel.showsNoGasStationsMessage {
                 Text("No gas stations found along this route.")
                     .foregroundStyle(.secondary)
@@ -115,13 +117,18 @@ struct SuggestionsSection: View {
             } else if viewModel.suggestedStops.isEmpty && !viewModel.legs.isEmpty {
                 if viewModel.isCalculating || viewModel.isSearchingGas || viewModel.isLoadingSuggestions {
                     ProgressView("Searching along your route…")
+                } else if viewModel.selectedCategory == .gas, viewModel.showsGasLoadFailed {
+                    GasLoadFailedButton(viewModel: viewModel)
                 } else if viewModel.selectedCategory == .gas,
                           !viewModel.fuelStops.isEmpty || !viewModel.gasStations.isEmpty {
                     Text("Gas along this ride is listed with the fuel stops above.")
                         .foregroundStyle(.secondary)
-                } else if viewModel.selectedCategory == .gas, !viewModel.showsNoGasStationsMessage {
+                } else if viewModel.selectedCategory == .gas, viewModel.gasLoadState == .pending {
                     ProgressView("Searching along your route…")
-                } else {
+                } else if viewModel.selectedCategory == .gas, viewModel.showsNoGasStationsMessage {
+                    Text("No gas stations found along this route.")
+                        .foregroundStyle(.secondary)
+                } else if viewModel.selectedCategory != .gas {
                     Text("No \(viewModel.selectedCategory.rawValue.lowercased()) stops found near this route.")
                         .foregroundStyle(.secondary)
                 }
@@ -154,6 +161,21 @@ struct SuggestionsSection: View {
                 }
                 .buttonStyle(.plain)
             }
+        }
+    }
+}
+
+/// Rate-limit and other gas-search failures. Tapping reruns gas on the
+/// current line; it does not say the corridor is empty.
+struct GasLoadFailedButton: View {
+    let viewModel: RoutePlannerViewModel
+
+    var body: some View {
+        Button {
+            viewModel.retryGasSearch()
+        } label: {
+            Label(RoutePlannerViewModel.gasLoadFailedCopy, systemImage: "arrow.clockwise")
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }

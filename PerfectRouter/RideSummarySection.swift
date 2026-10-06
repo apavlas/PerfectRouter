@@ -58,7 +58,13 @@ struct RideSummarySection: View {
                 if viewModel.isSearchingGas {
                     ProgressView("Searching for gas along the route…")
                 }
-                if viewModel.hasFuelGap && viewModel.gasSearchDidFinish && !viewModel.isSearchingGas {
+                if viewModel.showsGasLoadFailed {
+                    GasLoadFailedButton(viewModel: viewModel)
+                }
+                if viewModel.hasFuelGap
+                    && (viewModel.gasLoadState == .loaded || viewModel.gasLoadState == .empty)
+                    && !viewModel.isSearchingGas
+                    && !viewModel.isCalculating {
                     Label("No gas station found within your fuel range on part of this route — consider a different path.",
                           systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)

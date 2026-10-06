@@ -2,7 +2,12 @@ import Contacts
 import Foundation
 import MapKit
 import Observation
+import os
 import SwiftUI
+
+/// Console log for gas planning. Same subsystem and category as the
+/// corridor search so one Xcode filter shows the whole path.
+private let gasLog = Logger(subsystem: "com.apavlas.PerfectRouter", category: "gas")
 
 /// One scored option inside a Twisty leg: either a single `MKRoute` alternate
 /// or several routes stitched through an offset corridor.
@@ -23,6 +28,15 @@ private struct CachedLeg {
 enum PlanRestart: Equatable {
     case route
     case gas
+}
+
+/// What the sheet is allowed to say about gas. `empty` is the only state
+/// that may read "no gas stations". `failed` is a load error with a retry.
+enum GasLoadState: Equatable {
+    case pending
+    case loaded
+    case empty
+    case failed
 }
 
 @MainActor
@@ -133,10 +147,12 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// not publish an empty station list or drop `isSearchingGas`.
     private var gasGeneration = 0
 
-    /// True only after the current generation's gas search finished and
-    /// wrote its list. A cancel leaves this false, so the sheet keeps
-    /// showing progress instead of "no gas stations".
-    private(set) var gasSearchDidFinish = false
+    /// Distinct from "searching". Only `.empty` may say there are no stations.
+    /// A cancel leaves this alone (the replacement search owns the screen).
+    private(set) var gasLoadState: GasLoadState = .pending
+
+    /// Shown when MapKit throttles or every sample errors. Not an empty corridor.
+    nonisolated static let gasLoadFailedCopy = "Couldn't load gas — tap to retry"
 
     /// Cancels any in-flight route or gas work and starts one fresh route plan.
     private func scheduleRecalculation(refreshingSuggestions: Bool = true) {
@@ -152,7 +168,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         // generation no longer matches), so clear it here. Geometry is
         // running; the empty-state copy keys off `isCalculating`.
         isSearchingGas = false
-        gasSearchDidFinish = false
+        gasLoadState = .pending
         calculationStatus = routeStyle == .twisty
             ? "Calculating Twisty route…"
             : "Calculating route…"
@@ -167,6 +183,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     /// Cancels in-flight gas (and a route task still in its gas tail) and
     /// starts one search on the line already drawn.
+    ///
+    /// The previous task is cancelled before the replacement is stored, so
+    /// the owner that is allowed to publish is never a task we just cancelled.
     private func scheduleGasSearch() {
         gasGeneration += 1
         let gasGen = gasGeneration
@@ -174,8 +193,15 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         gasTask?.cancel()
         suggestionTask?.cancel()
         isSearchingGas = true
-        gasSearchDidFinish = false
+        gasLoadState = .pending
+        gasLog.info("gas owner gen=\(gasGen, privacy: .public) start")
         gasTask = Task { await refreshGasStations(generation: gasGen) }
+    }
+
+    /// Reruns gas for the line already on screen. Does not redraw the route.
+    func retryGasSearch() {
+        guard !legs.isEmpty, !isCalculating else { return }
+        scheduleGasSearch()
     }
 
     /// Fuel-range drag ended. One cancel, one restart: the route if it is
@@ -197,42 +223,52 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         isCalculating ? .route : .gas
     }
 
-    /// Empty-state copy is allowed only after the gas search that owns the
-    /// screen actually finished and found nothing. Calculating, searching,
-    /// and a cancel that has not been replaced by a finished search stay quiet.
+    /// "No gas stations" only after a search that actually returned and found
+    /// zero. Calculating, searching, cancelled, and failed stay off this copy.
     var showsNoGasStationsMessage: Bool {
         Self.shouldShowNoGasStations(
+            loadState: gasLoadState,
             isCalculating: isCalculating,
             isSearchingGas: isSearchingGas,
-            searchDidFinish: gasSearchDidFinish,
             gasStationCount: gasStations.count,
             fuelStopCount: fuelStops.count
         )
     }
 
+    var showsGasLoadFailed: Bool {
+        Self.shouldShowGasLoadFailed(
+            loadState: gasLoadState,
+            isCalculating: isCalculating,
+            isSearchingGas: isSearchingGas
+        )
+    }
+
     nonisolated static func shouldShowNoGasStations(
+        loadState: GasLoadState,
         isCalculating: Bool,
         isSearchingGas: Bool,
-        searchDidFinish: Bool,
         gasStationCount: Int,
         fuelStopCount: Int
     ) -> Bool {
-        searchDidFinish
+        loadState == .empty
             && !isCalculating
             && !isSearchingGas
             && gasStationCount == 0
             && fuelStopCount == 0
     }
 
-    /// A gas search may publish only if it is still the latest generation
-    /// and was not cancelled. Otherwise an older empty result overwrites
-    /// the restarted search.
-    nonisolated static func shouldCommitGasSearch(
-        generation: Int,
-        currentGeneration: Int,
-        wasCancelled: Bool
+    nonisolated static func shouldShowGasLoadFailed(
+        loadState: GasLoadState,
+        isCalculating: Bool,
+        isSearchingGas: Bool
     ) -> Bool {
-        generation == currentGeneration && !wasCancelled
+        loadState == .failed && !isCalculating && !isSearchingGas
+    }
+
+    /// Still the generation that is allowed to write. Captured by the caller
+    /// before its first await, and checked again immediately before a write.
+    func gasSearchStillOwns(_ generation: Int) -> Bool {
+        generation == gasGeneration && !Task.isCancelled
     }
 
     override init() {
@@ -1022,26 +1058,35 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         pairedFuelStopIDs = []
         rideHighlights = []
         isShowingAllGasOnRoute = false
-        // A failed or cleared route did not finish a gas search. Leaving
-        // `gasSearchDidFinish` true would show "no gas stations" for a
-        // route that never got one.
-        gasSearchDidFinish = false
+        // A cleared route did not finish a gas search. Leaving `.empty` would
+        // say "no gas stations" for a route that never got one.
+        gasLoadState = .pending
     }
 
     /// Finds every gas station along the route (independent of the selected
     /// category) so the rider can pick any of them, then plans which ones to
-    /// recommend as fuel stops. `generation` must still be current when the
-    /// search returns; a cancelled or replaced search does not write.
+    /// recommend as fuel stops.
+    ///
+    /// `generation` is captured by the caller before this function's first
+    /// await and checked again immediately before any write.
+    ///
+    /// On 628dbf0 the replacement search (fuel slider released after geometry
+    /// had already cleared `isCalculating`) was the current owner and was not
+    /// cancelled, so it was allowed to publish. Its `[]` was every corridor
+    /// sample failing — MapKit still finishing the cancelled task's queries and
+    /// answering the new ones with `loadingThrottled` — and `findStops` used
+    /// that same `[]` for a finished search that found nothing. Only a
+    /// `.completed` result with zero stops may become `.empty`. A throttled or
+    /// otherwise failed run is `.failed` ("Couldn't load gas — tap to retry").
+    /// A superseded run writes nothing.
     func refreshGasStations(generation: Int) async {
-        guard Self.shouldCommitGasSearch(
-            generation: generation,
-            currentGeneration: gasGeneration,
-            wasCancelled: Task.isCancelled
-        ) else { return }
+        guard gasSearchStillOwns(generation) else {
+            gasLog.info("drop gen=\(generation, privacy: .public) current=\(self.gasGeneration, privacy: .public) reason=not-owner-before-start")
+            return
+        }
         guard !legs.isEmpty else {
-            // Nothing to search. Drop the spinner `scheduleGasSearch` raised
-            // so a later finished search is the only thing that can say empty.
-            if generation == gasGeneration {
+            gasLog.info("drop gen=\(generation, privacy: .public) reason=no-legs")
+            if gasSearchStillOwns(generation) {
                 isSearchingGas = false
             }
             return
@@ -1052,33 +1097,116 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         // ran, leaving fuel stops empty even when pumps exist. Food is paired
         // after a recommendation exists.
         isSearchingGas = true
-        gasSearchDidFinish = false
+        gasLoadState = .pending
         defer {
             if generation == gasGeneration {
                 isSearchingGas = false
             }
         }
+
         let sampleDistances = Self.fuelSearchDistances(
             totalDistance: totalDistanceMeters,
             range: fuelRangeMeters
         )
         let legsAtSearch = legs
-        let found = await suggestionService.findStops(
-            category: .gas,
-            alongLegs: legsAtSearch,
+        // One extra full pass after a throttle storm. The per-sample retry
+        // already waited once; this covers the case where every sample failed.
+        let result = await runGasCorridorSearch(
+            generation: generation,
             sampleDistances: sampleDistances,
-            corridorRadiusMeters: Self.fuelSearchCorridorMeters
+            legs: legsAtSearch
         )
-        guard Self.shouldCommitGasSearch(
+        guard let result else {
+            // A superseded run already lost ownership inside the search and
+            // must not write. Still owning with no result means the retry
+            // wait ended the run — retry, not a spinner stuck on `.pending`.
+            guard gasSearchStillOwns(generation) else { return }
+            gasLoadState = .failed
+            gasLog.info("publish gen=\(generation, privacy: .public) decision=failed reason=no-result stops=0")
+            return
+        }
+        // Re-read the owner immediately before writing. No await between
+        // this check and the publishes below.
+        let decision = GasPublish.decide(
             generation: generation,
             currentGeneration: gasGeneration,
-            wasCancelled: Task.isCancelled
-        ) else { return }
-        gasStations = found
-        gasStopsWithFood = []
-        gasSearchDidFinish = true
-        applyFuelCandidatePool()
-        await refreshFoodNearFuelStops()
+            taskCancelled: Task.isCancelled,
+            status: result.status,
+            stopCount: result.stops.count
+        )
+        gasLog.info("publish gen=\(generation, privacy: .public) decision=\(decision.logName, privacy: .public) stops=\(result.stops.count, privacy: .public) ok=\(result.succeeded, privacy: .public) failed=\(result.failed, privacy: .public) throttled=\(result.throttled, privacy: .public)")
+        guard gasSearchStillOwns(generation) else { return }
+        switch decision {
+        case .drop:
+            return
+        case .failed:
+            gasLoadState = .failed
+        case .empty:
+            gasStations = []
+            gasStopsWithFood = []
+            applyFuelCandidatePool()
+            gasLoadState = gasStations.isEmpty ? .empty : .loaded
+            await refreshFoodNearFuelStops()
+        case .loaded:
+            gasStations = result.stops
+            gasStopsWithFood = []
+            applyFuelCandidatePool()
+            gasLoadState = gasStations.isEmpty ? .empty : .loaded
+            await refreshFoodNearFuelStops()
+        }
+    }
+
+    /// Runs the corridor search, and if every sample failed, waits and tries
+    /// once more — unless this generation was cancelled in the meantime.
+    /// Returns nil when this run must not publish (superseded or cancelled).
+    private func runGasCorridorSearch(
+        generation: Int,
+        sampleDistances: [CLLocationDistance],
+        legs: [MKRoute]
+    ) async -> CorridorSearchResult? {
+        let attempts = 2
+        var latest: CorridorSearchResult?
+        for attempt in 0..<attempts {
+            if attempt > 0 {
+                gasLog.info("backoff gen=\(generation, privacy: .public) attempt=\(attempt, privacy: .public)")
+                let waited = await Self.pauseForGasRetry()
+                if !waited || !gasSearchStillOwns(generation) {
+                    gasLog.info("drop gen=\(generation, privacy: .public) reason=backoff-cancelled")
+                    return nil
+                }
+            }
+            guard gasSearchStillOwns(generation) else {
+                gasLog.info("drop gen=\(generation, privacy: .public) current=\(self.gasGeneration, privacy: .public) reason=not-owner")
+                return nil
+            }
+            gasLog.info("search start gen=\(generation, privacy: .public) attempt=\(attempt, privacy: .public) samples=\(sampleDistances.count, privacy: .public)")
+            let result = await suggestionService.findStops(
+                category: .gas,
+                alongLegs: legs,
+                sampleDistances: sampleDistances,
+                corridorRadiusMeters: Self.fuelSearchCorridorMeters,
+                generation: generation
+            )
+            latest = result
+            gasLog.info("search end gen=\(generation, privacy: .public) status=\(String(describing: result.status), privacy: .public) stops=\(result.stops.count, privacy: .public) ok=\(result.succeeded, privacy: .public) failed=\(result.failed, privacy: .public) throttled=\(result.throttled, privacy: .public)")
+            if result.status != .failed { break }
+        }
+        guard gasSearchStillOwns(generation) else {
+            gasLog.info("drop gen=\(generation, privacy: .public) current=\(self.gasGeneration, privacy: .public) reason=not-owner-after-search")
+            return nil
+        }
+        return latest
+    }
+
+    /// Exhaustive catch: `Task.sleep` can throw, and this function does not.
+    /// `false` means the retry was cancelled and the caller must publish nothing.
+    private static func pauseForGasRetry() async -> Bool {
+        do {
+            try await Task.sleep(for: .milliseconds(1200))
+            return !Task.isCancelled
+        } catch {
+            return false
+        }
     }
 
     /// Merges every gas list we already have, prefers travel-side pumps, and
@@ -1090,6 +1218,11 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             RouteGeometry.isOnTravelSide($0.coordinate, along: legs)
         }
         travelSideGasStations = Self.preferredFuelPool(from: gasStations, travelSide: travelSide)
+        // A finished empty corridor can gain chip hits afterwards. Those
+        // stations are a real list, so the sheet must not keep saying none.
+        if gasLoadState == .empty, !gasStations.isEmpty {
+            gasLoadState = .loaded
+        }
         replanFuelStops()
     }
 
@@ -1441,8 +1574,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             var service = suggestionService
             service.maxSearches = suggestionService.maxSearches / 2
             let found = await service.findStops(category: .attraction, alongLegs: legs)
-            guard !Task.isCancelled else { return }
-            candidates = found
+            guard !Task.isCancelled, found.status == .completed else { return }
+            candidates = found.stops
         }
 
         rideHighlights = Self.selectHighlights(
@@ -1510,8 +1643,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             category: selectedCategory,
             alongLegs: legs
         )
-        guard generation == suggestionGeneration, !Task.isCancelled else { return }
-        suggestedStops = found
+        // A throttle or a cancel must not replace the list with [] and read
+        // as "no stops". Only a completed search publishes.
+        guard generation == suggestionGeneration, !Task.isCancelled, found.status == .completed else { return }
+        suggestedStops = found.stops
         // Gas-chip hits (often the only pumps MapKit returns on a long
         // interstate) feed the same tank-interval planner as the fuel search.
         if selectedCategory == .gas {
