@@ -308,8 +308,8 @@ final class CoreJourneyUITests: XCTestCase {
         // iPhone shows a menu of buttons. iPad can show the same choices in a popover
         // whose rows are cells or static texts, so match the label on any hittable element.
         let byLabel = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", style))
-        let deadline = Date().addingTimeInterval(3)
-        while Date() < deadline {
+        let optionDeadline = Date().addingTimeInterval(3)
+        while Date() < optionDeadline {
             for index in 0..<byLabel.count {
                 let option = byLabel.element(boundBy: index)
                 if option.isHittable {
