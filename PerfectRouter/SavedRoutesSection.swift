@@ -13,8 +13,8 @@ struct SavedRoutesSection: View {
             if viewModel.savedRoutes.isEmpty {
                 Text("Save a ride with the bookmark button to find it here later.")
                     .foregroundStyle(.secondary)
-            }
-            if !viewModel.savedRoutes.isEmpty {
+                    .focusable()
+            } else {
                 ForEach(viewModel.savedRoutes) { saved in
                     Button {
                         onLoad(saved)

@@ -28,16 +28,20 @@ struct SearchSection: View {
                     .focused($searchFocused)
                     .autocorrectionDisabled()
                     .submitLabel(.search)
-                if !searchText.isEmpty {
-                    Button {
-                        searchText = ""
-                        searchResults = []
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
+                // Stays in the row while the field is empty. Removing it
+                // left the search stack with a focus child that appeared
+                // and disappeared as a replan cleared the query.
+                Button {
+                    searchText = ""
+                    searchResults = []
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
                 }
+                .buttonStyle(.plain)
+                .opacity(searchText.isEmpty ? 0 : 1)
+                .disabled(searchText.isEmpty)
+                .accessibilityHidden(searchText.isEmpty)
             }
             // Live search, debounced: re-fires 0.4s after the user stops typing.
             .task(id: searchText) {
@@ -65,19 +69,23 @@ struct SearchSection: View {
                         HStack {
                             Image(systemName: "plus.circle")
                                 .foregroundStyle(.blue)
-                            VStack(alignment: .leading) {
-                                Text(item.name ?? "Unknown")
-                                if let locality = item.placemark.locality {
+                            if let locality = item.placemark.locality {
+                                VStack(alignment: .leading) {
+                                    Text(item.name ?? "Unknown")
                                     Text(locality)
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
+                            } else {
+                                Text(item.name ?? "Unknown")
                             }
                         }
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier(AccessibilityID.searchResult(item.name ?? "Unknown"))
                 }
+            } else {
+                FocusPlaceholderRow()
             }
         }
         // The contact picker presents itself modally, so it lives invisibly in

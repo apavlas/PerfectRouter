@@ -209,10 +209,10 @@ final class UITestStubServices: DirectionsProviding, StopSearching, PlaceSearchi
     /// Long enough that a style change's replanning banner is visible to XCUITest.
     static let responseDelay: Duration = .milliseconds(900)
 
-    /// Extra time the banner stays up after a stubbed line is ready. The
-    /// request itself can return before XCUITest has scrolled the summary
-    /// back on screen.
-    static let replanBannerHold: Duration = .seconds(3)
+    /// Extra time the banner stays up after a stubbed line is ready.
+    /// iPad sheet scrolling can spend several seconds bringing the summary
+    /// back before the assertion starts polling.
+    static let replanBannerHold: Duration = .seconds(12)
 
     func calculateRoutes(
         from origin: CLLocationCoordinate2D,

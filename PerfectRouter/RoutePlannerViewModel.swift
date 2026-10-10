@@ -102,6 +102,15 @@ struct FuelGap: Equatable {
     }
 }
 
+/// Accessibility values XCUITest reads on a recommended fuel row.
+struct RecommendedFuelAccessibility: Equatable {
+    var identifier: String
+    /// "Fuel stop N: Name, caption". Contains both "Fuel stop" and the name.
+    var label: String
+    /// "Fuel stop N: Name", shown on the row and inside `label`.
+    var title: String
+}
+
 /// One row of the fuel list: an in-range recommendation, the named gap that
 /// follows it, or the next station marked past the tank.
 enum FuelPlanEntry: Identifiable {
@@ -573,6 +582,36 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 return showsFuelGapWarning ? entry : nil
             }
         }
+    }
+
+    /// Test identity for one in-range recommendation. Summary rows and the
+    /// plain station rows share it, so a list cell that only shows the
+    /// station name still exposes `fuelStop.<name>.checked` and a
+    /// "Fuel stop N:" label. Past-range rows are not fuel stops.
+    func recommendedFuelAccessibility(for stop: SuggestedStop) -> RecommendedFuelAccessibility? {
+        var number = 0
+        for entry in visibleFuelPlanEntries {
+            guard case .recommended(let fuel) = entry else { continue }
+            number += 1
+            guard Self.sameFuelPlace(fuel, stop) else { continue }
+            let caption = fuelStopRidingCaption(for: fuel)
+            let title = "Fuel stop \(number): \(fuel.name)"
+            let checked = isGasBuffered(stop) || isGasBuffered(fuel)
+            return RecommendedFuelAccessibility(
+                identifier: AccessibilityID.fuelStop(fuel.name, checked: checked),
+                label: "\(title), \(caption)",
+                title: title
+            )
+        }
+        return nil
+    }
+
+    /// Summary, suggestion, and gas-list rows are separate searches, so they
+    /// do not share a UUID. The name is what the ride list shows.
+    nonisolated static func sameFuelPlace(_ fuel: SuggestedStop, _ stop: SuggestedStop) -> Bool {
+        fuel.id == stop.id
+            || fuel.name == stop.name
+            || sameCoordinate(fuel.coordinate, stop.coordinate)
     }
 
     /// Distance, then riding time, for one fuel-stop row.

@@ -34,6 +34,34 @@ final class UITestFixtureTests: XCTestCase {
         XCTAssertGreaterThan(UITestFixture.totalMeters, range)
     }
 
+    @MainActor
+    func testRecommendedFuelRowExposesFuelStopIdentity() {
+        let viewModel = RoutePlannerViewModel()
+        let pilot = SuggestedStop(
+            name: "Pilot Madison",
+            coordinate: UITestFixture.coordinate(milesNorth: 80, eastMeters: 800),
+            category: .gas,
+            distanceAlongRoute: 80 * UITestFixture.metersPerMile
+        )
+        viewModel.fuelPlanEntries = [.recommended(pilot)]
+
+        let row = viewModel.recommendedFuelAccessibility(for: pilot)
+        XCTAssertEqual(row?.identifier, "fuelStop.Pilot Madison.unchecked")
+        XCTAssertTrue(row?.label.contains("Fuel stop 1: Pilot Madison") == true)
+
+        viewModel.toggleBufferedGasStop(pilot)
+        let checked = viewModel.recommendedFuelAccessibility(for: pilot)
+        XCTAssertEqual(checked?.identifier, "fuelStop.Pilot Madison.checked")
+
+        let quick = SuggestedStop(
+            name: "Quick Stop",
+            coordinate: UITestFixture.coordinate(milesNorth: 40, eastMeters: 800),
+            category: .gas,
+            distanceAlongRoute: 40 * UITestFixture.metersPerMile
+        )
+        XCTAssertNil(viewModel.recommendedFuelAccessibility(for: quick))
+    }
+
     func testStubRouteExposesDistancePolylineAndTravelTime() throws {
         let destination = UITestFixture.coordinate(
             milesNorth: UITestFixture.routeMiles,

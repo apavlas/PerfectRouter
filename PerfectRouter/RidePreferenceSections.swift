@@ -46,6 +46,8 @@ struct DepartureSection: View {
                     in: Date()...,
                     displayedComponents: [.date, .hourAndMinute]
                 )
+            } else {
+                FocusPlaceholderRow()
             }
         } header: {
             Text("Departure")
