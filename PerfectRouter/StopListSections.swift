@@ -50,7 +50,7 @@ struct GasStationsSection: View {
     /// A place already on the route is shown as added and cannot be checked.
     private func gasRow(_ stop: SuggestedStop, recommended: Bool, pastRange: Bool = false) -> some View {
         let onRoute = viewModel.isStopOnRoute(stop)
-        Button {
+        return Button {
             guard !onRoute else { return }
             viewModel.toggleBufferedGasStop(stop)
         } label: {
