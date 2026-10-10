@@ -285,9 +285,34 @@ final class FuelStopRidingTimeTests: XCTestCase {
     func testWaypointCaptionIsNilForTheOriginAndOutOfRange() {
         let legs = [leg(100 * mile, seconds: 2 * 3_600)]
         XCTAssertNil(FuelStopRidingTime.waypointCaption(index: 0, legs: legs, usesMetric: false))
+        // One leg means origin + destination. Index 1 is the destination.
+        // Index 2 is past the end of the route.
         XCTAssertNil(FuelStopRidingTime.waypointCaption(index: 2, legs: legs, usesMetric: false))
         XCTAssertNil(FuelStopRidingTime.waypointCaption(index: 1, legs: [], usesMetric: false))
         XCTAssertNil(FuelStopRidingTime.waypointCaption(index: -1, legs: legs, usesMetric: false))
+    }
+
+    func testDestinationRowShowsTheWholeTrip() {
+        // Origin, two stops, then the destination. Only the origin is blank.
+        // The last row's cumulative time is every leg, not the last hop.
+        let legs = [
+            leg(100 * mile, seconds: 2 * 3_600),
+            leg(62 * mile, seconds: 1 * 3_600 + 40 * 60),
+            leg(50 * mile, seconds: 2 * 3_600 + 25 * 60),
+        ]
+        XCTAssertNil(FuelStopRidingTime.waypointCaption(index: 0, legs: legs, usesMetric: false))
+        XCTAssertEqual(
+            FuelStopRidingTime.waypointCaption(index: 1, legs: legs, usesMetric: false),
+            "100 mi · 2h 00m riding (2h 00m since last)"
+        )
+        XCTAssertEqual(
+            FuelStopRidingTime.waypointCaption(index: 2, legs: legs, usesMetric: false),
+            "162 mi · 3h 40m riding (1h 40m since last)"
+        )
+        XCTAssertEqual(
+            FuelStopRidingTime.waypointCaption(index: 3, legs: legs, usesMetric: false),
+            "212 mi · 6h 05m riding (2h 25m since last)"
+        )
     }
 
     func testWaypointCaptionUsesEachLegsPaceNotAFlatAverage() {

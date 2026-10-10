@@ -149,10 +149,11 @@ struct WaypointsSection: View {
         }
     }
 
-    /// Pin plus name. Stops after the origin add the same riding-time line
-    /// the fuel rows use. The origin has no caption, so it does not mount an
-    /// empty text view. `fixedSize` stays off this row: it made UIKit visit
-    /// an empty focus cell on iPad.
+    /// Pin plus name. Every row after the origin, including the destination,
+    /// adds the same riding-time line the fuel rows use. The destination's
+    /// line is the whole trip. The origin has no caption, so it does not
+    /// mount an empty text view. `fixedSize` stays off this row: it made
+    /// UIKit visit an empty focus cell on iPad.
     private func waypointRow(index: Int, waypoint: Waypoint) -> some View {
         Label {
             VStack(alignment: .leading, spacing: 2) {

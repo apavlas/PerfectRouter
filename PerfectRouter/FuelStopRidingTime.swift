@@ -125,10 +125,10 @@ enum FuelStopRidingTime {
     }
 
     /// Riding line for a route waypoint. The origin (`index` 0) has none.
-    /// Later stops use the same distance and drive-time text as a fuel row,
-    /// always "since last": the previous waypoint, which is the origin for
-    /// the first stop. Time is the sum of leg `expectedTravelTime` values
-    /// up to that waypoint, so time spent stopped is not included.
+    /// Every later row, including the final destination, uses the same
+    /// distance and drive-time text as a fuel row, always "since last".
+    /// The destination's cumulative time is the whole trip: the sum of leg
+    /// `expectedTravelTime` values, so time spent stopped is not included.
     static func waypointCaption(
         index: Int,
         legs: [Leg],
