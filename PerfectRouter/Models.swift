@@ -58,13 +58,17 @@ enum StopCategory: String, CaseIterable, Identifiable {
     }
 }
 
-/// How the planner should bias route calculation. Scenic asks Apple to
-/// avoid highways and tolls and pick an alternate when one is offered —
-/// not twisty or back-road routing.
+/// How the planner should bias route calculation.
+///
+/// Scenic asks Apple to avoid highways and tolls and then picks the longest
+/// alternate — a quieter option, not curve-seeking. Twisty is a separate
+/// style: it keeps the driving line with more curves than Fastest when one
+/// exists. The name is Twisty.
 enum RouteStyle: String, CaseIterable, Identifiable {
     case fastest = "Fastest"
     case avoidHighways = "Avoid Highways"
     case scenic = "Scenic"
+    case twisty = "Twisty"
 
     var id: String { rawValue }
 
@@ -73,6 +77,7 @@ enum RouteStyle: String, CaseIterable, Identifiable {
         case .fastest:       return "bolt.fill"
         case .avoidHighways: return "road.lanes"
         case .scenic:        return "mountain.2.fill"
+        case .twisty:        return "point.topleft.down.curvedto.point.bottomright.up"
         }
     }
 
@@ -82,17 +87,28 @@ enum RouteStyle: String, CaseIterable, Identifiable {
         case .fastest:       return "The quickest route, highways included."
         case .avoidHighways: return "Stays off highways where possible."
         case .scenic:        return "Avoids highways and tolls when Apple offers a quieter option — not true twisty routing."
+        case .twisty:        return "Biases the route toward roads with more curves than the fastest option."
         }
     }
 
     /// Whether the routing request should avoid highways.
-    var avoidsHighways: Bool { self != .fastest }
+    /// Twisty does not: a curving highway can beat a straight county road,
+    /// and highway avoidance is already Avoid Highways / Scenic.
+    var avoidsHighways: Bool {
+        switch self {
+        case .avoidHighways, .scenic:
+            return true
+        case .fastest, .twisty:
+            return false
+        }
+    }
 
     /// Whether the routing request should also avoid tolls (scenic rides favor
     /// quiet roads, which usually means steering clear of toll plazas too).
     var avoidsTolls: Bool { self == .scenic }
 
-    /// Whether to fetch alternate routes and pick the most scenic one.
+    /// Whether to fetch alternate routes and pick the longest low-highway one.
+    /// Twisty scores curvature itself; it does not use this scenic pick.
     var prefersAlternates: Bool { self == .scenic }
 }
 

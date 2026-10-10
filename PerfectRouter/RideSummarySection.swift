@@ -9,54 +9,31 @@ struct RideSummarySection: View {
 
     var body: some View {
         Section {
-            if viewModel.isCalculating {
-                ProgressView("Calculating route…")
+            if viewModel.isCalculating, viewModel.legs.isEmpty {
+                ProgressView(viewModel.calculationStatus ?? RoutePlannerViewModel.routeReplanStatus(style: viewModel.routeStyle))
             } else if !viewModel.legs.isEmpty {
+                if viewModel.isCalculating {
+                    Label(viewModel.calculationStatus ?? "Replanning…", systemImage: viewModel.routeStyle.systemImage)
+                        .font(.subheadline.weight(.semibold))
+                    if viewModel.showsReplanProgress {
+                        ProgressView(viewModel.replanStepDetail ?? "Still planning this route…")
+                    }
+                }
                 HStack {
                     Label(formattedRideDistance(viewModel.totalDistanceMeters), systemImage: "road.lanes")
                     Spacer()
                     Label(formattedDuration(viewModel.totalExpectedTravelTime), systemImage: "clock")
                 }
-                ForEach(Array(viewModel.fuelStops.enumerated()), id: \.element.id) { index, fuelStop in
-                    // Same addStop path as map / list suggestions — tap to
-                    // insert the stop and re-route.
-                    Button {
-                        viewModel.addStop(from: fuelStop)
-                    } label: {
-                        HStack {
-                            Label("Fuel stop \(index + 1): \(fuelStop.name) (~\(formattedRideDistance(fuelStop.distanceAlongRoute)) in)",
-                                  systemImage: "fuelpump.fill")
-                            Spacer()
-                            Image(systemName: "plus.circle.fill")
-                                .foregroundStyle(.blue)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.green)
-
-                    // Food found right next to this fuel stop, so the rider can
-                    // refuel and eat in one stop. Nested under its fuel stop.
-                    ForEach(foodNearFuelStop(fuelStop.id)) { food in
-                        Button {
-                            viewModel.addStop(from: food)
-                        } label: {
-                            HStack {
-                                Label(food.name, systemImage: "fork.knife")
-                                Spacer()
-                                Image(systemName: "plus.circle.fill")
-                                    .foregroundStyle(.blue)
-                            }
-                            .font(.subheadline)
-                            .padding(.leading)
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
-                    }
+                .foregroundStyle(viewModel.isCalculating ? .secondary : .primary)
+                BufferedGasApplyRow(viewModel: viewModel)
+                if !viewModel.isCalculating {
+                    FuelPlanRows(viewModel: viewModel)
                 }
-                if viewModel.hasFuelGap {
-                    Label("No gas station found within your fuel range on part of this route — consider a different path.",
-                          systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
+                if viewModel.isSearchingGas {
+                    ProgressView("Searching for gas along the route…")
+                }
+                if viewModel.showsGasLoadFailed {
+                    GasLoadFailedButton(viewModel: viewModel)
                 }
                 if let rainWarning = viewModel.rainWarning {
                     Label(rainWarning, systemImage: "cloud.rain.fill")
@@ -65,6 +42,21 @@ struct RideSummarySection: View {
                     Label("Checking weather along your route…", systemImage: "cloud.sun.fill")
                         .foregroundStyle(.secondary)
                 }
+                // Active style sits immediately above Navigate so the rider
+                // can see which line they're about to hand off.
+                VStack(alignment: .leading, spacing: 2) {
+                    Label(viewModel.routeStyle.rawValue, systemImage: viewModel.routeStyle.systemImage)
+                        .font(.subheadline.weight(.semibold))
+                    Text(viewModel.routeStyle.detail)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    if let note = viewModel.twistyLimitationNote {
+                        Text(note)
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 // Primary, one-tap hand-off. Apple Maps is CarPlay-native, so
                 // its turn-by-turn guidance automatically continues on the car
                 // display once the rider connects to CarPlay.
@@ -123,8 +115,88 @@ struct RideSummarySection: View {
         )
     }
 
-    /// Food paired to the fuel stop with the given id, or empty while the
-    /// (async) pairing is still loading.
+}
+
+/// In-range fuel stops, with the named gap written where the tank runs out
+/// and the next station marked past range instead of numbered as a fuel stop.
+private struct FuelPlanRows: View {
+    let viewModel: RoutePlannerViewModel
+
+    var body: some View {
+        let entries = viewModel.visibleFuelPlanEntries
+        let numbers = fuelNumbers(entries)
+        ForEach(entries) { entry in
+            switch entry {
+            case .recommended(let fuelStop):
+                Group {
+                    Button {
+                        viewModel.toggleBufferedGasStop(fuelStop)
+                    } label: {
+                        HStack {
+                            Label("Fuel stop \(numbers[entry.id] ?? 0): \(fuelStop.name) (~\(formattedRideDistance(fuelStop.distanceAlongRoute)) in)",
+                                  systemImage: "fuelpump.fill")
+                            Spacer()
+                            bufferMark(viewModel.isGasBuffered(fuelStop))
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.green)
+
+                    ForEach(foodNearFuelStop(fuelStop.id)) { food in
+                        Button {
+                            viewModel.addStop(from: food)
+                        } label: {
+                            HStack {
+                                Label(food.name, systemImage: "fork.knife")
+                                Spacer()
+                                Image(systemName: "plus.circle.fill")
+                                    .foregroundStyle(.blue)
+                            }
+                            .font(.subheadline)
+                            .padding(.leading)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+            case .gap(let gap):
+                Label(gap.warning, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .font(.subheadline)
+            case .pastRange(let stop):
+                Button {
+                    viewModel.toggleBufferedGasStop(stop)
+                } label: {
+                    HStack {
+                        Label("\(stop.name) (~\(formattedRideDistance(stop.distanceAlongRoute))) — past your range",
+                              systemImage: "fuelpump")
+                        Spacer()
+                        bufferMark(viewModel.isGasBuffered(stop))
+                    }
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.orange)
+            }
+        }
+    }
+
+    private func bufferMark(_ buffered: Bool) -> some View {
+        Image(systemName: buffered ? "checkmark.circle.fill" : "circle")
+            .foregroundStyle(buffered ? Color.green : Color.secondary)
+    }
+
+    private func fuelNumbers(_ entries: [FuelPlanEntry]) -> [String: Int] {
+        var numbers: [String: Int] = [:]
+        var count = 0
+        for entry in entries {
+            if case .recommended = entry {
+                count += 1
+                numbers[entry.id] = count
+            }
+        }
+        return numbers
+    }
+
     private func foodNearFuelStop(_ fuelStopID: UUID) -> [SuggestedStop] {
         viewModel.fuelFoodStops.first { $0.id == fuelStopID }?.nearbyFood ?? []
     }

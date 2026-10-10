@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Lets the rider pick Fastest, Avoid Highways, or Scenic. Changing the
-/// style re-plans the current ride immediately.
+/// Lets the rider pick Fastest, Avoid Highways, Scenic, or Twisty. Changing
+/// the style re-plans the current ride immediately.
 struct RouteStyleSection: View {
     let viewModel: RoutePlannerViewModel
 
@@ -86,9 +86,11 @@ struct FuelRangeSection: View {
                 step: 10,
                 onEditingChanged: { editing in
                     // Tank miles drive both the search grid and the pick.
-                    // Re-search gas/food at the new intervals when the drag ends.
+                    // On release, cancel in-flight route/gas work and restart
+                    // once. A parallel search was landing empty and the sheet
+                    // treated that as "no gas stations".
                     if !editing {
-                        Task { await viewModel.refreshGasStations() }
+                        viewModel.commitFuelRange()
                     }
                 }
             )

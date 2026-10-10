@@ -63,7 +63,10 @@ struct ContentView: View {
             // Route polylines, one per leg
             ForEach(viewModel.legs, id: \.self) { leg in
                 MapPolyline(leg.polyline)
-                    .stroke(.blue, lineWidth: 5)
+                    .stroke(
+                        viewModel.dimsRouteLine ? Color.blue.opacity(0.35) : Color.blue,
+                        lineWidth: 5
+                    )
             }
 
 
@@ -72,15 +75,17 @@ struct ContentView: View {
             // selected-category pins stay regardless. Hidden in Gas, where
             // the suggestions layer already covers stations.
             if viewModel.showsAllGasPins {
-                ForEach(viewModel.gasStations.filter { !viewModel.isRecommendedFuelStop($0) }) { stop in
+                ForEach(viewModel.gasStations.filter {
+                    !viewModel.isRecommendedFuelStop($0) && !viewModel.isStopOnRoute($0)
+                }) { stop in
                     Annotation(stop.name, coordinate: stop.coordinate) {
                         Button {
-                            viewModel.addStop(from: stop)
+                            viewModel.toggleBufferedGasStop(stop)
                         } label: {
-                            Image(systemName: "fuelpump.fill")
+                            Image(systemName: viewModel.isGasBuffered(stop) ? "checkmark" : "fuelpump.fill")
                                 .font(.caption)
                                 .padding(6)
-                                .background(Color.gray, in: Circle())
+                                .background(viewModel.isGasBuffered(stop) ? Color.blue : Color.gray, in: Circle())
                                 .foregroundStyle(.white)
                         }
                     }
@@ -91,13 +96,17 @@ struct ContentView: View {
             // Recommended fuel stops and ride highlights are excluded here so
             // they aren't drawn twice (their own highlighted layers cover them).
             ForEach(viewModel.suggestedStops.filter {
-                !viewModel.isRecommendedFuelStop($0) && !viewModel.isRideHighlight($0)
+                !viewModel.isRecommendedFuelStop($0)
+                    && !viewModel.isRideHighlight($0)
+                    && !viewModel.isStopOnRoute($0)
             }) { stop in
                 Annotation(stop.name, coordinate: stop.coordinate) {
                     Button {
                         viewModel.addStop(from: stop)
                     } label: {
-                        Image(systemName: stop.category.systemImage)
+                        Image(systemName: stop.category == .gas && viewModel.isGasBuffered(stop)
+                              ? "checkmark"
+                              : stop.category.systemImage)
                             .padding(6)
                             .background(.thinMaterial, in: Circle())
                     }
@@ -106,7 +115,7 @@ struct ContentView: View {
 
             // Recommended ride highlights — purple star pins so places worth
             // a stop stand out from ordinary suggestions.
-            ForEach(viewModel.rideHighlights) { stop in
+            ForEach(viewModel.rideHighlights.filter { !viewModel.isStopOnRoute($0) }) { stop in
                 Annotation(stop.name, coordinate: stop.coordinate) {
                     Button {
                         viewModel.addStop(from: stop)
@@ -126,16 +135,16 @@ struct ContentView: View {
             // top, and highlighted (larger, ringed green pump) so they're easy
             // to pick out in any category. Exactly one marker per recommended
             // stop, across all the layers above.
-            ForEach(viewModel.fuelStops) { stop in
+            ForEach(viewModel.fuelStops.filter { !viewModel.isStopOnRoute($0) }) { stop in
                 Annotation(stop.name, coordinate: stop.coordinate) {
                     Button {
-                        viewModel.addStop(from: stop)
+                        viewModel.toggleBufferedGasStop(stop)
                     } label: {
-                        Image(systemName: "fuelpump.fill")
+                        Image(systemName: viewModel.isGasBuffered(stop) ? "checkmark" : "fuelpump.fill")
                             .font(.headline)
                             .foregroundStyle(.white)
                             .padding(9)
-                            .background(.green, in: Circle())
+                            .background(viewModel.isGasBuffered(stop) ? Color.blue : Color.green, in: Circle())
                             .overlay(Circle().stroke(.white, lineWidth: 2.5))
                             .shadow(radius: 3)
                     }
@@ -192,8 +201,22 @@ struct ContentView: View {
                 recenter(on: start.coordinate, spanDelta: 0.5)
             }
         }
-        .safeAreaInset(edge: .top) {
-            categoryPicker
+        .safeAreaInset(edge: .top, spacing: 0) {
+            VStack(spacing: 0) {
+                categoryPicker
+                if RoutePlannerViewModel.showsMapReplanBanner(
+                    isCalculating: viewModel.isCalculating,
+                    hasLegs: !viewModel.legs.isEmpty
+                ) {
+                    mapReplanBanner
+                        .padding(.top, 4)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 8)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .animation(.easeInOut(duration: 0.2), value: viewModel.isCalculating)
         }
         .sheet(isPresented: Binding(
             get: { showSheet && planningSheetEnabled },
@@ -204,6 +227,31 @@ struct ContentView: View {
                 .presentationBackgroundInteraction(.enabled(upThrough: .medium))
                 .interactiveDismissDisabled()
         }
+    }
+
+    /// Floats on the map, under the category chips, so a style switch is
+    /// visible while the planning sheet is collapsed or scrolled past the
+    /// summary. Same layout on iPhone, iPad, and Mac.
+    private var mapReplanBanner: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+            Text(RoutePlannerViewModel.routeReplanStatus(style: viewModel.routeStyle))
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.regularMaterial, in: Capsule())
+        .overlay {
+            Capsule()
+                .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
+        }
+        .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(RoutePlannerViewModel.routeReplanStatus(style: viewModel.routeStyle))
+        .allowsHitTesting(false)
     }
 
     // MARK: - Category chips
