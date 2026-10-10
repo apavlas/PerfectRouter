@@ -260,4 +260,141 @@ final class PlanRestartTests: XCTestCase {
             .drop
         )
     }
+
+    func testDepartureChangeDuringPlanRestartsTheRoute() {
+        XCTAssertEqual(
+            RoutePlannerViewModel.planRestartForDepartureChange(
+                isCalculating: true,
+                isSearchingGas: false,
+                hasLegs: false,
+                loadState: .pending
+            ),
+            .route
+        )
+        XCTAssertEqual(
+            RoutePlannerViewModel.planRestartForDepartureChange(
+                isCalculating: true,
+                isSearchingGas: true,
+                hasLegs: true,
+                loadState: .pending
+            ),
+            .route
+        )
+    }
+
+    func testDepartureChangeDuringGasSearchRestartsGas() {
+        XCTAssertEqual(
+            RoutePlannerViewModel.planRestartForDepartureChange(
+                isCalculating: false,
+                isSearchingGas: true,
+                hasLegs: true,
+                loadState: .pending
+            ),
+            .gas
+        )
+        XCTAssertEqual(
+            RoutePlannerViewModel.planRestartForDepartureChange(
+                isCalculating: false,
+                isSearchingGas: false,
+                hasLegs: true,
+                loadState: .pending
+            ),
+            .gas
+        )
+    }
+
+    func testRapidDepartureTicksProduceOneRestart() {
+        let latest = 8
+        let commits = (1...latest).filter { tick in
+            RoutePlannerViewModel.shouldCommitDeparture(
+                tick: tick,
+                latestTick: latest,
+                cancelled: tick != latest
+            )
+        }
+        XCTAssertEqual(commits, [latest])
+        XCTAssertFalse(RoutePlannerViewModel.shouldCommitDeparture(
+            tick: latest,
+            latestTick: latest,
+            cancelled: true
+        ))
+        XCTAssertEqual(RoutePlannerViewModel.departureSettleDelay, .milliseconds(400))
+    }
+
+    func testIdleDepartureChangeDoesNotRestartTheSearch() {
+        XCTAssertEqual(
+            RoutePlannerViewModel.planRestartForDepartureChange(
+                isCalculating: false,
+                isSearchingGas: false,
+                hasLegs: true,
+                loadState: .loaded
+            ),
+            .local
+        )
+    }
+
+    func testFuelGapWarningRequiresACleanFinishedSearch() {
+        XCTAssertTrue(RoutePlannerViewModel.gasCoverageIsTrusted(
+            status: .completed,
+            failed: 0,
+            throttled: 0
+        ))
+        XCTAssertFalse(RoutePlannerViewModel.gasCoverageIsTrusted(
+            status: .completed,
+            failed: 0,
+            throttled: 2
+        ))
+        XCTAssertFalse(RoutePlannerViewModel.gasCoverageIsTrusted(
+            status: .failed,
+            failed: 0,
+            throttled: 32
+        ))
+        XCTAssertFalse(RoutePlannerViewModel.gasCoverageIsTrusted(
+            status: .cancelled,
+            failed: 0,
+            throttled: 0
+        ))
+        XCTAssertFalse(RoutePlannerViewModel.shouldShowFuelGapWarning(
+            hasFuelGap: true,
+            coverageTrusted: false,
+            loadState: .loaded,
+            isCalculating: false,
+            isSearchingGas: false
+        ))
+        XCTAssertFalse(RoutePlannerViewModel.shouldShowFuelGapWarning(
+            hasFuelGap: true,
+            coverageTrusted: true,
+            loadState: .failed,
+            isCalculating: false,
+            isSearchingGas: false
+        ))
+        XCTAssertFalse(RoutePlannerViewModel.shouldShowFuelGapWarning(
+            hasFuelGap: true,
+            coverageTrusted: true,
+            loadState: .loaded,
+            isCalculating: true,
+            isSearchingGas: false
+        ))
+        XCTAssertFalse(RoutePlannerViewModel.shouldShowFuelGapWarning(
+            hasFuelGap: true,
+            coverageTrusted: true,
+            loadState: .empty,
+            isCalculating: false,
+            isSearchingGas: true
+        ))
+        XCTAssertTrue(RoutePlannerViewModel.shouldShowFuelGapWarning(
+            hasFuelGap: true,
+            coverageTrusted: true,
+            loadState: .loaded,
+            isCalculating: false,
+            isSearchingGas: false
+        ))
+        XCTAssertFalse(RoutePlannerViewModel.shouldShowFuelGapWarning(
+            hasFuelGap: false,
+            coverageTrusted: true,
+            loadState: .loaded,
+            isCalculating: false,
+            isSearchingGas: false
+        ))
+    }
 }

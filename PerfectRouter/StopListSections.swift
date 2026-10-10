@@ -17,8 +17,17 @@ struct GasStationsSection: View {
                 Text("No gas stations found along this route.")
                     .foregroundStyle(.secondary)
             }
-            ForEach(viewModel.fuelStops) { stop in
-                gasRow(stop, recommended: true)
+            ForEach(viewModel.visibleFuelPlanEntries) { entry in
+                switch entry {
+                case .recommended(let stop):
+                    gasRow(stop, recommended: true, pastRange: false)
+                case .gap(let gap):
+                    Label(gap.warning, systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .font(.subheadline)
+                case .pastRange(let stop):
+                    gasRow(stop, recommended: false, pastRange: true)
+                }
             }
             if !viewModel.gasStations.isEmpty {
                 DisclosureGroup(
@@ -37,32 +46,49 @@ struct GasStationsSection: View {
     }
 
     /// Same green/recommended row used for auto picks; tap adds the stop.
-    private func gasRow(_ stop: SuggestedStop, recommended: Bool) -> some View {
+    /// A station past the tank is listed, but not as a normal fuel stop.
+    /// A place already on the route is shown as added and cannot be checked.
+    private func gasRow(_ stop: SuggestedStop, recommended: Bool, pastRange: Bool = false) -> some View {
+        let onRoute = viewModel.isStopOnRoute(stop)
         Button {
+            guard !onRoute else { return }
             viewModel.toggleBufferedGasStop(stop)
         } label: {
             HStack {
                 Image(systemName: "fuelpump.fill")
-                    .foregroundStyle(recommended ? .green : .secondary)
+                    .foregroundStyle(pastRange ? Color.orange : (recommended ? Color.green : Color.secondary))
                 VStack(alignment: .leading) {
                     Text(stop.name)
-                    Text("~\(formattedRideDistance(stop.distanceAlongRoute)) from start")
+                    Text(pastRange
+                         ? "~\(formattedRideDistance(stop.distanceAlongRoute)) from start — past your range"
+                         : "~\(formattedRideDistance(stop.distanceAlongRoute)) from start")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                if recommended {
+                if onRoute {
+                    Text("Added")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                } else if pastRange {
+                    Text("Past your range")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.orange)
+                } else if recommended {
                     Text("Recommended")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.green)
                 }
-                Image(systemName: viewModel.isGasBuffered(stop)
-                      ? "checkmark.circle.fill"
-                      : "circle")
-                    .foregroundStyle(viewModel.isGasBuffered(stop) ? Color.green : Color.secondary)
+                if !onRoute {
+                    Image(systemName: viewModel.isGasBuffered(stop)
+                          ? "checkmark.circle.fill"
+                          : "circle")
+                        .foregroundStyle(viewModel.isGasBuffered(stop) ? Color.green : Color.secondary)
+                }
             }
         }
         .buttonStyle(.plain)
+        .disabled(onRoute)
     }
 }
 
@@ -136,7 +162,11 @@ struct SuggestionsSection: View {
                 Text("Add a start and a destination to see suggestions.")
                     .foregroundStyle(.secondary)
             }
-            ForEach(viewModel.suggestedStops.prefix(15)) { stop in
+            if !viewModel.suggestedStops.isEmpty, viewModel.addableSuggestions.isEmpty, !viewModel.legs.isEmpty {
+                Text("Stops already on this route aren't listed again.")
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(viewModel.addableSuggestions.prefix(15)) { stop in
                 Button {
                     if stop.category == .gas {
                         viewModel.toggleBufferedGasStop(stop)

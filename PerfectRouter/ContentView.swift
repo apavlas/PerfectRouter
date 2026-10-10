@@ -72,7 +72,9 @@ struct ContentView: View {
             // selected-category pins stay regardless. Hidden in Gas, where
             // the suggestions layer already covers stations.
             if viewModel.showsAllGasPins {
-                ForEach(viewModel.gasStations.filter { !viewModel.isRecommendedFuelStop($0) }) { stop in
+                ForEach(viewModel.gasStations.filter {
+                    !viewModel.isRecommendedFuelStop($0) && !viewModel.isStopOnRoute($0)
+                }) { stop in
                     Annotation(stop.name, coordinate: stop.coordinate) {
                         Button {
                             viewModel.toggleBufferedGasStop(stop)
@@ -91,7 +93,9 @@ struct ContentView: View {
             // Recommended fuel stops and ride highlights are excluded here so
             // they aren't drawn twice (their own highlighted layers cover them).
             ForEach(viewModel.suggestedStops.filter {
-                !viewModel.isRecommendedFuelStop($0) && !viewModel.isRideHighlight($0)
+                !viewModel.isRecommendedFuelStop($0)
+                    && !viewModel.isRideHighlight($0)
+                    && !viewModel.isStopOnRoute($0)
             }) { stop in
                 Annotation(stop.name, coordinate: stop.coordinate) {
                     Button {
@@ -108,7 +112,7 @@ struct ContentView: View {
 
             // Recommended ride highlights — purple star pins so places worth
             // a stop stand out from ordinary suggestions.
-            ForEach(viewModel.rideHighlights) { stop in
+            ForEach(viewModel.rideHighlights.filter { !viewModel.isStopOnRoute($0) }) { stop in
                 Annotation(stop.name, coordinate: stop.coordinate) {
                     Button {
                         viewModel.addStop(from: stop)
@@ -128,7 +132,7 @@ struct ContentView: View {
             // top, and highlighted (larger, ringed green pump) so they're easy
             // to pick out in any category. Exactly one marker per recommended
             // stop, across all the layers above.
-            ForEach(viewModel.fuelStops) { stop in
+            ForEach(viewModel.fuelStops.filter { !viewModel.isStopOnRoute($0) }) { stop in
                 Annotation(stop.name, coordinate: stop.coordinate) {
                     Button {
                         viewModel.toggleBufferedGasStop(stop)

@@ -89,34 +89,33 @@ final class FuelPlanningTests: XCTestCase {
         XCTAssertEqual(stops.map { Int($0.distanceAlongRoute) }, [40_000])
     }
 
-    func testContinuesPastGapToLaterStation() {
-        // Dry stretch after the first pick; a pump later on the ride must
-        // still be recommended instead of stopping at the first gap.
+    func testDoesNotSkipAheadToAStationPastTheGap() {
+        // A pump past the dry stretch is not a fuel stop. The gap warning
+        // covers that segment; the in-range stop stays.
         let (stops, hasGap) = RoutePlannerViewModel.planFuelStops(
             from: [gas(at: 40_000), gas(at: 220_000)],
             totalDistance: 400_000,
             range: 100_000
         )
         XCTAssertTrue(hasGap)
-        XCTAssertEqual(stops.map { Int($0.distanceAlongRoute) }, [40_000, 220_000])
+        XCTAssertEqual(stops.map { Int($0.distanceAlongRoute) }, [40_000])
     }
 
-    func testPicksStationAfterOpeningDryStretch() {
-        // Nothing in the first tank; the planner walks forward and still
-        // recommends the first reachable later pump.
+    func testOpeningStationBeyondRangeIsAGapNotAStop() {
+        // Nothing in the first tank. Do not recommend the far pump.
         let (stops, hasGap) = RoutePlannerViewModel.planFuelStops(
             from: [gas(at: 200_000)],
             totalDistance: 400_000,
             range: 100_000
         )
         XCTAssertTrue(hasGap)
-        XCTAssertEqual(stops.map { Int($0.distanceAlongRoute) }, [200_000])
+        XCTAssertTrue(stops.isEmpty)
     }
 
-    func testLongInterstateRidePicksLateChipStations() {
-        // Augusta → Nashville (~395 mi, 100 mi tank). Chip search only returned
-        // pumps at ~271 and ~375 mi. Those must become fuel recs after the
-        // empty early tanks — not an empty list.
+    func testLateChipStationsBeyondRangeAreAGap() {
+        // Augusta → Nashville (~395 mi, 100 mi tank). Pumps only at ~271 and
+        // ~375 mi are both outside the tank from the start, and 104 mi apart,
+        // so neither is a fuel stop. The gap warning is the result.
         let mile = AppSettings.metersPerMile
         let first = gas(at: 271 * mile)
         let second = gas(at: 375 * mile)
@@ -126,7 +125,46 @@ final class FuelPlanningTests: XCTestCase {
             range: 100 * mile
         )
         XCTAssertTrue(hasGap)
-        XCTAssertEqual(stops.map(\.id), [first.id, second.id])
+        XCTAssertTrue(stops.isEmpty)
+        XCTAssertFalse(stops.contains { $0.id == first.id || $0.id == second.id })
+    }
+
+    /// Device bug: tank set to 100 miles, first suggested stop at mile 801.
+    /// Every recommended hop, including start → first stop, stays inside the tank.
+    func testHundredMileRangeKeepsConsecutiveStopsWithinTank() {
+        let mile = AppSettings.metersPerMile
+        let range = 100 * mile
+        var stations = stride(from: 40.0, through: 400.0, by: 40.0).map { gas(at: $0 * mile) }
+        stations.append(gas(at: 801 * mile))
+        let (stops, hasGap) = RoutePlannerViewModel.planFuelStops(
+            from: stations,
+            totalDistance: 1_000 * mile,
+            range: range
+        )
+        XCTAssertFalse(stops.isEmpty)
+        var previous: CLLocationDistance = 0
+        for stop in stops {
+            XCTAssertLessThanOrEqual(
+                stop.distanceAlongRoute - previous,
+                range + 1,
+                "hop of \(stop.distanceAlongRoute - previous) m exceeds the 100-mile tank"
+            )
+            previous = stop.distanceAlongRoute
+        }
+        XCTAssertLessThanOrEqual(stops[0].distanceAlongRoute, 85 * mile + 1)
+        XCTAssertFalse(stops.contains { abs($0.distanceAlongRoute - 801 * mile) < mile })
+        XCTAssertTrue(hasGap)
+    }
+
+    func testMile801StationOnAHundredMileTankIsNotRecommended() {
+        let mile = AppSettings.metersPerMile
+        let (stops, hasGap) = RoutePlannerViewModel.planFuelStops(
+            from: [gas(at: 801 * mile)],
+            totalDistance: 1_200 * mile,
+            range: 100 * mile
+        )
+        XCTAssertTrue(stops.isEmpty)
+        XCTAssertTrue(hasGap)
     }
 
     func testMergedGasCandidatesDedupesAndKeepsLateStops() {
@@ -451,6 +489,119 @@ final class FuelPlanningTests: XCTestCase {
         )
         let ids = RoutePlannerViewModel.gasStopsWithNearbyFood([pump], food: [diner])
         XCTAssertEqual(ids, [pump.id])
+    }
+
+    func testNearDuplicateHopIsSkippedAndGapNamesTheStretch() {
+        // Anton's 170-mile ride: Shell at 2,328 is only 29 miles after the
+        // stop at 2,299, and the next station is 274 miles later. The short
+        // hop is not a fuel stop. The warning sits between those two stations.
+        let mile = AppSettings.metersPerMile
+        var marks = stride(from: 140.0, through: 2_100.0, by: 140.0).map { $0 }
+        marks.append(contentsOf: [2_159, 2_299, 2_328, 2_602])
+        let stations = marks.map { gas(at: $0 * mile) }
+        let plan = RoutePlannerViewModel.fuelPlan(
+            from: stations,
+            totalDistance: 2_700 * mile,
+            range: 170 * mile
+        )
+
+        XCTAssertFalse(plan.stops.contains { abs($0.distanceAlongRoute - 2_328 * mile) < 1 })
+        XCTAssertFalse(plan.stops.contains { abs($0.distanceAlongRoute - 2_602 * mile) < 1 })
+        XCTAssertEqual(plan.stops.last.map { Int(($0.distanceAlongRoute / mile).rounded()) }, 2_299)
+        var previous: CLLocationDistance = 0
+        for stop in plan.stops {
+            XCTAssertLessThanOrEqual(stop.distanceAlongRoute - previous, 170 * mile + 1)
+            previous = stop.distanceAlongRoute
+        }
+
+        let gaps = plan.entries.compactMap { entry -> FuelGap? in
+            if case .gap(let gap) = entry { return gap }
+            return nil
+        }
+        XCTAssertEqual(gaps.count, 1)
+        let gap = gaps[0]
+        XCTAssertEqual(Int((gap.fromMeters / mile).rounded()), 2_328)
+        XCTAssertEqual(Int((gap.toMeters / mile).rounded()), 2_602)
+        XCTAssertEqual(
+            FuelGap.warning(
+                fromMeters: gap.fromMeters,
+                toMeters: gap.toMeters,
+                rangeMeters: gap.rangeMeters,
+                usesMetric: false
+            ),
+            "No gas between mile 2,328 and 2,602 (274 mi, beyond your 170 mi range)"
+        )
+        guard case .pastRange(let far) = plan.entries.last else {
+            return XCTFail("the station after the gap should be listed past range")
+        }
+        XCTAssertEqual(Int((far.distanceAlongRoute / mile).rounded()), 2_602)
+        XCTAssertTrue(plan.hasGap)
+    }
+
+    func testShortHopIsKeptWhenTheDestinationIsJustPastTheTank() {
+        // 10 km is a short hop, and it is the only way to reach a destination
+        // 105 km out. Skipping it would leave the last 5 km uncovered.
+        let plan = RoutePlannerViewModel.fuelPlan(
+            from: [gas(at: 10_000)],
+            totalDistance: 105_000,
+            range: 100_000
+        )
+        XCTAssertFalse(plan.hasGap)
+        XCTAssertEqual(plan.stops.map { Int($0.distanceAlongRoute) }, [10_000])
+    }
+
+    func testShortHopIsKeptWhenItReachesAFartherStation() {
+        // 10 km is inside the 20 km separation, but stopping there reaches
+        // the station at 105 km, which the tank cannot reach from the start.
+        let plan = RoutePlannerViewModel.fuelPlan(
+            from: [gas(at: 10_000), gas(at: 105_000)],
+            totalDistance: 180_000,
+            range: 100_000
+        )
+        XCTAssertFalse(plan.hasGap)
+        XCTAssertEqual(plan.stops.map { Int($0.distanceAlongRoute) }, [10_000, 105_000])
+    }
+
+    func testPlanningResumesAfterAPastRangeStation() {
+        let plan = RoutePlannerViewModel.fuelPlan(
+            from: [gas(at: 200_000), gas(at: 280_000), gas(at: 360_000)],
+            totalDistance: 400_000,
+            range: 100_000
+        )
+        XCTAssertTrue(plan.hasGap)
+        XCTAssertEqual(plan.stops.map { Int($0.distanceAlongRoute) }, [280_000, 360_000])
+        XCTAssertEqual(plan.entries.count, 4)
+        guard case .gap(let gap) = plan.entries[0] else {
+            return XCTFail("expected a gap before the out-of-range station")
+        }
+        XCTAssertEqual(Int(gap.fromMeters), 0)
+        XCTAssertEqual(Int(gap.toMeters), 200_000)
+        guard case .pastRange(let missed) = plan.entries[1] else {
+            return XCTFail("expected the out-of-range station")
+        }
+        XCTAssertEqual(Int(missed.distanceAlongRoute), 200_000)
+    }
+
+    func testLongRoutePlansMoreThanTwentyInRangeStops() {
+        let mile = AppSettings.metersPerMile
+        let range = 100 * mile
+        let stations = stride(from: 80.0, through: 2_000.0, by: 80.0).map { gas(at: $0 * mile) }
+        let plan = RoutePlannerViewModel.fuelPlan(
+            from: stations,
+            totalDistance: 2_040 * mile,
+            range: range
+        )
+        XCTAssertGreaterThan(plan.stops.count, 20)
+        XCTAssertFalse(plan.hasGap)
+        XCTAssertTrue(plan.entries.allSatisfy { entry in
+            if case .recommended = entry { return true }
+            return false
+        })
+        var previous: CLLocationDistance = 0
+        for stop in plan.stops {
+            XCTAssertLessThanOrEqual(stop.distanceAlongRoute - previous, range + 1)
+            previous = stop.distanceAlongRoute
+        }
     }
 
     func testGasStopsWithNearbyFoodIgnoresFarFood() {
