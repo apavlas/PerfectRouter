@@ -193,7 +193,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     /// Polyline of the last successful plan. Fuel stops that sit on it are
     /// stitched with one directions request instead of a via cascade.
-    private var plannedCorridor: [[CLLocationCoordinate2D]] = []
+    var plannedCorridor: [[CLLocationCoordinate2D]] = []
 
     private var suggestionService = StopSuggestionService()
 
@@ -229,8 +229,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     private var suggestionGeneration = 0
 
     /// Bumped whenever a route plan is replaced. A superseded calculation
-    /// must not clear `isCalculating` or publish legs.
-    private var calculatingGeneration = 0
+    /// must not clear `isCalculating` or publish legs. Readable so a test
+    /// can prove Apply schedules one replan.
+    private(set) var calculatingGeneration = 0
 
     /// Bumped whenever a gas search is replaced. A superseded search must
     /// not publish an empty station list or drop `isSearchingGas`.
@@ -855,11 +856,51 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         bufferedGasStops.contains { Self.sameCoordinate($0.coordinate, stop.coordinate) }
     }
 
+    /// Recommended fuel stops the rider can still check (AC-C7). Food,
+    /// past-range stations, and stops already on the route are left out.
+    var selectableRecommendedFuelStops: [SuggestedStop] {
+        fuelStops.filter { stop in
+            stop.category == .gas
+                && !isPastRangeFuelStop(stop)
+                && !isStopOnRoute(stop)
+        }
+    }
+
+    /// Label for the one-tap control above the buffered gas rows. Flips to
+    /// clear once every selectable recommended stop is already checked.
+    var selectRecommendedButtonTitle: String {
+        let stops = selectableRecommendedFuelStops
+        let allSelected = !stops.isEmpty && stops.allSatisfy(isGasBuffered)
+        return allSelected ? "Clear selection" : "Select recommended"
+    }
+
+    /// Checks every recommended fuel stop, the same as tapping each
+    /// recommended row that is not already checked. When those stops are
+    /// all already checked, clears just those checks. Rows stay tappable,
+    /// so the rider can uncheck one before Apply. Does not replan.
+    func toggleRecommendedFuelSelection() {
+        let recommended = selectableRecommendedFuelStops
+        guard !recommended.isEmpty else { return }
+        let clear = recommended.allSatisfy(isGasBuffered)
+        for stop in recommended where clear || !isGasBuffered(stop) {
+            toggleBufferedGasStop(stop)
+        }
+    }
+
     /// True when a waypoint already sits on this place. Matching is the
     /// coordinate rounded to three decimals (~111 m), so a re-fetched pin
     /// with a new name still counts as the stop the rider applied.
     func isStopOnRoute(_ stop: SuggestedStop) -> Bool {
         waypoints.contains { Self.sameCoordinate($0.coordinate, stop.coordinate) }
+    }
+
+    /// A station the fuel list marks past the tank. Never part of the
+    /// one-tap recommended selection, even if it also sits in `fuelStops`.
+    private func isPastRangeFuelStop(_ stop: SuggestedStop) -> Bool {
+        fuelPlanEntries.contains { entry in
+            guard case .pastRange(let past) = entry else { return false }
+            return past.id == stop.id || Self.sameCoordinate(past.coordinate, stop.coordinate)
+        }
     }
 
     /// Drops the checked set. The planned route is unchanged.
