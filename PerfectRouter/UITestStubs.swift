@@ -252,7 +252,12 @@ final class UITestStubServices: DirectionsProviding, StopSearching, PlaceSearchi
             let coordinate = UITestFixture.coordinate(for: place)
             let detour = RouteGeometry.distanceFromRoute(of: coordinate, alongPolylines: polylines)
             guard detour <= radius else { continue }
-            let distance = RouteGeometry.distanceAlongRoute(of: coordinate, alongPolylines: polylines)
+            // Prefer the projection onto the stub polyline. If that geometry
+            // comes back empty, keep the canned mile so the tank planner still
+            // sees Pilot, On Route Fuel, and Shell.
+            let projected = RouteGeometry.distanceAlongRoute(of: coordinate, alongPolylines: polylines)
+            let canned = place.milesNorth * UITestFixture.metersPerMile
+            let distance = projected > 50 ? projected : canned
             stops.append(SuggestedStop(
                 name: place.name,
                 coordinate: coordinate,

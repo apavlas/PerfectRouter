@@ -27,13 +27,15 @@ final class CoreJourneyUITests: XCTestCase {
 
         XCTAssertEqual(
             waypointNames(in: app),
-            ["Test Origin", "Test Destination"]
+            ["Test Origin", "Test Destination"],
+            diagnosticTree(app)
         )
-        XCTAssertTrue(fuel("Pilot Madison", checked: false, in: app).exists)
-        XCTAssertTrue(fuel("On Route Fuel", checked: false, in: app).exists)
-        XCTAssertTrue(fuel("Shell Knoxville", checked: false, in: app).exists)
-        XCTAssertFalse(fuel("Quick Stop", checked: false, in: app).exists)
-        XCTAssertFalse(fuel("Home Fuel", checked: false, in: app).exists)
+        let fuels = scanFuelRows(in: app)
+        assertFuelRow("Pilot Madison", checked: false, in: fuels, app: app)
+        assertFuelRow("On Route Fuel", checked: false, in: fuels, app: app)
+        assertFuelRow("Shell Knoxville", checked: false, in: fuels, app: app)
+        XCTAssertFalse(fuels.mentions("Quick Stop"), "Quick Stop was listed as a fuel row. \(fuels)\n\(diagnosticTree(app))")
+        XCTAssertFalse(fuels.mentions("Home Fuel"), "Home Fuel was listed as a fuel row. \(fuels)\n\(diagnosticTree(app))")
         assertNoEmptyGasMessage(in: app)
     }
 
@@ -42,23 +44,25 @@ final class CoreJourneyUITests: XCTestCase {
         planFixedRoute(in: app)
         addOnRouteFuel(in: app)
 
-        let select = app.buttons["selectRecommended"]
-        XCTAssertTrue(select.waitForExistence(timeout: 5))
+        let select = reveal("selectRecommended", in: app)
         scrollUntilHittable(select, in: app)
         select.tap()
 
-        XCTAssertTrue(fuel("Pilot Madison", checked: true, in: app).waitForExistence(timeout: 3))
-        XCTAssertTrue(fuel("Shell Knoxville", checked: true, in: app).waitForExistence(timeout: 3))
-        XCTAssertFalse(fuel("On Route Fuel", checked: true, in: app).exists)
-        XCTAssertFalse(fuel("On Route Fuel", checked: false, in: app).exists)
-        XCTAssertFalse(fuel("Quick Stop", checked: true, in: app).exists)
-        XCTAssertFalse(fuel("Home Fuel", checked: true, in: app).exists)
+        // Fuel rows sit above this button. A List only keeps on-screen cells,
+        // so scroll back up before reading the checked identifiers.
+        let fuels = scanFuelRows(in: app)
+        assertFuelRow("Pilot Madison", checked: true, in: fuels, app: app)
+        assertFuelRow("Shell Knoxville", checked: true, in: fuels, app: app)
+        XCTAssertFalse(fuels.mentions("On Route Fuel"), diagnosticTree(app))
+        XCTAssertFalse(fuels.mentions("Quick Stop"), diagnosticTree(app))
+        XCTAssertFalse(fuels.mentions("Home Fuel"), diagnosticTree(app))
 
+        _ = reveal("applyStops", in: app)
         let apply = app.buttons["applyStops"].firstMatch
-        XCTAssertTrue(apply.waitForExistence(timeout: 3))
+        XCTAssertTrue(apply.exists, diagnosticTree(app))
         XCTAssertTrue(
             apply.label.contains("Apply 2 stops"),
-            "Select recommended included a stop that is not an in-range recommendation: \(apply.label)"
+            "Select recommended included a stop that is not an in-range recommendation: \(apply.label)\n\(diagnosticTree(app))"
         )
         XCTAssertEqual(waypointNames(in: app).filter { $0 == "On Route Fuel" }.count, 1)
     }
@@ -140,14 +144,16 @@ final class CoreJourneyUITests: XCTestCase {
         let app = launch()
         planFixedRoute(in: app)
 
+        _ = reveal("tankRangeSlider", in: app)
         let slider = app.sliders["tankRangeSlider"]
-        XCTAssertTrue(slider.waitForExistence(timeout: 5))
+        XCTAssertTrue(slider.waitForExistence(timeout: 3), diagnosticTree(app))
         scrollUntilHittable(slider, in: app)
         slider.adjust(toNormalizedSliderPosition: 0.55)
         assertReplanDoesNotClaimTheRoadIsEmpty(in: app)
 
+        _ = reveal("leaveLaterToggle", in: app)
         let leaveLater = app.switches["leaveLaterToggle"]
-        XCTAssertTrue(leaveLater.waitForExistence(timeout: 5))
+        XCTAssertTrue(leaveLater.waitForExistence(timeout: 3), diagnosticTree(app))
         scrollUntilHittable(leaveLater, in: app)
         leaveLater.tap()
         assertReplanDoesNotClaimTheRoadIsEmpty(in: app)
@@ -251,25 +257,46 @@ final class CoreJourneyUITests: XCTestCase {
             swipePlanningList(in: app, up: true)
             swipes += 1
         }
-        XCTFail("Apply was not on screen")
+        XCTFail("Apply was not on screen\n\n\(diagnosticTree(app))")
     }
 
     private func tapSelectRecommended(in app: XCUIApplication) {
-        let select = app.buttons["selectRecommended"]
-        XCTAssertTrue(select.waitForExistence(timeout: 5))
+        let select = reveal("selectRecommended", in: app)
         scrollUntilHittable(select, in: app)
         select.tap()
-        XCTAssertTrue(fuel("Pilot Madison", checked: true, in: app).waitForExistence(timeout: 3))
+        _ = reveal("fuelStop.Pilot Madison.checked", in: app)
     }
 
     // MARK: - Route style
 
     private func selectRouteStyle(_ style: String, in app: XCUIApplication) {
-        var picker = identified("routeStylePicker", in: app)
-        if !picker.waitForExistence(timeout: 2) {
-            picker = app.buttons["Route style"]
+        let deadline = Date().addingTimeInterval(20)
+        var down = 0
+        var picker: XCUIElement?
+        while Date() < deadline {
+            let byID = identified("routeStylePicker", in: app)
+            if byID.exists {
+                picker = byID
+                break
+            }
+            let byLabel = app.buttons["Route style"]
+            if byLabel.exists {
+                picker = byLabel
+                break
+            }
+            if down >= 14 {
+                scrollToTop(app)
+                down = 0
+            } else {
+                swipePlanningList(in: app, up: true)
+                down += 1
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.12))
         }
-        XCTAssertTrue(picker.waitForExistence(timeout: 5))
+        guard let picker else {
+            XCTFail("Route style control did not appear.\n\n\(diagnosticTree(app))")
+            return
+        }
         scrollUntilHittable(picker, in: app)
         picker.tap()
 
@@ -310,7 +337,7 @@ final class CoreJourneyUITests: XCTestCase {
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         }
-        XCTFail("Replanning banner for \(style) did not appear (last label: \(lastLabel))")
+        XCTFail("Replanning banner for \(style) did not appear (last label: \(lastLabel))\n\n\(diagnosticTree(app))")
     }
 
     private func waitForBannerToFinish(in app: XCUIApplication) {
@@ -320,38 +347,65 @@ final class CoreJourneyUITests: XCTestCase {
             if banners.count == 0 { return }
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         }
-        XCTFail("Replanning banner did not finish")
+        XCTFail("Replanning banner did not finish\n\n\(diagnosticTree(app))")
     }
 
-    private func waitForFuelName(_ name: String, in app: XCUIApplication, timeout: TimeInterval = 15) {
+    /// Scrolls the planning sheet while waiting. SwiftUI lists omit rows that
+    /// are off screen, so an identifier that is in the view tree can still be
+    /// absent until the row is brought on.
+    private func waitForFuelName(_ name: String, in app: XCUIApplication, timeout: TimeInterval = 25) {
         let deadline = Date().addingTimeInterval(timeout)
+        var down = 0
         while Date() < deadline {
-            if fuel(name, checked: false, in: app).exists || fuel(name, checked: true, in: app).exists {
+            if fuelListed(name, in: app) || fuelRowLabel(name, in: app).exists {
                 return
             }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            if down >= 14 {
+                scrollToTop(app)
+                down = 0
+            } else {
+                swipePlanningList(in: app, up: true)
+                down += 1
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.12))
         }
-        XCTFail("Fuel stop \(name) did not appear")
+        XCTFail("Fuel stop \(name) did not appear.\n\n\(diagnosticTree(app))")
+    }
+
+    /// List rows read "Fuel stop N: Name …". Map pins use the bare name, so
+    /// this does not treat a pin as the fuel row.
+    private func fuelRowLabel(_ name: String, in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS 'Fuel stop' AND label CONTAINS %@", name))
+            .firstMatch
     }
 
     private func assertReplanDoesNotClaimTheRoadIsEmpty(in app: XCUIApplication) {
-        let deadline = Date().addingTimeInterval(12)
+        let deadline = Date().addingTimeInterval(20)
         var settled = false
+        var swipes = 0
         while Date() < deadline {
             assertNoEmptyGasMessage(in: app)
             let searching = app.staticTexts["Searching for gas along the route…"].exists
                 || app.staticTexts["Searching along your route…"].exists
                 || app.descendants(matching: .any).matching(identifier: "replanBanner").count > 0
             let station = ["Pilot Madison", "On Route Fuel", "Shell Knoxville", "Quick Stop", "Home Fuel"]
-                .contains { fuelListed($0, in: app) }
+                .contains { fuelListed($0, in: app) || elementWithLabel(containing: $0, in: app).exists }
             if !searching && station {
                 settled = true
                 break
             }
+            if swipes >= 12 {
+                scrollToTop(app)
+                swipes = 0
+            } else {
+                swipePlanningList(in: app, up: true)
+                swipes += 1
+            }
             RunLoop.current.run(until: Date().addingTimeInterval(0.15))
         }
         assertNoEmptyGasMessage(in: app)
-        XCTAssertTrue(settled, "Tank or departure change did not finish with gas still listed")
+        XCTAssertTrue(settled, "Tank or departure change did not finish with gas still listed\n\n\(diagnosticTree(app))")
     }
 
     /// Fuel rows are buttons whose label includes the mile marker. Match the
@@ -367,10 +421,19 @@ final class CoreJourneyUITests: XCTestCase {
     }
 
     private func routeGeneration(in app: XCUIApplication) -> Int {
-        let element = app.descendants(matching: .any)
+        scrollToTop(app)
+        var element = app.descendants(matching: .any)
             .matching(NSPredicate(format: "identifier BEGINSWITH 'routeGeneration.'"))
             .firstMatch
-        XCTAssertTrue(element.waitForExistence(timeout: 5))
+        var swipes = 0
+        while !element.exists && swipes < 6 {
+            swipePlanningList(in: app, up: true)
+            element = app.descendants(matching: .any)
+                .matching(NSPredicate(format: "identifier BEGINSWITH 'routeGeneration.'"))
+                .firstMatch
+            swipes += 1
+        }
+        XCTAssertTrue(element.exists, "Route generation was not exposed.\n\n\(diagnosticTree(app))")
         let suffix = element.identifier.split(separator: ".").last.map(String.init) ?? ""
         return Int(suffix) ?? -1
     }
@@ -411,19 +474,128 @@ final class CoreJourneyUITests: XCTestCase {
         app.descendants(matching: .any).matching(identifier: id).firstMatch
     }
 
-    private func scrollUntilHittable(_ element: XCUIElement, in app: XCUIApplication, maxSwipes: Int = 20) {
+    private func scrollUntilHittable(_ element: XCUIElement, in app: XCUIApplication, maxSwipes: Int = 8) {
         var swipes = 0
         while !element.isHittable && swipes < maxSwipes {
-            swipePlanningList(in: app, up: true)
+            swipePlanningList(in: app, up: !element.exists || element.frame.minY > app.frame.midY)
             swipes += 1
         }
-        // A tall iPad sheet can leave the row above the fold after those swipes.
-        var back = 0
-        while !element.isHittable && back < 6 {
-            swipePlanningList(in: app, up: false)
-            back += 1
+        XCTAssertTrue(element.isHittable, "Control was not on screen.\n\n\(diagnosticTree(app))")
+    }
+
+    /// Brings `id` on screen. Does not fail; callers assert and attach the tree.
+    private func reveal(_ id: String, in app: XCUIApplication, timeout: TimeInterval = 20) -> XCUIElement {
+        revealEither([id], in: app, timeout: timeout)
+    }
+
+    private func revealEither(_ ids: [String], in app: XCUIApplication, timeout: TimeInterval) -> XCUIElement {
+        let deadline = Date().addingTimeInterval(timeout)
+        var down = 0
+        while Date() < deadline {
+            for id in ids {
+                let element = identified(id, in: app)
+                if element.exists { return element }
+            }
+            if down >= 14 {
+                scrollToTop(app)
+                down = 0
+            } else {
+                swipePlanningList(in: app, up: true)
+                down += 1
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.12))
         }
-        XCTAssertTrue(element.isHittable)
+        return identified(ids[0], in: app)
+    }
+
+    private struct FuelScan: CustomStringConvertible {
+        var identifiers: [String]
+        var labels: [String]
+
+        func mentions(_ name: String) -> Bool {
+            identifiers.contains { $0.contains(name) } || labels.contains { $0.contains(name) }
+        }
+
+        /// Checked state lives on the identifier. A "Fuel stop" label still
+        /// counts as unchecked, which is how a List cell exposes the row when
+        /// it does not forward the button's identifier.
+        func shows(_ name: String, checked: Bool) -> Bool {
+            let suffix = checked ? "checked" : "unchecked"
+            if identifiers.contains("fuelStop.\(name).\(suffix)") { return true }
+            if checked { return false }
+            return labels.contains { $0.contains("Fuel stop") && $0.contains(name) }
+        }
+
+        var description: String {
+            "ids=\(identifiers) labels=\(labels)"
+        }
+    }
+
+    private func assertFuelRow(
+        _ name: String,
+        checked: Bool,
+        in scan: FuelScan,
+        app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertTrue(
+            scan.shows(name, checked: checked),
+            "\(name) checked=\(checked) was not in the fuel list. \(scan)\n\(diagnosticTree(app))",
+            file: file,
+            line: line
+        )
+    }
+
+    private func scanFuelRows(in app: XCUIApplication) -> FuelScan {
+        scrollToTop(app)
+        var identifiers: [String] = []
+        var labels: [String] = []
+        var seenIDs = Set<String>()
+        var seenLabels = Set<String>()
+        func collect() {
+            let idElements = app.descendants(matching: .any)
+                .matching(NSPredicate(format: "identifier BEGINSWITH 'fuelStop.'"))
+                .allElementsBoundByIndex
+            for element in idElements where element.exists && seenIDs.insert(element.identifier).inserted {
+                identifiers.append(element.identifier)
+            }
+            let labelElements = app.descendants(matching: .any)
+                .matching(NSPredicate(format: "label CONTAINS 'Fuel stop'"))
+                .allElementsBoundByIndex
+            for element in labelElements where element.exists && seenLabels.insert(element.label).inserted {
+                labels.append(element.label)
+            }
+        }
+        collect()
+        for _ in 0..<20 {
+            swipePlanningList(in: app, up: true)
+            collect()
+        }
+        return FuelScan(identifiers: identifiers, labels: labels)
+    }
+
+    /// Lines that mention the ride, plus a truncated accessibility tree.
+    private func diagnosticTree(_ app: XCUIApplication) -> String {
+        let full = app.debugDescription
+        let keywords = [
+            "fuelStop", "Pilot", "Shell", "On Route", "Quick Stop", "Home Fuel",
+            "selectRecommended", "tankRange", "leaveLater", "routeStyle", "waypoint.",
+            "noGas", "replan", "Plan Ride", "gas station", "Navigate", "Apply"
+        ]
+        let highlights = full.split(separator: "\n").filter { line in
+            keywords.contains { line.localizedCaseInsensitiveContains($0) }
+        }
+        let highlightBlock = highlights.prefix(100).joined(separator: "\n")
+        let clipped = full.count > 6000 ? String(full.prefix(6000)) + "\n… truncated" : full
+        return "Matching lines:\n\(highlightBlock)\n\nAccessibility tree:\n\(clipped)"
+    }
+
+    private func elementWithLabel(containing name: String, in app: XCUIApplication) -> XCUIElement {
+        let predicate = NSPredicate(format: "label CONTAINS %@", name)
+        let button = app.buttons.matching(predicate).firstMatch
+        if button.exists { return button }
+        return app.staticTexts.matching(predicate).firstMatch
     }
 
     private func scrollToTop(_ app: XCUIApplication) {
@@ -432,16 +604,17 @@ final class CoreJourneyUITests: XCTestCase {
         }
     }
 
-    /// Scrolls the planning sheet's list. A window-level swipe lands on the
-    /// map beside the sheet when the iPad is regular width.
+    /// Scrolls the planning sheet's list by about a third of its height.
+    /// A full-screen swipe can skip a row, and a window swipe hits the map
+    /// beside the sheet on a regular-width iPad.
     private func swipePlanningList(in app: XCUIApplication, up: Bool) {
         let list = planningList(in: app)
-        if list.elementType != .application, list.exists {
-            if up {
-                list.swipeUp()
-            } else {
-                list.swipeDown()
-            }
+        if list.elementType != .application, list.exists, list.isHittable {
+            let startY: CGFloat = up ? 0.72 : 0.38
+            let endY: CGFloat = up ? 0.38 : 0.72
+            let start = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: startY))
+            let end = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: endY))
+            start.press(forDuration: 0.05, thenDragTo: end)
             return
         }
         // No list query yet. Drag under the sheet's navigation bar so the
@@ -459,6 +632,13 @@ final class CoreJourneyUITests: XCTestCase {
     /// The sheet's list contains the search field. On iOS 17 that list is a
     /// table; later systems use a collection view. Either way it is not the map.
     private func planningList(in app: XCUIApplication) -> XCUIElement {
+        for candidate in [
+            app.collectionViews["planningList"],
+            app.tables["planningList"],
+            app.scrollViews["planningList"]
+        ] where candidate.exists {
+            return candidate
+        }
         let tables = app.tables.containing(.textField, identifier: "placeSearch")
         if tables.count > 0 {
             return tables.element(boundBy: tables.count - 1)

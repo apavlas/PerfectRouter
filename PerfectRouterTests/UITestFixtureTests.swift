@@ -33,7 +33,7 @@ final class UITestFixtureTests: XCTestCase {
         XCTAssertGreaterThan(UITestFixture.totalMeters, range)
     }
 
-    func testStubRouteExposesDistancePolylineAndTravelTime() {
+    func testStubRouteExposesDistancePolylineAndTravelTime() throws {
         let destination = UITestFixture.coordinate(
             milesNorth: UITestFixture.routeMiles,
             eastMeters: 0
@@ -80,7 +80,7 @@ final class UITestFixtureTests: XCTestCase {
         XCTAssertFalse(scenic?.hasHighways ?? true)
     }
 
-    func testHomeFuelMatchesTheOriginSoSelectRecommendedSkipsIt() {
+    func testHomeFuelMatchesTheOriginSoSelectRecommendedSkipsIt() throws {
         let origin = try XCTUnwrap(UITestFixture.places.first { $0.name == "Test Origin" })
         let home = try XCTUnwrap(UITestFixture.places.first { $0.name == "Home Fuel" && $0.gasStation })
         let onRoute = try XCTUnwrap(UITestFixture.places.first { $0.name == "On Route Fuel" })

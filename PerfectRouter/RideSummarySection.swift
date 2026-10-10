@@ -142,9 +142,14 @@ private struct FuelPlanRows: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.green)
+                    // Combine the row so a List cell exposes this identifier.
+                    // A plain button inside a row otherwise keeps the id on a
+                    // child XCUITest does not return for off-screen cells.
+                    .accessibilityElement(children: .combine)
                     .accessibilityIdentifier(
                         AccessibilityID.fuelStop(fuelStop.name, checked: viewModel.isGasBuffered(fuelStop))
                     )
+                    .accessibilityAddTraits(.isButton)
 
                     ForEach(foodNearFuelStop(fuelStop.id)) { food in
                         Button {
