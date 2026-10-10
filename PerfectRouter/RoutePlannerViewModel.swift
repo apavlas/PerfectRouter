@@ -260,9 +260,26 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         gasLoadState = .pending
         invalidateFuelCoverage()
         weatherTask?.cancel()
-        calculationStatus = routeStyle == .twisty
-            ? "Calculating Twisty route…"
-            : "Calculating route…"
+        showsReplanProgress = false
+        replanStepDetail = nil
+        replanProgressTask?.cancel()
+        let replanningExistingLine = !legs.isEmpty
+        calculationStatus = Self.routeReplanStatus(
+            style: routeStyle,
+            hasExistingLine: replanningExistingLine
+        )
+        // The old pumps belong to the line being replaced. Clear them now
+        // so the list cannot keep showing the previous style's stops.
+        if replanningExistingLine {
+            twistyLimitationNote = nil
+            fuelStops = []
+            fuelPlanEntries = []
+            fuelFoodStops = []
+            pairedFuelStopIDs = []
+            hasFuelGap = false
+            let generation = calculatingGeneration
+            replanProgressTask = Task { await self.noteReplanIfStillRunning(generation: generation) }
+        }
         routeTask = Task {
             await recalculateRoute(
                 refreshingSuggestions: refreshingSuggestions,
@@ -466,11 +483,30 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     // MARK: - Derived values
 
     var totalDistanceMeters: CLLocationDistance {
-        legs.reduce(0) { $0 + $1.distance }
+        Self.rideSummaryTotals(
+            distances: legs.map(\.distance),
+            times: legs.map(\.expectedTravelTime)
+        ).distance
     }
 
     var totalExpectedTravelTime: TimeInterval {
-        legs.reduce(0) { $0 + $1.expectedTravelTime }
+        Self.rideSummaryTotals(
+            distances: legs.map(\.distance),
+            times: legs.map(\.expectedTravelTime)
+        ).time
+    }
+
+    /// Miles and time the summary shows for whatever legs were published.
+    /// A superseded style change does not publish, so these stay on the
+    /// previous line until the replacement actually lands.
+    nonisolated static func rideSummaryTotals(
+        distances: [CLLocationDistance],
+        times: [TimeInterval]
+    ) -> (distance: CLLocationDistance, time: TimeInterval) {
+        (
+            distance: distances.reduce(0, +),
+            time: times.reduce(0, +)
+        )
     }
 
     /// Every gas station found along the route, so the rider can pick any of
@@ -985,13 +1021,18 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         }
 
         isCalculating = true
-        calculationStatus = routeStyle == .twisty
-            ? "Calculating Twisty route…"
-            : "Calculating route…"
+        let replanningExistingLine = !legs.isEmpty
+        calculationStatus = Self.routeReplanStatus(
+            style: routeStyle,
+            hasExistingLine: replanningExistingLine
+        )
         defer {
             if calcGen == calculatingGeneration {
                 isCalculating = false
                 calculationStatus = nil
+                replanStepDetail = nil
+                showsReplanProgress = false
+                replanProgressTask?.cancel()
             }
         }
 
@@ -1003,8 +1044,16 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         for i in 0..<legCount {
             let origin = waypoints[i]
             let destination = waypoints[i + 1]
-            guard calcGen == calculatingGeneration, !Task.isCancelled else { return }
-            calculationStatus = routeProgress(index: i, count: legCount)
+            guard Self.shouldPublishRoute(
+                generation: calcGen,
+                latestGeneration: calculatingGeneration,
+                cancelled: Task.isCancelled
+            ) else { return }
+            if replanningExistingLine {
+                replanStepDetail = routeProgress(index: i, count: legCount)
+            } else {
+                calculationStatus = routeProgress(index: i, count: legCount)
+            }
             let key = TwistyRouting.legCacheKey(
                 from: origin.coordinate,
                 to: destination.coordinate,
@@ -1016,6 +1065,13 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 if let cached = legCache[key] {
                     outcome = (cached.routes, cached.usedFastestFallback)
                 } else if routeStyle == .twisty {
+                    let fastestKey = TwistyRouting.legCacheKey(
+                        from: origin.coordinate,
+                        to: destination.coordinate,
+                        style: .fastest,
+                        departure: effectiveDeparture
+                    )
+                    let cachedFastest = legCache[fastestKey]?.routes
                     let straight = CLLocation(
                         latitude: origin.coordinate.latitude,
                         longitude: origin.coordinate.longitude
@@ -1033,13 +1089,19 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                         liesOnPlannedCorridor: onCorridor
                     )
                     if plan.offsetVias {
-                        calculationStatus = "Looking for a curvier road… (\(i + 1) of \(legCount))"
+                        let looking = "Looking for a curvier road… (\(i + 1) of \(legCount))"
+                        if replanningExistingLine {
+                            replanStepDetail = looking
+                        } else {
+                            calculationStatus = looking
+                        }
                     }
                     outcome = try await twistyLeg(
                         from: origin,
                         to: destination,
                         avoidHighwayAlternates: plan.avoidHighwayAlternates,
-                        probeOffsetVias: plan.offsetVias
+                        probeOffsetVias: plan.offsetVias,
+                        cachedFastest: cachedFastest
                     )
                 } else {
                     let routes = try await calculateRoutes(
@@ -1083,7 +1145,11 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             }
         }
 
-        guard calcGen == calculatingGeneration, !Task.isCancelled else { return }
+        guard Self.shouldPublishRoute(
+            generation: calcGen,
+            latestGeneration: calculatingGeneration,
+            cancelled: Task.isCancelled
+        ) else { return }
         legs = newLegs
         plannedCorridor = newLegs.map { RouteGeometry.coordinates(of: $0.polyline) }
         twistyLimitationNote = routeStyle == .twisty
@@ -1121,12 +1187,92 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     }
 
     /// Changes the route style, remembers it as the rider's new default, and
-    /// re-plans the current ride so the change is reflected immediately.
+    /// re-plans the current ride once. A second change cancels that plan
+    /// and starts another. The leg cache is keyed by style, so the new
+    /// pass cannot reuse the previous style's geometry.
     func setRouteStyle(_ style: RouteStyle) {
-        guard style != routeStyle else { return }
+        guard let restart = Self.styleChangeRestart(from: routeStyle, to: style) else { return }
         routeStyle = style
         UserDefaults.standard.set(style.rawValue, forKey: AppSettings.Keys.routeStyle)
-        scheduleRecalculation()
+        switch restart {
+        case .route:
+            scheduleRecalculation()
+        case .gas:
+            scheduleGasSearch()
+        }
+    }
+
+    /// A real style change redraws the line (and the gas search that follows
+    /// it). The same style is not a restart.
+    nonisolated static func styleChangeRestart(from current: RouteStyle, to next: RouteStyle) -> PlanRestart? {
+        current == next ? nil : .route
+    }
+
+    /// Only the latest style change may publish. An earlier run was cancelled
+    /// when the next one was armed.
+    nonisolated static func shouldPublishRoute(
+        generation: Int,
+        latestGeneration: Int,
+        cancelled: Bool
+    ) -> Bool {
+        generation == latestGeneration && !cancelled
+    }
+
+    /// "Replanning for Twisty…" is set synchronously, before any routing
+    /// request, so the sheet can show it inside half a second.
+    nonisolated static func routeReplanStatus(style: RouteStyle, hasExistingLine: Bool) -> String {
+        if hasExistingLine {
+            return "Replanning for \(style.rawValue)…"
+        }
+        return style == .twisty ? "Calculating Twisty route…" : "Calculating route…"
+    }
+
+    /// The previous line stays on the map, dimmed, until the new one lands.
+    nonisolated static func shouldDimExistingLine(isCalculating: Bool, hasLegs: Bool) -> Bool {
+        isCalculating && hasLegs
+    }
+
+    /// Spinner for a replan that is still running after about 10 seconds.
+    /// The "Replanning for …" label is already up; this is the extra progress.
+    nonisolated static let replanProgressDelay: Duration = .seconds(10)
+
+    nonisolated static func shouldShowReplanProgress(
+        elapsed: Duration,
+        threshold: Duration = replanProgressDelay
+    ) -> Bool {
+        elapsed >= threshold
+    }
+
+    /// True while a replacement line is in flight and a line is already drawn.
+    var dimsRouteLine: Bool {
+        Self.shouldDimExistingLine(isCalculating: isCalculating, hasLegs: !legs.isEmpty)
+    }
+
+    /// Set after `replanProgressDelay` if that same replan is still running.
+    private(set) var showsReplanProgress = false
+
+    /// Step text under the spinner once a replan has run long enough.
+    private(set) var replanStepDetail: String?
+
+    private var replanProgressTask: Task<Void, Never>?
+
+    private func noteReplanIfStillRunning(generation: Int) async {
+        let waited = await Self.pauseForReplanProgress()
+        guard waited,
+              Self.shouldShowReplanProgress(elapsed: Self.replanProgressDelay),
+              generation == calculatingGeneration,
+              isCalculating
+        else { return }
+        showsReplanProgress = true
+    }
+
+    private static func pauseForReplanProgress() async -> Bool {
+        do {
+            try await Task.sleep(for: replanProgressDelay)
+            return !Task.isCancelled
+        } catch {
+            return false
+        }
     }
 
     /// Picks which of MapKit's returned routes to use for a leg. For scenic
@@ -1146,7 +1292,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     nonisolated static func twistyLimitationNote(missedLegs: Int, totalLegs: Int) -> String? {
         guard missedLegs > 0, totalLegs > 0 else { return nil }
         if missedLegs >= totalLegs {
-            return "MapKit didn't offer a curvier corridor between these stops, so this line matches Fastest."
+            return "No twistier roads found on this route"
         }
         return "Part of this ride stayed on the fastest roads — MapKit didn't offer a curvier corridor there."
     }
@@ -1163,14 +1309,30 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// food, highlights, and the map all read `legs`, so the chosen geometry
     /// is the plan — the style is not swapped back to Fastest.
     ///
-    /// Fastest alternates and avoid-highway alternates run together. Offset
-    /// vias stop at the first corridor that actually beats Fastest.
+    /// Fastest alternates, avoid-highway alternates, and both offset-via
+    /// sides start together. Each via side's segments run together too.
+    /// A cached Fastest leg is the baseline so that request is not repeated.
     private func twistyLeg(
         from origin: Waypoint,
         to destination: Waypoint,
         avoidHighwayAlternates: Bool,
-        probeOffsetVias: Bool
+        probeOffsetVias: Bool,
+        cachedFastest: [MKRoute]?
     ) async throws -> (routes: [MKRoute], usedFastestFallback: Bool) {
+        // Alternates and offset-via probes start together. A cached Fastest
+        // leg is the baseline, so the probes do not wait for that request
+        // to be made again. A style change cancels this task; the probe
+        // task is cancelled with it and its result is not published.
+        let viaTask: Task<[[MKRoute]], Never>? = probeOffsetVias
+            ? Task { @MainActor in
+                await self.viaCorridors(
+                    from: origin.coordinate,
+                    to: destination.coordinate
+                )
+            }
+            : nil
+        defer { viaTask?.cancel() }
+
         let direct: [MKRoute]
         let avoided: [MKRoute]
         if avoidHighwayAlternates {
@@ -1206,7 +1368,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             avoided = []
         }
         guard !Task.isCancelled else { throw CancellationError() }
-        guard let fastest = direct.first else { return ([], false) }
+        let baseline = direct.first ?? cachedFastest?.first
+        guard let baseline else { return ([], false) }
 
         var pool: [TwistyPoolEntry] = []
         func append(_ routes: [MKRoute]) {
@@ -1216,6 +1379,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 coordinates: Self.joinedCoordinates(routes),
                 distance: routes.reduce(0) { $0 + $1.distance }
             ))
+        }
+        if direct.isEmpty, let cachedFastest, !cachedFastest.isEmpty {
+            append(cachedFastest)
         }
         for route in direct {
             append([route])
@@ -1232,59 +1398,101 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         if let chosen = Self.chosenTwisty(in: pool, fastestID: fastestID) {
             return (chosen, false)
         }
-        guard probeOffsetVias else { return ([fastest], true) }
+        guard probeOffsetVias, let viaTask else { return ([baseline], true) }
+        guard !Task.isCancelled else { throw CancellationError() }
 
-        let corridors = TwistyRouting.biasCorridors(
-            from: origin.coordinate,
-            to: destination.coordinate
-        )
-        for corridor in corridors {
+        for stitched in await viaTask.value {
             guard !Task.isCancelled else { throw CancellationError() }
-            do {
-                if let stitched = try await routeThrough(
-                    vias: corridor.vias,
-                    from: origin.coordinate,
-                    to: destination.coordinate
-                ) {
-                    append(stitched)
-                    if let chosen = Self.chosenTwisty(in: pool, fastestID: fastestID) {
-                        return (chosen, false)
-                    }
-                }
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                guard !Task.isCancelled else { throw CancellationError() }
+            append(stitched)
+            if let chosen = Self.chosenTwisty(in: pool, fastestID: fastestID) {
+                return (chosen, false)
             }
         }
 
-        return ([fastest], true)
+        return ([baseline], true)
+    }
+
+    /// Both offset sides at once. Each side's segments also run together.
+    /// Empty when the task was cancelled or MapKit returned nothing.
+    private func viaCorridors(
+        from origin: CLLocationCoordinate2D,
+        to destination: CLLocationCoordinate2D
+    ) async -> [[MKRoute]] {
+        let corridors = TwistyRouting.biasCorridors(from: origin, to: destination)
+        guard !corridors.isEmpty, !Task.isCancelled else { return [] }
+        if corridors.count == 1 {
+            guard let stitched = try? await routeThrough(
+                vias: corridors[0].vias,
+                from: origin,
+                to: destination
+            ) else { return [] }
+            return [stitched]
+        }
+        async let left = routeThrough(
+            vias: corridors[0].vias,
+            from: origin,
+            to: destination
+        )
+        async let right = routeThrough(
+            vias: corridors[1].vias,
+            from: origin,
+            to: destination
+        )
+        let first = try? await left
+        let second = try? await right
+        return [first, second].compactMap { $0 }
     }
 
     /// Routes A → vias → B with ordinary driving preference (highways allowed).
-    /// The vias are what leave the fast corridor; curvature scoring decides
-    /// whether the resulting roads are actually twistier.
+    /// The segments are independent requests, so they run together. The vias
+    /// are what leave the fast corridor; curvature scoring decides whether
+    /// the resulting roads are actually twistier.
     private func routeThrough(
         vias: [CLLocationCoordinate2D],
         from origin: CLLocationCoordinate2D,
         to destination: CLLocationCoordinate2D
     ) async throws -> [MKRoute]? {
-        var routes: [MKRoute] = []
-        var cursor = origin
-        for stop in vias + [destination] {
-            let piece = try await calculateRoutes(
-                from: cursor,
-                to: stop,
+        let targets = vias + [destination]
+        guard !targets.isEmpty else { return nil }
+        var anchors = [origin]
+        anchors.append(contentsOf: targets)
+
+        func piece(_ index: Int) async throws -> MKRoute? {
+            guard !Task.isCancelled else { throw CancellationError() }
+            let routes = try await calculateRoutes(
+                from: anchors[index],
+                to: anchors[index + 1],
                 avoidsHighways: false,
                 avoidsTolls: false,
                 alternates: false
             )
             guard !Task.isCancelled else { throw CancellationError() }
-            guard let route = piece.first else { return nil }
-            routes.append(route)
-            cursor = stop
+            return routes.first
         }
-        return routes
+
+        let segmentCount = anchors.count - 1
+        let segments: [MKRoute?]
+        switch segmentCount {
+        case 1:
+            segments = [try await piece(0)]
+        case 2:
+            async let first = piece(0)
+            async let second = piece(1)
+            segments = [try await first, try await second]
+        case 3:
+            async let first = piece(0)
+            async let second = piece(1)
+            async let third = piece(2)
+            segments = [try await first, try await second, try await third]
+        default:
+            var sequential: [MKRoute?] = []
+            for index in 0..<segmentCount {
+                sequential.append(try await piece(index))
+            }
+            segments = sequential
+        }
+        guard segments.allSatisfy({ $0 != nil }) else { return nil }
+        return segments.compactMap { $0 }
     }
 
     private func calculateRoutes(

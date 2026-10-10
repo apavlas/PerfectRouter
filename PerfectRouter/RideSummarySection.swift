@@ -9,16 +9,26 @@ struct RideSummarySection: View {
 
     var body: some View {
         Section {
-            if viewModel.isCalculating {
+            if viewModel.isCalculating, viewModel.legs.isEmpty {
                 ProgressView(viewModel.calculationStatus ?? "Calculating route…")
             } else if !viewModel.legs.isEmpty {
+                if viewModel.isCalculating {
+                    Label(viewModel.calculationStatus ?? "Replanning…", systemImage: viewModel.routeStyle.systemImage)
+                        .font(.subheadline.weight(.semibold))
+                    if viewModel.showsReplanProgress {
+                        ProgressView(viewModel.replanStepDetail ?? "Still planning this route…")
+                    }
+                }
                 HStack {
                     Label(formattedRideDistance(viewModel.totalDistanceMeters), systemImage: "road.lanes")
                     Spacer()
                     Label(formattedDuration(viewModel.totalExpectedTravelTime), systemImage: "clock")
                 }
+                .foregroundStyle(viewModel.isCalculating ? .secondary : .primary)
                 BufferedGasApplyRow(viewModel: viewModel)
-                FuelPlanRows(viewModel: viewModel)
+                if !viewModel.isCalculating {
+                    FuelPlanRows(viewModel: viewModel)
+                }
                 if viewModel.isSearchingGas {
                     ProgressView("Searching for gas along the route…")
                 }

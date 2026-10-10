@@ -63,7 +63,10 @@ struct ContentView: View {
             // Route polylines, one per leg
             ForEach(viewModel.legs, id: \.self) { leg in
                 MapPolyline(leg.polyline)
-                    .stroke(.blue, lineWidth: 5)
+                    .stroke(
+                        viewModel.dimsRouteLine ? Color.blue.opacity(0.35) : Color.blue,
+                        lineWidth: 5
+                    )
             }
 
 
