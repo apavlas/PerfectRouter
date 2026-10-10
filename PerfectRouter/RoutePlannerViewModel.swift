@@ -552,6 +552,58 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         }
     }
 
+    /// Distance, then riding time, for one fuel-stop row.
+    ///
+    /// "212 mi · 6h 05m riding (1h 40m since last)". The first stop says
+    /// "since departure". Time is each current leg's drive time spread
+    /// along that leg's polyline, so a style change, tank-range search,
+    /// applied stop, or leave-time replan updates it with the new line.
+    /// Applied gas fills count as the previous stop; time sitting at a
+    /// stop is not added.
+    func fuelStopRidingCaption(for stop: SuggestedStop, pastRange: Bool = false) -> String {
+        let caption = FuelStopRidingTime.caption(
+            distanceMeters: stop.distanceAlongRoute,
+            anchors: fuelRidingAnchorDistances(including: stop.distanceAlongRoute),
+            legs: driveLegTimings()
+        )
+        guard pastRange else { return caption }
+        return "\(caption) — past your range"
+    }
+
+    /// Riding caption when `stop` is a recommended or past-range fuel stop.
+    func fuelStopListCaption(for stop: SuggestedStop) -> String? {
+        let pastRange = isPastRangeFuelStop(stop)
+        guard pastRange || isRecommendedFuelStop(stop) else { return nil }
+        return fuelStopRidingCaption(for: stop, pastRange: pastRange)
+    }
+
+    /// Visible fuel rows plus applied gas fills. The fill is no longer a
+    /// row after Apply, but the next recommendation is still "since last"
+    /// from that pump.
+    private func fuelRidingAnchorDistances(including distance: CLLocationDistance) -> [CLLocationDistance] {
+        var anchors = gasFillDistances
+        for entry in visibleFuelPlanEntries {
+            switch entry {
+            case .recommended(let other), .pastRange(let other):
+                anchors.append(other.distanceAlongRoute)
+            case .gap:
+                break
+            }
+        }
+        anchors.append(distance)
+        return anchors
+    }
+
+    /// Polyline length and `expectedTravelTime` for each current leg.
+    private func driveLegTimings() -> [FuelStopRidingTime.Leg] {
+        legs.map { route in
+            FuelStopRidingTime.leg(
+                polyline: RouteGeometry.coordinates(of: route.polyline),
+                expectedTravelTime: route.expectedTravelTime
+            )
+        }
+    }
+
     /// Category suggestions the rider can still add. Places already on the
     /// route (including an applied gas stop) are left off the list.
     var addableSuggestions: [SuggestedStop] {
@@ -896,7 +948,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     /// A station the fuel list marks past the tank. Never part of the
     /// one-tap recommended selection, even if it also sits in `fuelStops`.
-    private func isPastRangeFuelStop(_ stop: SuggestedStop) -> Bool {
+    func isPastRangeFuelStop(_ stop: SuggestedStop) -> Bool {
         fuelPlanEntries.contains { entry in
             guard case .pastRange(let past) = entry else { return false }
             return past.id == stop.id || Self.sameCoordinate(past.coordinate, stop.coordinate)

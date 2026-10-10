@@ -51,34 +51,34 @@ struct GasStationsSection: View {
     /// A place already on the route is shown as added and cannot be checked.
     private func gasRow(_ stop: SuggestedStop, recommended: Bool, pastRange: Bool = false) -> some View {
         let onRoute = viewModel.isStopOnRoute(stop)
+        let markedPast = pastRange || viewModel.isPastRangeFuelStop(stop)
+        let showsRidingTime = recommended || viewModel.isRecommendedFuelStop(stop) || markedPast
+        let caption = showsRidingTime
+            ? viewModel.fuelStopRidingCaption(for: stop, pastRange: markedPast)
+            : "~\(formattedRideDistance(stop.distanceAlongRoute)) from start"
         return Button {
             guard !onRoute else { return }
             viewModel.toggleBufferedGasStop(stop)
         } label: {
-            HStack {
+            HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "fuelpump.fill")
-                    .foregroundStyle(pastRange ? Color.orange : (recommended ? Color.green : Color.secondary))
-                VStack(alignment: .leading) {
-                    Text(stop.name)
-                    Text(pastRange
-                         ? "~\(formattedRideDistance(stop.distanceAlongRoute)) from start — past your range"
-                         : "~\(formattedRideDistance(stop.distanceAlongRoute)) from start")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
+                    .foregroundStyle(markedPast ? Color.orange : (recommended ? Color.green : Color.secondary))
+                FuelStopTextColumn(title: stop.name, caption: caption)
                 if onRoute {
                     Text("Added")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.secondary)
-                } else if pastRange {
+                        .fixedSize()
+                } else if markedPast {
                     Text("Past your range")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.orange)
+                        .fixedSize()
                 } else if recommended {
                     Text("Recommended")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.green)
+                        .fixedSize()
                 }
                 if !onRoute {
                     Image(systemName: viewModel.isGasBuffered(stop)
@@ -176,15 +176,19 @@ struct SuggestionsSection: View {
                         viewModel.addStop(from: stop)
                     }
                 } label: {
-                    HStack {
+                    HStack(alignment: .top, spacing: 8) {
                         Image(systemName: stop.category.systemImage)
-                        VStack(alignment: .leading) {
-                            Text(stop.name)
-                            Text("~\(formattedRideDistance(stop.distanceAlongRoute)) from start")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                        if let caption = viewModel.fuelStopListCaption(for: stop) {
+                            FuelStopTextColumn(title: stop.name, caption: caption)
+                        } else {
+                            VStack(alignment: .leading) {
+                                Text(stop.name)
+                                Text("~\(formattedRideDistance(stop.distanceAlongRoute)) from start")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 8)
                         }
-                        Spacer()
                         Image(systemName: stop.category == .gas && viewModel.isGasBuffered(stop)
                               ? "checkmark.circle.fill"
                               : "plus.circle.fill")
@@ -223,6 +227,32 @@ private struct SelectRecommendedFuelButton: View {
                 viewModel.toggleRecommendedFuelSelection()
             }
         }
+    }
+}
+
+/// Station name, then the distance and riding-time caption. The name wraps
+/// instead of truncating, on the iPhone sheet and the wider iPad and Mac lists.
+struct FuelStopTextColumn: View {
+    let title: String
+    let caption: String
+    var titleColor: Color = .primary
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .foregroundStyle(titleColor)
+                .multilineTextAlignment(.leading)
+                .lineLimit(1...8)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(caption)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.leading)
+                .lineLimit(1...6)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .layoutPriority(1)
     }
 }
 

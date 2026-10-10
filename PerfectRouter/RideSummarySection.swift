@@ -132,15 +132,18 @@ private struct FuelPlanRows: View {
                     Button {
                         viewModel.toggleBufferedGasStop(fuelStop)
                     } label: {
-                        HStack {
-                            Label("Fuel stop \(numbers[entry.id] ?? 0): \(fuelStop.name) (~\(formattedRideDistance(fuelStop.distanceAlongRoute)) in)",
-                                  systemImage: "fuelpump.fill")
-                            Spacer()
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: "fuelpump.fill")
+                                .foregroundStyle(.green)
+                            FuelStopTextColumn(
+                                title: "Fuel stop \(numbers[entry.id] ?? 0): \(fuelStop.name)",
+                                caption: viewModel.fuelStopRidingCaption(for: fuelStop),
+                                titleColor: .green
+                            )
                             bufferMark(viewModel.isGasBuffered(fuelStop))
                         }
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(.green)
 
                     ForEach(foodNearFuelStop(fuelStop.id)) { food in
                         Button {
@@ -167,15 +170,18 @@ private struct FuelPlanRows: View {
                 Button {
                     viewModel.toggleBufferedGasStop(stop)
                 } label: {
-                    HStack {
-                        Label("\(stop.name) (~\(formattedRideDistance(stop.distanceAlongRoute))) — past your range",
-                              systemImage: "fuelpump")
-                        Spacer()
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "fuelpump")
+                            .foregroundStyle(.orange)
+                        FuelStopTextColumn(
+                            title: stop.name,
+                            caption: viewModel.fuelStopRidingCaption(for: stop, pastRange: true),
+                            titleColor: .orange
+                        )
                         bufferMark(viewModel.isGasBuffered(stop))
                     }
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.orange)
             }
         }
     }
