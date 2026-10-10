@@ -279,4 +279,86 @@ final class FuelStopRidingTimeTests: XCTestCase {
         )
         XCTAssertEqual(FuelStopRidingTime.formatDistance(212_000, usesMetric: true), "212 km")
     }
+
+    // MARK: - Route waypoint subtitles
+
+    func testWaypointCaptionIsNilForTheOriginAndOutOfRange() {
+        let legs = [leg(100 * mile, seconds: 2 * 3_600)]
+        XCTAssertNil(FuelStopRidingTime.waypointCaption(index: 0, legs: legs, usesMetric: false))
+        XCTAssertNil(FuelStopRidingTime.waypointCaption(index: 2, legs: legs, usesMetric: false))
+        XCTAssertNil(FuelStopRidingTime.waypointCaption(index: 1, legs: [], usesMetric: false))
+        XCTAssertNil(FuelStopRidingTime.waypointCaption(index: -1, legs: legs, usesMetric: false))
+    }
+
+    func testWaypointCaptionUsesEachLegsPaceNotAFlatAverage() {
+        // Same length, different pace. A flat average would put the first
+        // stop at 1h 15m and the second stop's since-last at 1h 15m.
+        let legs = [
+            leg(100 * mile, seconds: 2 * 3_600),
+            leg(100 * mile, seconds: 30 * 60),
+        ]
+        XCTAssertEqual(
+            FuelStopRidingTime.waypointCaption(index: 1, legs: legs, usesMetric: false),
+            "100 mi · 2h 00m riding (2h 00m since last)"
+        )
+        XCTAssertEqual(
+            FuelStopRidingTime.waypointCaption(index: 2, legs: legs, usesMetric: false),
+            "200 mi · 2h 30m riding (30m since last)"
+        )
+    }
+
+    func testWaypointCaptionUnderOneHour() {
+        XCTAssertEqual(
+            FuelStopRidingTime.waypointCaption(
+                index: 1,
+                legs: [leg(40 * mile, seconds: 45 * 60)],
+                usesMetric: false
+            ),
+            "40 mi · 45m riding (45m since last)"
+        )
+    }
+
+    func testWaypointCaptionOverTwentyFourHoursStaysInHours() {
+        XCTAssertEqual(
+            FuelStopRidingTime.waypointCaption(
+                index: 1,
+                legs: [leg(100 * mile, seconds: 25 * 3_600 + 5 * 60)],
+                usesMetric: false
+            ),
+            "100 mi · 25h 05m riding (25h 05m since last)"
+        )
+    }
+
+    func testWaypointCaptionUsesKilometersWhenMetric() {
+        XCTAssertEqual(
+            FuelStopRidingTime.waypointCaption(
+                index: 1,
+                legs: [leg(80_000, seconds: 50 * 60)],
+                usesMetric: true
+            ),
+            "80 km · 50m riding (50m since last)"
+        )
+    }
+
+    func testWaypointCaptionExcludesTimeSpentStopped() {
+        // Drive, sit (zero-length leg), drive again. The dwell minute count
+        // must not show up in either cumulative or since-last.
+        let legs = [
+            leg(100 * mile, seconds: 2 * 3_600),
+            leg(0, seconds: 15 * 60),
+            leg(50 * mile, seconds: 40 * 60),
+        ]
+        XCTAssertEqual(
+            FuelStopRidingTime.waypointCaption(index: 1, legs: legs, usesMetric: false),
+            "100 mi · 2h 00m riding (2h 00m since last)"
+        )
+        XCTAssertEqual(
+            FuelStopRidingTime.waypointCaption(index: 2, legs: legs, usesMetric: false),
+            "100 mi · 2h 00m riding (0m since last)"
+        )
+        XCTAssertEqual(
+            FuelStopRidingTime.waypointCaption(index: 3, legs: legs, usesMetric: false),
+            "150 mi · 2h 40m riding (40m since last)"
+        )
+    }
 }

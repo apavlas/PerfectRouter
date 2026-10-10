@@ -124,6 +124,33 @@ enum FuelStopRidingTime {
         return usesMetric ? "\(value) km" : "\(value) mi"
     }
 
+    /// Riding line for a route waypoint. The origin (`index` 0) has none.
+    /// Later stops use the same distance and drive-time text as a fuel row,
+    /// always "since last": the previous waypoint, which is the origin for
+    /// the first stop. Time is the sum of leg `expectedTravelTime` values
+    /// up to that waypoint, so time spent stopped is not included.
+    static func waypointCaption(
+        index: Int,
+        legs: [Leg],
+        usesMetric: Bool = AppSettings.usesMetricUnits
+    ) -> String? {
+        guard index > 0, index <= legs.count else { return nil }
+        let distance = distanceThroughWaypoint(index, legs: legs)
+        let cumulative = ridingTime(atDistance: distance, legs: legs)
+        let previousDistance = distanceThroughWaypoint(index - 1, legs: legs)
+        let since = max(0, cumulative - ridingTime(atDistance: previousDistance, legs: legs))
+        let miles = formatDistance(distance, usesMetric: usesMetric)
+        return "\(miles) · \(formatDuration(cumulative)) riding (\(formatDuration(since)) since last)"
+    }
+
+    /// Polyline length from the origin through `index` legs. Index 0 is the origin.
+    private static func distanceThroughWaypoint(_ index: Int, legs: [Leg]) -> CLLocationDistance {
+        guard index > 0 else { return 0 }
+        return legs.prefix(index).reduce(0) { partial, leg in
+            partial + finite(leg.distanceMeters)
+        }
+    }
+
     /// "212 mi · 6h 05m riding (1h 40m since last)". The first stop says
     /// "since departure". Distance is always first.
     static func caption(

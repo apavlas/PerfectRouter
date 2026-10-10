@@ -140,12 +140,37 @@ struct WaypointsSection: View {
                 }
             }
             if !viewModel.waypoints.isEmpty {
-                ForEach(viewModel.waypoints) { waypoint in
-                    Label(waypoint.name, systemImage: "mappin.circle.fill")
+                ForEach(Array(viewModel.waypoints.enumerated()), id: \.element.id) { index, waypoint in
+                    waypointRow(index: index, waypoint: waypoint)
                 }
                 .onDelete { viewModel.removeWaypoint(at: $0) }
                 .onMove { viewModel.moveWaypoint(from: $0, to: $1) }
             }
+        }
+    }
+
+    /// Pin plus name. Stops after the origin add the same riding-time line
+    /// the fuel rows use. The origin has no caption, so it does not mount an
+    /// empty text view. `fixedSize` stays off this row: it made UIKit visit
+    /// an empty focus cell on iPad.
+    private func waypointRow(index: Int, waypoint: Waypoint) -> some View {
+        Label {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(waypoint.name)
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if let caption = viewModel.waypointRidingCaption(at: index) {
+                    Text(caption)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        } icon: {
+            Image(systemName: "mappin.circle.fill")
         }
     }
 }

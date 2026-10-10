@@ -594,6 +594,14 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         return anchors
     }
 
+    /// Subtitle for a row in "Route (N stops)". The origin has none.
+    /// Later waypoints use the current legs, so a replan replaces the line.
+    /// Nil while the published legs do not match the waypoint list.
+    func waypointRidingCaption(at index: Int) -> String? {
+        guard legs.count + 1 == waypoints.count else { return nil }
+        return FuelStopRidingTime.waypointCaption(index: index, legs: driveLegTimings())
+    }
+
     /// Polyline length and `expectedTravelTime` for each current leg.
     private func driveLegTimings() -> [FuelStopRidingTime.Leg] {
         legs.map { route in
