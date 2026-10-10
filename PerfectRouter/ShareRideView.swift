@@ -156,15 +156,17 @@ struct ShareRideView: View {
     @ViewBuilder
     private var adHocSection: some View {
         Section {
-            ForEach(adHocRiders) { rider in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(rider.name)
-                    Text(rider.phoneNumber)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            if !adHocRiders.isEmpty {
+                ForEach(adHocRiders) { rider in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(rider.name)
+                        Text(rider.phoneNumber)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
+                .onDelete { adHocRiders.remove(atOffsets: $0) }
             }
-            .onDelete { adHocRiders.remove(atOffsets: $0) }
 
             Button {
                 showingAdHocPicker = true

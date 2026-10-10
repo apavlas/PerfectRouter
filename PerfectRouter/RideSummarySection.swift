@@ -31,7 +31,9 @@ struct RideSummarySection: View {
                     Label(formattedDuration(viewModel.totalExpectedTravelTime), systemImage: "clock")
                 }
                 .foregroundStyle(viewModel.isCalculating ? .secondary : .primary)
-                BufferedGasApplyRow(viewModel: viewModel)
+                if !viewModel.bufferedGasStops.isEmpty {
+                    BufferedGasApplyRow(viewModel: viewModel)
+                }
                 if !viewModel.isCalculating {
                     FuelPlanRows(viewModel: viewModel)
                 }
@@ -134,22 +136,28 @@ private struct FuelPlanRows: View {
     var body: some View {
         let entries = viewModel.visibleFuelPlanEntries
         let numbers = fuelNumbers(entries)
-        ForEach(entries) { entry in
+        // No row until a stop exists. An empty ForEach is a focus container
+        // with no items; iPad aborts in UIFocusSystem when the plan lands.
+        if !entries.isEmpty {
+            ForEach(entries) { entry in
             switch entry {
             case .recommended(let fuelStop):
                 Group {
                     Button {
                         viewModel.toggleBufferedGasStop(fuelStop)
                     } label: {
-                        HStack {
-                            Label("Fuel stop \(numbers[entry.id] ?? 0): \(fuelStop.name) (~\(formattedRideDistance(fuelStop.distanceAlongRoute)) in)",
-                                  systemImage: "fuelpump.fill")
-                            Spacer()
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: "fuelpump.fill")
+                                .foregroundStyle(.green)
+                            FuelStopTextColumn(
+                                title: "Fuel stop \(numbers[entry.id] ?? 0): \(fuelStop.name)",
+                                caption: viewModel.fuelStopRidingCaption(for: fuelStop),
+                                titleColor: .green
+                            )
                             bufferMark(viewModel.isGasBuffered(fuelStop))
                         }
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(.green)
                     // Combine the row so a List cell exposes this identifier.
                     // A plain button inside a row otherwise keeps the id on a
                     // child XCUITest does not return for off-screen cells.
@@ -159,21 +167,23 @@ private struct FuelPlanRows: View {
                     )
                     .accessibilityAddTraits(.isButton)
 
-                    ForEach(foodNearFuelStop(fuelStop.id)) { food in
-                        Button {
-                            viewModel.addStop(from: food)
-                        } label: {
-                            HStack {
-                                Label(food.name, systemImage: "fork.knife")
-                                Spacer()
-                                Image(systemName: "plus.circle.fill")
-                                    .foregroundStyle(.blue)
+                    if !foodNearFuelStop(fuelStop.id).isEmpty {
+                        ForEach(foodNearFuelStop(fuelStop.id)) { food in
+                            Button {
+                                viewModel.addStop(from: food)
+                            } label: {
+                                HStack {
+                                    Label(food.name, systemImage: "fork.knife")
+                                    Spacer()
+                                    Image(systemName: "plus.circle.fill")
+                                        .foregroundStyle(.blue)
+                                }
+                                .font(.subheadline)
+                                .padding(.leading)
                             }
-                            .font(.subheadline)
-                            .padding(.leading)
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
                         }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
                     }
                 }
             case .gap(let gap):
@@ -184,15 +194,19 @@ private struct FuelPlanRows: View {
                 Button {
                     viewModel.toggleBufferedGasStop(stop)
                 } label: {
-                    HStack {
-                        Label("\(stop.name) (~\(formattedRideDistance(stop.distanceAlongRoute))) — past your range",
-                              systemImage: "fuelpump")
-                        Spacer()
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "fuelpump")
+                            .foregroundStyle(.orange)
+                        FuelStopTextColumn(
+                            title: stop.name,
+                            caption: viewModel.fuelStopRidingCaption(for: stop, pastRange: true),
+                            titleColor: .orange
+                        )
                         bufferMark(viewModel.isGasBuffered(stop))
                     }
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.orange)
+            }
             }
         }
     }
