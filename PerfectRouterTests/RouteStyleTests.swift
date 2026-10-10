@@ -151,16 +151,16 @@ final class RouteStyleTests: XCTestCase {
 
     func testReplanFeedbackIsImmediateAndProgressWaits() {
         XCTAssertEqual(
-            RoutePlannerViewModel.routeReplanStatus(style: .twisty, hasExistingLine: true),
+            RoutePlannerViewModel.routeReplanStatus(style: .twisty),
             "Replanning for Twisty…"
         )
         XCTAssertEqual(
-            RoutePlannerViewModel.routeReplanStatus(style: .scenic, hasExistingLine: true),
+            RoutePlannerViewModel.routeReplanStatus(style: .scenic),
             "Replanning for Scenic…"
         )
         XCTAssertEqual(
-            RoutePlannerViewModel.routeReplanStatus(style: .fastest, hasExistingLine: false),
-            "Calculating route…"
+            RoutePlannerViewModel.routeReplanStatus(style: .fastest),
+            "Replanning for Fastest…"
         )
         XCTAssertTrue(RoutePlannerViewModel.shouldDimExistingLine(isCalculating: true, hasLegs: true))
         XCTAssertFalse(RoutePlannerViewModel.shouldDimExistingLine(isCalculating: true, hasLegs: false))
@@ -168,5 +168,18 @@ final class RouteStyleTests: XCTestCase {
         XCTAssertEqual(RoutePlannerViewModel.replanProgressDelay, .seconds(10))
         XCTAssertFalse(RoutePlannerViewModel.shouldShowReplanProgress(elapsed: .seconds(9)))
         XCTAssertTrue(RoutePlannerViewModel.shouldShowReplanProgress(elapsed: .seconds(10)))
+    }
+
+    func testMapReplanBannerShowsOnlyWhileALineIsBeingReplaced() {
+        XCTAssertTrue(RoutePlannerViewModel.showsMapReplanBanner(isCalculating: true, hasLegs: true))
+        XCTAssertFalse(RoutePlannerViewModel.showsMapReplanBanner(isCalculating: true, hasLegs: false))
+        XCTAssertFalse(RoutePlannerViewModel.showsMapReplanBanner(isCalculating: false, hasLegs: true))
+        XCTAssertFalse(RoutePlannerViewModel.showsMapReplanBanner(isCalculating: false, hasLegs: false))
+        for style in RouteStyle.allCases {
+            XCTAssertEqual(
+                RoutePlannerViewModel.routeReplanStatus(style: style),
+                "Replanning for \(style.rawValue)…"
+            )
+        }
     }
 }

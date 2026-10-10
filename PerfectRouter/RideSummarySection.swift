@@ -10,7 +10,7 @@ struct RideSummarySection: View {
     var body: some View {
         Section {
             if viewModel.isCalculating, viewModel.legs.isEmpty {
-                ProgressView(viewModel.calculationStatus ?? "Calculating route…")
+                ProgressView(viewModel.calculationStatus ?? RoutePlannerViewModel.routeReplanStatus(style: viewModel.routeStyle))
             } else if !viewModel.legs.isEmpty {
                 if viewModel.isCalculating {
                     Label(viewModel.calculationStatus ?? "Replanning…", systemImage: viewModel.routeStyle.systemImage)

@@ -264,10 +264,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         replanStepDetail = nil
         replanProgressTask?.cancel()
         let replanningExistingLine = !legs.isEmpty
-        calculationStatus = Self.routeReplanStatus(
-            style: routeStyle,
-            hasExistingLine: replanningExistingLine
-        )
+        calculationStatus = Self.routeReplanStatus(style: routeStyle)
         // The old pumps belong to the line being replaced. Clear them now
         // so the list cannot keep showing the previous style's stops.
         if replanningExistingLine {
@@ -1021,11 +1018,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         }
 
         isCalculating = true
-        let replanningExistingLine = !legs.isEmpty
-        calculationStatus = Self.routeReplanStatus(
-            style: routeStyle,
-            hasExistingLine: replanningExistingLine
-        )
+        calculationStatus = Self.routeReplanStatus(style: routeStyle)
         defer {
             if calcGen == calculatingGeneration {
                 isCalculating = false
@@ -1049,11 +1042,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 latestGeneration: calculatingGeneration,
                 cancelled: Task.isCancelled
             ) else { return }
-            if replanningExistingLine {
-                replanStepDetail = routeProgress(index: i, count: legCount)
-            } else {
-                calculationStatus = routeProgress(index: i, count: legCount)
-            }
+            calculationStatus = Self.routeReplanStatus(style: routeStyle)
+            replanStepDetail = routeProgress(index: i, count: legCount)
             let key = TwistyRouting.legCacheKey(
                 from: origin.coordinate,
                 to: destination.coordinate,
@@ -1089,12 +1079,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                         liesOnPlannedCorridor: onCorridor
                     )
                     if plan.offsetVias {
-                        let looking = "Looking for a curvier road… (\(i + 1) of \(legCount))"
-                        if replanningExistingLine {
-                            replanStepDetail = looking
-                        } else {
-                            calculationStatus = looking
-                        }
+                        calculationStatus = Self.routeReplanStatus(style: routeStyle)
+                        replanStepDetail = "Looking for a curvier road… (\(i + 1) of \(legCount))"
                     }
                     outcome = try await twistyLeg(
                         from: origin,
@@ -1219,12 +1205,15 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     }
 
     /// "Replanning for Twisty…" is set synchronously, before any routing
-    /// request, so the sheet can show it inside half a second.
-    nonisolated static func routeReplanStatus(style: RouteStyle, hasExistingLine: Bool) -> String {
-        if hasExistingLine {
-            return "Replanning for \(style.rawValue)…"
-        }
-        return style == .twisty ? "Calculating Twisty route…" : "Calculating route…"
+    /// request. The first plan uses the same sentence as a style switch.
+    nonisolated static func routeReplanStatus(style: RouteStyle) -> String {
+        "Replanning for \(style.rawValue)…"
+    }
+
+    /// Map banner: a line is already drawn and a replacement is in flight.
+    /// The first plan has no line yet, so the sheet carries the same copy.
+    nonisolated static func showsMapReplanBanner(isCalculating: Bool, hasLegs: Bool) -> Bool {
+        isCalculating && hasLegs
     }
 
     /// The previous line stays on the map, dimmed, until the new one lands.

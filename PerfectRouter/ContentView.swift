@@ -201,8 +201,22 @@ struct ContentView: View {
                 recenter(on: start.coordinate, spanDelta: 0.5)
             }
         }
-        .safeAreaInset(edge: .top) {
-            categoryPicker
+        .safeAreaInset(edge: .top, spacing: 0) {
+            VStack(spacing: 0) {
+                categoryPicker
+                if RoutePlannerViewModel.showsMapReplanBanner(
+                    isCalculating: viewModel.isCalculating,
+                    hasLegs: !viewModel.legs.isEmpty
+                ) {
+                    mapReplanBanner
+                        .padding(.top, 4)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 8)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .animation(.easeInOut(duration: 0.2), value: viewModel.isCalculating)
         }
         .sheet(isPresented: Binding(
             get: { showSheet && planningSheetEnabled },
@@ -213,6 +227,31 @@ struct ContentView: View {
                 .presentationBackgroundInteraction(.enabled(upThrough: .medium))
                 .interactiveDismissDisabled()
         }
+    }
+
+    /// Floats on the map, under the category chips, so a style switch is
+    /// visible while the planning sheet is collapsed or scrolled past the
+    /// summary. Same layout on iPhone, iPad, and Mac.
+    private var mapReplanBanner: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+            Text(RoutePlannerViewModel.routeReplanStatus(style: viewModel.routeStyle))
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.regularMaterial, in: Capsule())
+        .overlay {
+            Capsule()
+                .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
+        }
+        .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(RoutePlannerViewModel.routeReplanStatus(style: viewModel.routeStyle))
+        .allowsHitTesting(false)
     }
 
     // MARK: - Category chips
