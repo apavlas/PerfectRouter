@@ -40,6 +40,17 @@
                ReferencedContainer = "container:PerfectRouter.xcodeproj">
             </BuildableReference>
          </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "CC00000000000000000000A3"
+               BuildableName = "PerfectRouterUITests.xctest"
+               BlueprintName = "PerfectRouterUITests"
+               ReferencedContainer = "container:PerfectRouter.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction

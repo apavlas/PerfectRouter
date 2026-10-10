@@ -15,6 +15,12 @@ struct RideSummarySection: View {
                 if viewModel.isCalculating {
                     Label(viewModel.calculationStatus ?? "Replanning…", systemImage: viewModel.routeStyle.systemImage)
                         .font(.subheadline.weight(.semibold))
+                        .accessibilityElement(children: .combine)
+                        .accessibilityIdentifier(AccessibilityID.replanBanner)
+                        .accessibilityLabel(
+                            viewModel.calculationStatus
+                                ?? RoutePlannerViewModel.routeReplanStatus(style: viewModel.routeStyle)
+                        )
                     if viewModel.showsReplanProgress {
                         ProgressView(viewModel.replanStepDetail ?? "Still planning this route…")
                     }
@@ -47,6 +53,9 @@ struct RideSummarySection: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Label(viewModel.routeStyle.rawValue, systemImage: viewModel.routeStyle.systemImage)
                         .font(.subheadline.weight(.semibold))
+                        .accessibilityElement(children: .combine)
+                        .accessibilityIdentifier(AccessibilityID.activeRouteStyle)
+                        .accessibilityLabel(viewModel.routeStyle.rawValue)
                     Text(viewModel.routeStyle.detail)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -141,6 +150,14 @@ private struct FuelPlanRows: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.green)
+                    // Combine the row so a List cell exposes this identifier.
+                    // A plain button inside a row otherwise keeps the id on a
+                    // child XCUITest does not return for off-screen cells.
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier(
+                        AccessibilityID.fuelStop(fuelStop.name, checked: viewModel.isGasBuffered(fuelStop))
+                    )
+                    .accessibilityAddTraits(.isButton)
 
                     ForEach(foodNearFuelStop(fuelStop.id)) { food in
                         Button {

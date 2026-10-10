@@ -16,6 +16,7 @@ struct SearchSection: View {
     @State private var searchText = ""
     @State private var searchResults: [MKMapItem] = []
     @State private var showingContactPicker = false
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
         Section {
@@ -23,6 +24,8 @@ struct SearchSection: View {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
                 TextField("Add a destination or stop", text: $searchText)
+                    .accessibilityIdentifier(AccessibilityID.placeSearch)
+                    .focused($searchFocused)
                     .autocorrectionDisabled()
                     .submitLabel(.search)
                 if !searchText.isEmpty {
@@ -72,6 +75,7 @@ struct SearchSection: View {
                     }
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier(AccessibilityID.searchResult(item.name ?? "Unknown"))
             }
         }
         // The contact picker presents itself modally, so it lives invisibly in
@@ -93,6 +97,7 @@ struct SearchSection: View {
         viewModel.addWaypoint(waypoint)
         searchResults = []
         searchText = ""
+        searchFocused = false
         onWaypointAdded(waypoint)
     }
 
