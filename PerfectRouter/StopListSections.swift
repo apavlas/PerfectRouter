@@ -8,6 +8,7 @@ struct GasStationsSection: View {
 
     var body: some View {
         Section("Recommended fuel") {
+            SelectRecommendedFuelButton(viewModel: viewModel)
             BufferedGasApplyRow(viewModel: viewModel)
             if viewModel.isCalculating || viewModel.isSearchingGas || viewModel.gasLoadState == .pending {
                 ProgressView("Searching for gas along the route…")
@@ -136,6 +137,7 @@ struct SuggestionsSection: View {
     var body: some View {
         Section("Suggested \(viewModel.selectedCategory.rawValue) Stops") {
             if viewModel.selectedCategory == .gas {
+                SelectRecommendedFuelButton(viewModel: viewModel)
                 BufferedGasApplyRow(viewModel: viewModel)
             }
             if viewModel.isLoadingSuggestions {
@@ -206,6 +208,20 @@ struct GasLoadFailedButton: View {
         } label: {
             Label(RoutePlannerViewModel.gasLoadFailedCopy, systemImage: "arrow.clockwise")
                 .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// One tap checks every recommended fuel stop. When those are all checked,
+/// the same button clears them. Sits at the top of the buffered gas rows.
+private struct SelectRecommendedFuelButton: View {
+    let viewModel: RoutePlannerViewModel
+
+    var body: some View {
+        if !viewModel.selectableRecommendedFuelStops.isEmpty {
+            Button(viewModel.selectRecommendedButtonTitle) {
+                viewModel.toggleRecommendedFuelSelection()
+            }
         }
     }
 }
