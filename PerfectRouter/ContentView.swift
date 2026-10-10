@@ -226,7 +226,18 @@ struct ContentView: View {
             set: { showSheet = $0 }
         )) {
             planningSheet
-                .presentationDetents([.fraction(0.15), .medium, .large], selection: $sheetDetent)
+                .presentationDetents(
+                    // The first detent is what the system uses if it ignores the
+                    // selection binding. UI tests need the large one so list rows
+                    // are in the accessibility tree; riders still open at medium.
+                    UITestStubLaunch.isEnabled
+                        ? [.large, .medium, .fraction(0.15)]
+                        : [.fraction(0.15), .medium, .large],
+                    selection: $sheetDetent
+                )
+                // A downward drag at the top of the list otherwise shrinks the
+                // sheet, which drops the fuel rows out of the accessibility tree.
+                .presentationContentInteraction(UITestStubLaunch.isEnabled ? .scrolls : .automatic)
                 .presentationBackgroundInteraction(.enabled(upThrough: .medium))
                 .interactiveDismissDisabled()
         }
@@ -312,8 +323,14 @@ struct ContentView: View {
                 RouteStyleSection(viewModel: viewModel)
                 SavedRoutesSection(viewModel: viewModel, onLoad: loadSaved)
             }
+            .accessibilityIdentifier("planningList")
             .navigationTitle("Plan Ride")
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear {
+                if UITestStubLaunch.isEnabled {
+                    sheetDetent = .large
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Menu {

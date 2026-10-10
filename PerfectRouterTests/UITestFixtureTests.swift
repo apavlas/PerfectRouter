@@ -9,6 +9,7 @@ final class UITestFixtureTests: XCTestCase {
     func testLaunchArgumentIsStable() {
         XCTAssertEqual(UITestStubLaunch.argument, "-UITestStubServices")
         XCTAssertFalse(UITestStubLaunch.isEnabled)
+        XCTAssertGreaterThanOrEqual(UITestStubServices.replanBannerHold, .seconds(2))
     }
 
     func testCannedPumpsMatchAHundredMileTank() {

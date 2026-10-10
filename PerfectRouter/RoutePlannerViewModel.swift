@@ -1208,6 +1208,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         // Geometry is committed. Drop the calculating flag before gas so a
         // tank-range tweak restarts the search once instead of the whole line.
         if calcGen == calculatingGeneration {
+            if UITestStubLaunch.isEnabled {
+                try? await Task.sleep(for: UITestStubServices.replanBannerHold)
+                guard calcGen == calculatingGeneration, !Task.isCancelled else { return }
+            }
             isCalculating = false
             calculationStatus = nil
         }

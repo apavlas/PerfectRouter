@@ -8,6 +8,7 @@ enum AccessibilityID {
     static let applyStops = "applyStops"
     static let replanBanner = "replanBanner"
     static let routeStylePicker = "routeStylePicker"
+    static let activeRouteStyle = "activeRouteStyle"
     static let tankRangeSlider = "tankRangeSlider"
     static let leaveLaterToggle = "leaveLaterToggle"
     static let noGasStations = "noGasStations"

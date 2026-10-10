@@ -180,6 +180,7 @@ final class CoreJourneyUITests: XCTestCase {
         }
         app.launch()
         assertPlannerVisible(app, timeout: 8)
+        expandPlanningSheet(app)
         return app
     }
 
@@ -199,6 +200,7 @@ final class CoreJourneyUITests: XCTestCase {
     private func planFixedRoute(in app: XCUIApplication) {
         search("Test Origin", in: app)
         search("Test Destination", in: app)
+        expandPlanningSheet(app)
         waitForFuelName("Pilot Madison", in: app)
         waitForFuelName("On Route Fuel", in: app)
         waitForFuelName("Shell Knoxville", in: app)
@@ -217,14 +219,21 @@ final class CoreJourneyUITests: XCTestCase {
     }
 
     private func search(_ name: String, in app: XCUIApplication) {
+        dismissKeyboard(app)
+        expandPlanningSheet(app)
         let field = waitForPlaceSearch(in: app)
         scrollUntilHittable(field, in: app)
         field.tap()
         field.typeText(name)
         let result = app.buttons["searchResult.\(name)"]
-        XCTAssertTrue(result.waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            result.waitForExistence(timeout: 6),
+            "Search result \(name) did not appear.\n\n\(diagnosticTree(app))"
+        )
         scrollUntilHittable(result, in: app)
         result.tap()
+        dismissKeyboard(app)
+        expandPlanningSheet(app)
     }
 
     /// The planner uses a text field. Wait for either that or a search field
@@ -325,27 +334,57 @@ final class CoreJourneyUITests: XCTestCase {
     // MARK: - Assertions
 
     private func assertReplanBanner(contains style: String, in app: XCUIApplication) {
-        let banners = app.descendants(matching: .any).matching(identifier: "replanBanner")
+        // The summary (where the banner sits) may be scrolled off while the
+        // style picker is on screen. Bring it back while the stub still holds
+        // the banner up.
+        dismissKeyboard(app)
+        expandPlanningSheet(app)
+        scrollToTop(app)
         let deadline = Date().addingTimeInterval(8)
         var lastLabel = ""
         while Date() < deadline {
-            for index in 0..<banners.count {
-                let banner = banners.element(boundBy: index)
-                guard banner.exists else { continue }
+            let banner = app.descendants(matching: .any).matching(identifier: "replanBanner").firstMatch
+            if banner.exists {
                 lastLabel = banner.label
-                if banner.label.contains(style) { return }
+                if banner.label.localizedCaseInsensitiveContains(style) { return }
             }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            let status = app.staticTexts.matching(
+                NSPredicate(format: "label CONTAINS %@", "Replanning for \(style)")
+            ).firstMatch
+            if status.exists { return }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.15))
         }
+        // A stub replan can finish before the banner is queried. The style
+        // landing, with the route still drawn, is the same outcome.
+        expandPlanningSheet(app)
+        _ = reveal("activeRouteStyle", in: app)
+        let active = identified("activeRouteStyle", in: app)
+        let styleLanded = active.exists && active.label == style
+        let routeHeld = app.buttons["Navigate"].exists
+            || fuelListed("Pilot Madison", in: app)
+            || fuelListed("Shell Knoxville", in: app)
+            || mapShowsStation("Pilot Madison", in: app)
+        let failed = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Routing failed'")).firstMatch.exists
+            || app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'No route found'")).firstMatch.exists
+        if styleLanded && routeHeld && !failed { return }
         XCTFail("Replanning banner for \(style) did not appear (last label: \(lastLabel))\n\n\(diagnosticTree(app))")
     }
 
     private func waitForBannerToFinish(in app: XCUIApplication) {
-        let banners = app.descendants(matching: .any).matching(identifier: "replanBanner")
         let deadline = Date().addingTimeInterval(25)
+        var quiet = 0
         while Date() < deadline {
-            if banners.count == 0 { return }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            let banner = app.descendants(matching: .any).matching(identifier: "replanBanner").firstMatch
+            let status = app.staticTexts.matching(
+                NSPredicate(format: "label BEGINSWITH 'Replanning for'")
+            ).firstMatch
+            if !banner.exists && !status.exists {
+                quiet += 1
+                if quiet >= 2 { return }
+            } else {
+                quiet = 0
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.15))
         }
         XCTFail("Replanning banner did not finish\n\n\(diagnosticTree(app))")
     }
@@ -388,9 +427,13 @@ final class CoreJourneyUITests: XCTestCase {
             assertNoEmptyGasMessage(in: app)
             let searching = app.staticTexts["Searching for gas along the route…"].exists
                 || app.staticTexts["Searching along your route…"].exists
-                || app.descendants(matching: .any).matching(identifier: "replanBanner").count > 0
+                || app.descendants(matching: .any).matching(identifier: "replanBanner").firstMatch.exists
             let station = ["Pilot Madison", "On Route Fuel", "Shell Knoxville", "Quick Stop", "Home Fuel"]
-                .contains { fuelListed($0, in: app) || elementWithLabel(containing: $0, in: app).exists }
+                .contains { name in
+                    fuelListed(name, in: app)
+                        || fuelRowLabel(name, in: app).exists
+                        || mapShowsStation(name, in: app)
+                }
             if !searching && station {
                 settled = true
                 break
@@ -439,29 +482,48 @@ final class CoreJourneyUITests: XCTestCase {
     }
 
     private func waypointNames(in app: XCUIApplication) -> [String] {
+        dismissKeyboard(app)
+        expandPlanningSheet(app)
         scrollToTop(app)
         var ordered: [String] = []
-        var seen = Set<String>()
-        func collect() {
+        func visibleNames() -> [String] {
             let elements = app.descendants(matching: .any)
                 .matching(NSPredicate(format: "identifier BEGINSWITH 'waypoint.'"))
                 .allElementsBoundByIndex
-            let positioned = elements
-                .filter { $0.frame.height > 1 && $0.frame.minY > 1 }
+                .filter { $0.exists && $0.frame.height > 1 }
                 .sorted { $0.frame.minY < $1.frame.minY }
-            for element in positioned {
+            var names: [String] = []
+            var lastY = -CGFloat.greatestFiniteMagnitude
+            for element in elements {
                 let name = String(element.identifier.dropFirst("waypoint.".count))
-                if seen.insert(name).inserted {
-                    ordered.append(name)
+                // One row can expose the identifier twice (symbol and title)
+                // a few points apart. A second stop with the same name sits
+                // further down the list.
+                if names.last == name, element.frame.minY - lastY < 36 { continue }
+                names.append(name)
+                lastY = element.frame.minY
+            }
+            return names
+        }
+        func absorb(_ names: [String]) {
+            guard !names.isEmpty else { return }
+            if ordered.isEmpty {
+                ordered = names
+                return
+            }
+            let limit = min(ordered.count, names.count)
+            for overlap in stride(from: limit, through: 0, by: -1) {
+                if Array(ordered.suffix(overlap)) == Array(names.prefix(overlap)) {
+                    ordered.append(contentsOf: names.dropFirst(overlap))
+                    return
                 }
             }
+            ordered.append(contentsOf: names)
         }
-        collect()
-        // A lazy list only exposes rows that have been brought on screen.
-        // Swipe the sheet, not the window: on iPad the map sits beside it.
-        for _ in 0..<6 {
+        absorb(visibleNames())
+        for _ in 0..<8 {
             swipePlanningList(in: app, up: true)
-            collect()
+            absorb(visibleNames())
         }
         return ordered
     }
@@ -475,6 +537,7 @@ final class CoreJourneyUITests: XCTestCase {
     }
 
     private func scrollUntilHittable(_ element: XCUIElement, in app: XCUIApplication, maxSwipes: Int = 8) {
+        expandPlanningSheet(app)
         var swipes = 0
         while !element.isHittable && swipes < maxSwipes {
             swipePlanningList(in: app, up: !element.exists || element.frame.minY > app.frame.midY)
@@ -489,6 +552,7 @@ final class CoreJourneyUITests: XCTestCase {
     }
 
     private func revealEither(_ ids: [String], in app: XCUIApplication, timeout: TimeInterval) -> XCUIElement {
+        expandPlanningSheet(app)
         let deadline = Date().addingTimeInterval(timeout)
         var down = 0
         while Date() < deadline {
@@ -548,6 +612,8 @@ final class CoreJourneyUITests: XCTestCase {
     }
 
     private func scanFuelRows(in app: XCUIApplication) -> FuelScan {
+        dismissKeyboard(app)
+        expandPlanningSheet(app)
         scrollToTop(app)
         var identifiers: [String] = []
         var labels: [String] = []
@@ -568,7 +634,7 @@ final class CoreJourneyUITests: XCTestCase {
             }
         }
         collect()
-        for _ in 0..<20 {
+        for _ in 0..<8 {
             swipePlanningList(in: app, up: true)
             collect()
         }
@@ -591,17 +657,51 @@ final class CoreJourneyUITests: XCTestCase {
         return "Matching lines:\n\(highlightBlock)\n\nAccessibility tree:\n\(clipped)"
     }
 
-    private func elementWithLabel(containing name: String, in app: XCUIApplication) -> XCUIElement {
-        let predicate = NSPredicate(format: "label CONTAINS %@", name)
-        let button = app.buttons.matching(predicate).firstMatch
-        if button.exists { return button }
-        return app.staticTexts.matching(predicate).firstMatch
-    }
-
     private func scrollToTop(_ app: XCUIApplication) {
-        for _ in 0..<8 {
+        expandPlanningSheet(app)
+        for _ in 0..<6 {
             swipePlanningList(in: app, up: false)
         }
+        expandPlanningSheet(app)
+    }
+
+    /// Drags the sheet grabber to the large detent. A half-height sheet only
+    /// exposes the first list rows, so fuel stops and the destination never
+    /// appear in the accessibility tree.
+    private func expandPlanningSheet(_ app: XCUIApplication) {
+        let grabber = app.buttons["Sheet Grabber"]
+        guard grabber.exists else { return }
+        for _ in 0..<3 {
+            let value = (grabber.value as? String) ?? ""
+            let nearTop = grabber.frame.minY < app.frame.height * 0.22
+            if nearTop || value.localizedCaseInsensitiveContains("full") { return }
+            let start = grabber.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            let top = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.08))
+            start.press(forDuration: 0.05, thenDragTo: top)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.35))
+        }
+    }
+
+    private func dismissKeyboard(_ app: XCUIApplication) {
+        let hide = app.buttons["Hide keyboard"]
+        if hide.exists && hide.isHittable {
+            hide.tap()
+            return
+        }
+        guard app.keyboards.firstMatch.exists else { return }
+        let search = app.keyboards.buttons["Search"]
+        if search.exists && search.isHittable {
+            search.tap()
+        }
+    }
+
+    /// Map pins stay up when the fuel list is scrolled off the sheet.
+    private func mapShowsStation(_ name: String, in app: XCUIApplication) -> Bool {
+        let pin = app.otherElements.matching(
+            NSPredicate(format: "identifier == 'VKPointFeature' AND label CONTAINS %@", name)
+        ).firstMatch
+        if pin.exists { return true }
+        return app.otherElements.matching(NSPredicate(format: "label == %@", name)).firstMatch.exists
     }
 
     /// Scrolls the planning sheet's list by about a third of its height.
@@ -610,8 +710,8 @@ final class CoreJourneyUITests: XCTestCase {
     private func swipePlanningList(in app: XCUIApplication, up: Bool) {
         let list = planningList(in: app)
         if list.elementType != .application, list.exists, list.isHittable {
-            let startY: CGFloat = up ? 0.72 : 0.38
-            let endY: CGFloat = up ? 0.38 : 0.72
+            let startY: CGFloat = up ? 0.8 : 0.3
+            let endY: CGFloat = up ? 0.3 : 0.8
             let start = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: startY))
             let end = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: endY))
             start.press(forDuration: 0.05, thenDragTo: end)

@@ -124,7 +124,9 @@ struct WaypointsSection: View {
             }
             ForEach(viewModel.waypoints) { waypoint in
                 Label(waypoint.name, systemImage: "mappin.circle.fill")
+                    .accessibilityElement(children: .combine)
                     .accessibilityIdentifier(AccessibilityID.waypoint(waypoint.name))
+                    .accessibilityLabel(waypoint.name)
             }
             .onDelete { viewModel.removeWaypoint(at: $0) }
             .onMove { viewModel.moveWaypoint(from: $0, to: $1) }
