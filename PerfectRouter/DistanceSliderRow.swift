@@ -13,6 +13,9 @@ struct DistanceSliderRow: View {
     /// Step of the slider, in display units.
     let step: Double
     var onEditingChanged: (Bool) -> Void = { _ in }
+    /// Set by the planner so UI tests can move the tank slider. Other callers
+    /// leave it nil; the row then uses a stable id derived from its label.
+    var sliderIdentifier: String? = nil
 
     private var displayValue: Binding<Double> {
         Binding(
@@ -42,6 +45,7 @@ struct DistanceSliderRow: View {
                 step: step,
                 onEditingChanged: onEditingChanged
             )
+            .accessibilityIdentifier(sliderIdentifier ?? "distanceSlider.\(label)")
         }
     }
 }

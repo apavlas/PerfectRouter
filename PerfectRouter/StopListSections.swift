@@ -17,6 +17,7 @@ struct GasStationsSection: View {
             } else if viewModel.showsNoGasStationsMessage {
                 Text("No gas stations found along this route.")
                     .foregroundStyle(.secondary)
+                    .accessibilityIdentifier(AccessibilityID.noGasStations)
             }
             ForEach(viewModel.visibleFuelPlanEntries) { entry in
                 switch entry {
@@ -103,7 +104,7 @@ struct WaypointsSection: View {
     let onUseMapCenterAsStart: () -> Void
 
     var body: some View {
-        Section(viewModel.routeStopsTitle) {
+        Section {
             if viewModel.waypoints.isEmpty {
                 Text(viewModel.currentLocation == nil
                      ? "Long-press the map or use the button below to set a start, then search for your destination."
@@ -123,9 +124,13 @@ struct WaypointsSection: View {
             }
             ForEach(viewModel.waypoints) { waypoint in
                 Label(waypoint.name, systemImage: "mappin.circle.fill")
+                    .accessibilityIdentifier(AccessibilityID.waypoint(waypoint.name))
             }
             .onDelete { viewModel.removeWaypoint(at: $0) }
             .onMove { viewModel.moveWaypoint(from: $0, to: $1) }
+        } header: {
+            Text(viewModel.routeStopsTitle)
+                .accessibilityIdentifier(AccessibilityID.routeGeneration(viewModel.calculatingGeneration))
         }
     }
 }
@@ -156,6 +161,7 @@ struct SuggestionsSection: View {
                 } else if viewModel.selectedCategory == .gas, viewModel.showsNoGasStationsMessage {
                     Text("No gas stations found along this route.")
                         .foregroundStyle(.secondary)
+                        .accessibilityIdentifier(AccessibilityID.noGasStations)
                 } else if viewModel.selectedCategory != .gas {
                     Text("No \(viewModel.selectedCategory.rawValue.lowercased()) stops found near this route.")
                         .foregroundStyle(.secondary)
@@ -222,6 +228,7 @@ private struct SelectRecommendedFuelButton: View {
             Button(viewModel.selectRecommendedButtonTitle) {
                 viewModel.toggleRecommendedFuelSelection()
             }
+            .accessibilityIdentifier(AccessibilityID.selectRecommended)
         }
     }
 }
@@ -240,6 +247,7 @@ struct BufferedGasApplyRow: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier(AccessibilityID.applyStops)
 
                 Button("Clear selection") {
                     viewModel.clearBufferedGasStops()

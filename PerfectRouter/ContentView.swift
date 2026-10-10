@@ -20,7 +20,7 @@ struct ContentView: View {
     )
     @State private var visibleRegion: MKCoordinateRegion?
     @State private var showSheet = true
-    @State private var sheetDetent: PresentationDetent = .medium
+    @State private var sheetDetent: PresentationDetent = UITestStubLaunch.isEnabled ? .large : .medium
     @State private var showingSaveDialog = false
     @State private var saveRouteName = ""
     @State private var showingSettings = false
@@ -161,7 +161,10 @@ struct ContentView: View {
             // keep tracking (started in the view model's init) regardless.
             if ready {
                 viewModel.applySettings(seedFuelRange: true)
-                viewModel.requestLocationPermission()
+                // UI tests stub location and must not raise the system alert.
+                if !UITestStubLaunch.isEnabled {
+                    viewModel.requestLocationPermission()
+                }
             }
         }
         .onChange(of: scenePhase) { _, phase in
@@ -250,6 +253,7 @@ struct ContentView: View {
         }
         .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
         .accessibilityElement(children: .combine)
+        .accessibilityIdentifier(AccessibilityID.replanBanner)
         .accessibilityLabel(RoutePlannerViewModel.routeReplanStatus(style: viewModel.routeStyle))
         .allowsHitTesting(false)
     }

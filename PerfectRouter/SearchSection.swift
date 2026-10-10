@@ -23,6 +23,7 @@ struct SearchSection: View {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
                 TextField("Add a destination or stop", text: $searchText)
+                    .accessibilityIdentifier(AccessibilityID.placeSearch)
                     .autocorrectionDisabled()
                     .submitLabel(.search)
                 if !searchText.isEmpty {
@@ -72,6 +73,7 @@ struct SearchSection: View {
                     }
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier(AccessibilityID.searchResult(item.name ?? "Unknown"))
             }
         }
         // The contact picker presents itself modally, so it lives invisibly in

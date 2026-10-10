@@ -14,9 +14,11 @@ struct RouteStyleSection: View {
                 ForEach(RouteStyle.allCases) { style in
                     Label(style.rawValue, systemImage: style.systemImage)
                         .tag(style)
+                        .accessibilityIdentifier(AccessibilityID.routeStyleOption(style.rawValue))
                 }
             }
             .pickerStyle(.menu)
+            .accessibilityIdentifier(AccessibilityID.routeStylePicker)
         } header: {
             Text("Route Style")
         } footer: {
@@ -36,6 +38,7 @@ struct DepartureSection: View {
             Toggle(isOn: leaveLaterBinding) {
                 Label("Leave later", systemImage: "clock")
             }
+            .accessibilityIdentifier(AccessibilityID.leaveLaterToggle)
             if viewModel.departureDate != nil {
                 DatePicker(
                     "Departure",
@@ -84,6 +87,7 @@ struct FuelRangeSection: View {
                 miles: fuelRangeMilesBinding,
                 milesRange: 50...300,
                 step: 10,
+                sliderIdentifier: AccessibilityID.tankRangeSlider,
                 onEditingChanged: { editing in
                     // Tank miles drive both the search grid and the pick.
                     // On release, cancel in-flight route/gas work and restart

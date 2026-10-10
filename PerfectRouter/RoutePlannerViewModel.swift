@@ -197,6 +197,15 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     private var suggestionService = StopSuggestionService()
 
+    /// Live MapKit directions, or the canned provider for `-UITestStubServices`.
+    private let directionsProvider: any DirectionsProviding
+
+    /// Set only for UI tests. Replaces corridor `MKLocalSearch`.
+    private let stopSearchOverride: (any StopSearching)?
+
+    /// Set only for UI tests. Replaces the place-search field's `MKLocalSearch`.
+    private let placeSearchOverride: (any PlaceSearching)?
+
     /// Rides the rider has saved on this device, most recent first.
     private(set) var savedRoutes: [SavedRoute] = []
     private let savedRouteStore = SavedRouteStore()
@@ -379,6 +388,16 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     }
 
     override init() {
+        let stubs = UITestStubLaunch.isEnabled ? UITestStubServices() : nil
+        if let stubs {
+            directionsProvider = stubs
+            stopSearchOverride = stubs
+            placeSearchOverride = stubs
+        } else {
+            directionsProvider = MapKitDirectionsProvider()
+            stopSearchOverride = nil
+            placeSearchOverride = nil
+        }
         super.init()
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters
@@ -389,14 +408,18 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         routeStyle = AppSettings.defaultRouteStyle
         suggestionService.sampleIntervalMeters = AppSettings.searchIntervalMeters
         // If already authorized from a previous launch, begin tracking now.
-        startTrackingIfAuthorized()
+        // UI tests keep location nil so the two fixed search points are the
+        // ride ends, and so the system permission alert never covers the sheet.
+        if !UITestStubLaunch.isEnabled {
+            startTrackingIfAuthorized()
+        }
 
 #if targetEnvironment(simulator)
         // The simulator has no GPS fix unless one is set in Features ▸ Location,
         // leaving the rider unable to auto-route from "here". Seed a sensible
         // default so route planning works out of the box on the simulator. A
         // real (simulated) location update overrides this as soon as it arrives.
-        if currentLocation == nil {
+        if currentLocation == nil, !UITestStubLaunch.isEnabled {
             currentLocation = Self.simulatorDefaultLocation
         }
 #endif
@@ -1533,17 +1556,62 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         alternates: Bool
     ) async throws -> [MKRoute] {
         guard origin.isValidLocation, destination.isValidLocation else { return [] }
-        let request = MKDirections.Request()
-        request.source = MKMapItem(placemark: MKPlacemark(coordinate: origin))
-        request.destination = MKMapItem(placemark: MKPlacemark(coordinate: destination))
-        request.transportType = .automobile
-        // Let MapKit factor predicted traffic for the planned departure
-        // into the route choice and travel-time estimates.
-        request.departureDate = effectiveDeparture
-        request.highwayPreference = avoidsHighways ? .avoid : .any
-        request.tollPreference = avoidsTolls ? .avoid : .any
-        request.requestsAlternateRoutes = alternates
-        return try await MKDirections(request: request).calculate().routes
+        return try await directionsProvider.calculateRoutes(
+            from: origin,
+            to: destination,
+            avoidsHighways: avoidsHighways,
+            avoidsTolls: avoidsTolls,
+            alternates: alternates,
+            departure: effectiveDeparture
+        )
+    }
+
+    /// Corridor search. UI tests skip `MKLocalSearch` and project canned
+    /// pumps onto the stub polyline. Live planning keeps `StopSuggestionService`.
+    private func searchStops(
+        category: StopCategory,
+        alongLegs legs: [MKRoute],
+        sampleDistances: [CLLocationDistance]? = nil,
+        corridorRadiusMeters: CLLocationDistance? = nil,
+        generation: Int = 0,
+        maxSearches: Int? = nil
+    ) async -> CorridorSearchResult {
+        if let stopSearchOverride {
+            return await stopSearchOverride.findStops(
+                category: category,
+                alongLegs: legs,
+                sampleDistances: sampleDistances,
+                corridorRadiusMeters: corridorRadiusMeters,
+                generation: generation
+            )
+        }
+        var service = suggestionService
+        if let maxSearches {
+            service.maxSearches = maxSearches
+        }
+        return await service.findStops(
+            category: category,
+            alongLegs: legs,
+            sampleDistances: sampleDistances,
+            corridorRadiusMeters: corridorRadiusMeters,
+            generation: generation
+        )
+    }
+
+    private func searchFood(
+        near coordinate: CLLocationCoordinate2D,
+        alongPolylines legPolylines: [[CLLocationCoordinate2D]]
+    ) async -> [SuggestedStop] {
+        if let stopSearchOverride {
+            return await stopSearchOverride.findFood(
+                near: coordinate,
+                alongPolylines: legPolylines
+            )
+        }
+        return await suggestionService.findFood(
+            near: coordinate,
+            alongPolylines: legPolylines
+        )
     }
 
     private static func chosenTwisty(in pool: [TwistyPoolEntry], fastestID: Int) -> [MKRoute]? {
@@ -1757,7 +1825,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 return nil
             }
             gasLog.info("search start gen=\(generation, privacy: .public) attempt=\(attempt, privacy: .public) samples=\(sampleDistances.count, privacy: .public)")
-            let result = await suggestionService.findStops(
+            let result = await searchStops(
                 category: .gas,
                 alongLegs: legs,
                 sampleDistances: sampleDistances,
@@ -1878,7 +1946,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         let legPolylines = legs.map { RouteGeometry.coordinates(of: $0.polyline) }
         var paired: [FuelFoodStop] = []
         for stop in fuelStops {
-            let food = await suggestionService.findFood(
+            let food = await searchFood(
                 near: stop.coordinate,
                 alongPolylines: legPolylines
             )
@@ -2270,9 +2338,11 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         if selectedCategory == .attraction, !suggestedStops.isEmpty {
             candidates = suggestedStops
         } else {
-            var service = suggestionService
-            service.maxSearches = suggestionService.maxSearches / 2
-            let found = await service.findStops(category: .attraction, alongLegs: legs)
+            let found = await searchStops(
+                category: .attraction,
+                alongLegs: legs,
+                maxSearches: suggestionService.maxSearches / 2
+            )
             guard !Task.isCancelled, found.status == .completed else { return }
             candidates = found.stops
         }
@@ -2338,7 +2408,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 isLoadingSuggestions = false
             }
         }
-        let found = await suggestionService.findStops(
+        let found = await searchStops(
             category: selectedCategory,
             alongLegs: legs
         )
@@ -2601,6 +2671,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     // MARK: - Search (for adding waypoints by name)
 
     func searchPlaces(query: String, near region: MKCoordinateRegion) async -> [MKMapItem] {
+        if let placeSearchOverride {
+            return await placeSearchOverride.searchPlaces(query: query, near: region)
+        }
         guard !query.trimmingCharacters(in: .whitespaces).isEmpty else { return [] }
         let request = MKLocalSearch.Request()
         request.naturalLanguageQuery = query

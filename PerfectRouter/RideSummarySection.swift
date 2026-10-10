@@ -15,6 +15,7 @@ struct RideSummarySection: View {
                 if viewModel.isCalculating {
                     Label(viewModel.calculationStatus ?? "Replanning…", systemImage: viewModel.routeStyle.systemImage)
                         .font(.subheadline.weight(.semibold))
+                        .accessibilityIdentifier(AccessibilityID.replanBanner)
                     if viewModel.showsReplanProgress {
                         ProgressView(viewModel.replanStepDetail ?? "Still planning this route…")
                     }
@@ -141,6 +142,9 @@ private struct FuelPlanRows: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.green)
+                    .accessibilityIdentifier(
+                        AccessibilityID.fuelStop(fuelStop.name, checked: viewModel.isGasBuffered(fuelStop))
+                    )
 
                     ForEach(foodNearFuelStop(fuelStop.id)) { food in
                         Button {

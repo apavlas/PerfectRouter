@@ -24,8 +24,14 @@ Do **not** create a new Xcode project or drag individual Swift files into a blan
 
 ## Tests
 
-The **PerfectRouter** scheme includes the `PerfectRouterTests` target. In Xcode: **Product → Test**, or:
+The **PerfectRouter** scheme includes `PerfectRouterTests` (unit) and `PerfectRouterUITests` (simulator). UI tests launch the app with `-UITestStubServices`, which injects canned directions and stop-search results so the suite does not call live MapKit. In Xcode: **Product → Test**, or:
 
 ```bash
-xcodebuild -scheme PerfectRouter -destination 'platform=iOS Simulator,name=iPhone 16' test
+scripts/run-tests.sh "iPhone 16"
+```
+
+That runs both targets on the named iPhone simulator and prints a pass/fail summary. The same invocation without the script:
+
+```bash
+xcodebuild test -project PerfectRouter.xcodeproj -scheme PerfectRouter -destination 'platform=iOS Simulator,name=iPhone 16'
 ```

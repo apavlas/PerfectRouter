@@ -14,11 +14,19 @@
 			remoteGlobalIDString = AA0000000000000000000006;
 			remoteInfo = PerfectRouter;
 		};
+		CC00000000000000000000AA /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AA000000000000000000000A /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AA0000000000000000000006;
+			remoteInfo = PerfectRouter;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		AA0000000000000000000005 /* PerfectRouter.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PerfectRouter.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		BB0000000000000000000001 /* PerfectRouterTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PerfectRouterTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		CC00000000000000000000A1 /* PerfectRouterUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PerfectRouterUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -45,6 +53,11 @@
 			path = PerfectRouterTests;
 			sourceTree = "<group>";
 		};
+		CC00000000000000000000A2 /* PerfectRouterUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = PerfectRouterUITests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -58,6 +71,11 @@
 			files = (
 			);
 		};
+		CC00000000000000000000A5 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+			);
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -66,6 +84,7 @@
 			children = (
 				AA0000000000000000000001 /* PerfectRouter */,
 				BB0000000000000000000002 /* PerfectRouterTests */,
+				CC00000000000000000000A2 /* PerfectRouterUITests */,
 				AA0000000000000000000004 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -75,6 +94,7 @@
 			children = (
 				AA0000000000000000000005 /* PerfectRouter.app */,
 				BB0000000000000000000001 /* PerfectRouterTests.xctest */,
+				CC00000000000000000000A1 /* PerfectRouterUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -121,6 +141,27 @@
 			productReference = BB0000000000000000000001 /* PerfectRouterTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		CC00000000000000000000A3 /* PerfectRouterUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CC00000000000000000000A7 /* Build configuration list for PBXNativeTarget "PerfectRouterUITests" */;
+			buildPhases = (
+				CC00000000000000000000A4 /* Sources */,
+				CC00000000000000000000A5 /* Frameworks */,
+				CC00000000000000000000A6 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				CC00000000000000000000AB /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				CC00000000000000000000A2 /* PerfectRouterUITests */,
+			);
+			name = PerfectRouterUITests;
+			productName = PerfectRouterUITests;
+			productReference = CC00000000000000000000A1 /* PerfectRouterUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -135,6 +176,10 @@
 						CreatedOnToolsVersion = 16.0;
 					};
 					BB0000000000000000000003 = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = AA0000000000000000000006;
+					};
+					CC00000000000000000000A3 = {
 						CreatedOnToolsVersion = 16.0;
 						TestTargetID = AA0000000000000000000006;
 					};
@@ -156,6 +201,7 @@
 			targets = (
 				AA0000000000000000000006 /* PerfectRouter */,
 				BB0000000000000000000003 /* PerfectRouterTests */,
+				CC00000000000000000000A3 /* PerfectRouterUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -167,6 +213,11 @@
 			);
 		};
 		BB0000000000000000000006 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
+		CC00000000000000000000A6 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
 			);
@@ -184,6 +235,11 @@
 			files = (
 			);
 		};
+		CC00000000000000000000A4 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -191,6 +247,11 @@
 			isa = PBXTargetDependency;
 			target = AA0000000000000000000006 /* PerfectRouter */;
 			targetProxy = BB000000000000000000000A /* PBXContainerItemProxy */;
+		};
+		CC00000000000000000000AB /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AA0000000000000000000006 /* PerfectRouter */;
+			targetProxy = CC00000000000000000000AA /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -412,6 +473,42 @@
 			};
 			name = Release;
 		};
+		CC00000000000000000000A8 /* Debug configuration for PBXNativeTarget "PerfectRouterUITests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = NVE72N87D5;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.apavlas.PerfectRouterUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = PerfectRouter;
+			};
+			name = Debug;
+		};
+		CC00000000000000000000A9 /* Release configuration for PBXNativeTarget "PerfectRouterUITests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = NVE72N87D5;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.apavlas.PerfectRouterUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = PerfectRouter;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -436,6 +533,14 @@
 			buildConfigurations = (
 				BB0000000000000000000008 /* Debug configuration for PBXNativeTarget "PerfectRouterTests" */,
 				BB0000000000000000000009 /* Release configuration for PBXNativeTarget "PerfectRouterTests" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		CC00000000000000000000A7 /* Build configuration list for PBXNativeTarget "PerfectRouterUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CC00000000000000000000A8 /* Debug configuration for PBXNativeTarget "PerfectRouterUITests" */,
+				CC00000000000000000000A9 /* Release configuration for PBXNativeTarget "PerfectRouterUITests" */,
 			);
 			defaultConfigurationName = Release;
 		};
