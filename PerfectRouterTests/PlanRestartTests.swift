@@ -166,9 +166,9 @@ final class PlanRestartTests: XCTestCase {
     func testMapThrottleCodeIsNotANormalFailure() {
         let throttled = NSError(
             domain: MKErrorDomain,
-            code: MKError.Code.loadingThrottled.rawValue
+            code: Int(MKError.Code.loadingThrottled.rawValue)
         )
-        let other = NSError(domain: MKErrorDomain, code: MKError.Code.serverFailure.rawValue)
+        let other = NSError(domain: MKErrorDomain, code: Int(MKError.Code.serverFailure.rawValue))
         XCTAssertTrue(StopSuggestionService.isMapSearchThrottled(throttled))
         XCTAssertFalse(StopSuggestionService.isMapSearchThrottled(other))
         XCTAssertFalse(StopSuggestionService.isMapSearchThrottled(
