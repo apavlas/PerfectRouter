@@ -17,8 +17,8 @@ final class CoreJourneyUITests: XCTestCase {
 
     func testLaunchShowsPlanRide() {
         let app = launch()
-        XCTAssertTrue(app.navigationBars["Plan Ride"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.textFields["placeSearch"].waitForExistence(timeout: 5))
+        assertPlannerVisible(app)
+        XCTAssertTrue(waitForPlaceSearch(in: app).exists)
     }
 
     func testPlanRouteBetweenTwoFixedPointsShowsFuelStops() {
@@ -173,8 +173,21 @@ final class CoreJourneyUITests: XCTestCase {
             return false
         }
         app.launch()
-        XCTAssertTrue(app.navigationBars["Plan Ride"].waitForExistence(timeout: 8))
+        assertPlannerVisible(app, timeout: 8)
         return app
+    }
+
+    /// The title lives in the sheet's navigation bar on iPhone and iPad.
+    /// A regular-width sheet can expose it as a static text instead of the bar's label.
+    private func assertPlannerVisible(_ app: XCUIApplication, timeout: TimeInterval = 5) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if app.navigationBars["Plan Ride"].exists || app.staticTexts["Plan Ride"].exists {
+                return
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        XCTFail("Plan Ride did not appear")
     }
 
     private func planFixedRoute(in app: XCUIApplication) {
@@ -198,21 +211,36 @@ final class CoreJourneyUITests: XCTestCase {
     }
 
     private func search(_ name: String, in app: XCUIApplication) {
-        let field = app.textFields["placeSearch"]
-        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        let field = waitForPlaceSearch(in: app)
         scrollUntilHittable(field, in: app)
         field.tap()
         field.typeText(name)
         let result = app.buttons["searchResult.\(name)"]
         XCTAssertTrue(result.waitForExistence(timeout: 5))
+        scrollUntilHittable(result, in: app)
         result.tap()
+    }
+
+    /// The planner uses a text field. Wait for either that or a search field
+    /// so a regular-width sheet is not pinned to one element type.
+    private func waitForPlaceSearch(in app: XCUIApplication, timeout: TimeInterval = 5) -> XCUIElement {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            let text = app.textFields["placeSearch"]
+            if text.exists { return text }
+            let search = app.searchFields["placeSearch"]
+            if search.exists { return search }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        XCTFail("Place search did not appear")
+        return app.textFields["placeSearch"]
     }
 
     private func tapApply(in app: XCUIApplication) {
         let buttons = app.buttons.matching(identifier: "applyStops")
         XCTAssertTrue(buttons.firstMatch.waitForExistence(timeout: 3))
         var swipes = 0
-        while swipes < 8 {
+        while swipes < 14 {
             for index in 0..<buttons.count {
                 let button = buttons.element(boundBy: index)
                 if button.isHittable {
@@ -220,7 +248,7 @@ final class CoreJourneyUITests: XCTestCase {
                     return
                 }
             }
-            app.swipeUp()
+            swipePlanningList(in: app, up: true)
             swipes += 1
         }
         XCTFail("Apply was not on screen")
@@ -250,9 +278,21 @@ final class CoreJourneyUITests: XCTestCase {
             byID.tap()
             return
         }
-        let byLabel = app.buttons[style]
-        XCTAssertTrue(byLabel.waitForExistence(timeout: 3))
-        byLabel.tap()
+        // iPhone shows a menu of buttons. iPad can show the same choices in a popover
+        // whose rows are cells or static texts, so match the label on any hittable element.
+        let byLabel = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", style))
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline {
+            for index in 0..<byLabel.count {
+                let option = byLabel.element(boundBy: index)
+                if option.isHittable {
+                    option.tap()
+                    return
+                }
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        XCTFail("Route style \(style) was not hittable")
     }
 
     // MARK: - Assertions
@@ -355,8 +395,9 @@ final class CoreJourneyUITests: XCTestCase {
         }
         collect()
         // A lazy list only exposes rows that have been brought on screen.
-        for _ in 0..<4 {
-            app.swipeUp()
+        // Swipe the sheet, not the window: on iPad the map sits beside it.
+        for _ in 0..<6 {
+            swipePlanningList(in: app, up: true)
             collect()
         }
         return ordered
@@ -370,18 +411,74 @@ final class CoreJourneyUITests: XCTestCase {
         app.descendants(matching: .any).matching(identifier: id).firstMatch
     }
 
-    private func scrollUntilHittable(_ element: XCUIElement, in app: XCUIApplication, maxSwipes: Int = 14) {
+    private func scrollUntilHittable(_ element: XCUIElement, in app: XCUIApplication, maxSwipes: Int = 20) {
         var swipes = 0
         while !element.isHittable && swipes < maxSwipes {
-            app.swipeUp()
+            swipePlanningList(in: app, up: true)
             swipes += 1
+        }
+        // A tall iPad sheet can leave the row above the fold after those swipes.
+        var back = 0
+        while !element.isHittable && back < 6 {
+            swipePlanningList(in: app, up: false)
+            back += 1
         }
         XCTAssertTrue(element.isHittable)
     }
 
     private func scrollToTop(_ app: XCUIApplication) {
-        for _ in 0..<6 {
-            app.swipeDown()
+        for _ in 0..<8 {
+            swipePlanningList(in: app, up: false)
         }
+    }
+
+    /// Scrolls the planning sheet's list. A window-level swipe lands on the
+    /// map beside the sheet when the iPad is regular width.
+    private func swipePlanningList(in app: XCUIApplication, up: Bool) {
+        let list = planningList(in: app)
+        if list.elementType != .application, list.exists {
+            if up {
+                list.swipeUp()
+            } else {
+                list.swipeDown()
+            }
+            return
+        }
+        // No list query yet. Drag under the sheet's navigation bar so the
+        // gesture stays in the sheet on a wide iPad.
+        let bar = app.navigationBars["Plan Ride"]
+        guard bar.exists else {
+            if up { app.swipeUp() } else { app.swipeDown() }
+            return
+        }
+        let start = bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: up ? 8 : 3))
+        let end = bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: up ? 3 : 8))
+        start.press(forDuration: 0.05, thenDragTo: end)
+    }
+
+    /// The sheet's list contains the search field. On iOS 17 that list is a
+    /// table; later systems use a collection view. Either way it is not the map.
+    private func planningList(in app: XCUIApplication) -> XCUIElement {
+        let tables = app.tables.containing(.textField, identifier: "placeSearch")
+        if tables.count > 0 {
+            return tables.element(boundBy: tables.count - 1)
+        }
+        let searchFields = app.tables.containing(.searchField, identifier: "placeSearch")
+        if searchFields.count > 0 {
+            return searchFields.element(boundBy: searchFields.count - 1)
+        }
+        let collections = app.collectionViews.containing(.textField, identifier: "placeSearch")
+        if collections.count > 0 {
+            return collections.element(boundBy: collections.count - 1)
+        }
+        let collectionSearch = app.collectionViews.containing(.searchField, identifier: "placeSearch")
+        if collectionSearch.count > 0 {
+            return collectionSearch.element(boundBy: collectionSearch.count - 1)
+        }
+        let scrolls = app.scrollViews.containing(.textField, identifier: "placeSearch")
+        if scrolls.count > 0 {
+            return scrolls.element(boundBy: scrolls.count - 1)
+        }
+        return app
     }
 }

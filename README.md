@@ -24,14 +24,16 @@ Do **not** create a new Xcode project or drag individual Swift files into a blan
 
 ## Tests
 
-The **PerfectRouter** scheme includes `PerfectRouterTests` (unit) and `PerfectRouterUITests` (simulator). UI tests launch the app with `-UITestStubServices`, which injects canned directions and stop-search results so the suite does not call live MapKit. In Xcode: **Product → Test**, or:
+The **PerfectRouter** scheme includes `PerfectRouterTests` (unit) and `PerfectRouterUITests` (simulator). UI tests launch the app with `-UITestStubServices`, which injects canned directions and stop-search results so the suite does not call live MapKit. The same tests run on iPhone and iPad. In Xcode: **Product → Test**, or pass any simulator name:
 
 ```bash
 scripts/run-tests.sh "iPhone 16"
+scripts/run-tests.sh "iPad Pro 11-inch (M5)"
 ```
 
-That runs both targets on the named iPhone simulator and prints a pass/fail summary. The same invocation without the script:
+That runs both targets on the named simulator and prints a pass/fail summary. Quote names that contain spaces or parentheses. The same invocation without the script:
 
 ```bash
 xcodebuild test -project PerfectRouter.xcodeproj -scheme PerfectRouter -destination 'platform=iOS Simulator,name=iPhone 16'
+xcodebuild test -project PerfectRouter.xcodeproj -scheme PerfectRouter -destination 'platform=iOS Simulator,name=iPad Pro 11-inch (M5)'
 ```

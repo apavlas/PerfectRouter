@@ -87,7 +87,6 @@ struct FuelRangeSection: View {
                 miles: fuelRangeMilesBinding,
                 milesRange: 50...300,
                 step: 10,
-                sliderIdentifier: AccessibilityID.tankRangeSlider,
                 onEditingChanged: { editing in
                     // Tank miles drive both the search grid and the pick.
                     // On release, cancel in-flight route/gas work and restart
@@ -96,7 +95,8 @@ struct FuelRangeSection: View {
                     if !editing {
                         viewModel.commitFuelRange()
                     }
-                }
+                },
+                sliderIdentifier: AccessibilityID.tankRangeSlider
             )
         }
     }

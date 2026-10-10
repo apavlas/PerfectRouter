@@ -1,19 +1,28 @@
 #!/usr/bin/env bash
-# Runs PerfectRouter unit tests and PerfectRouterUITests on a named iPhone simulator.
+# Runs PerfectRouter unit tests and PerfectRouterUITests on any iOS simulator.
 #
 # Usage:
 #   scripts/run-tests.sh
 #   scripts/run-tests.sh "iPhone 16"
+#   scripts/run-tests.sh "iPad Pro 11-inch (M5)"
 #
-# The UI tests launch the app with -UITestStubServices. Pass the simulator
-# name Simulator.app shows (Xcode ▸ Window ▸ Devices and Simulators).
+# The argument is the simulator name from Xcode ▸ Window ▸ Devices and
+# Simulators. Quote names that contain spaces or parentheses. The same UI
+# tests run on iPhone and iPad; they do not assume a compact width.
+# UI tests launch the app with -UITestStubServices.
 
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-SIMULATOR_NAME="${1:-iPhone 16}"
+# Join every argument so a name can contain spaces. With no arguments, use
+# a default iPhone. Parentheses still need shell quotes, as in the iPad example.
+if [ "$#" -gt 0 ]; then
+  SIMULATOR_NAME="$*"
+else
+  SIMULATOR_NAME="iPhone 16"
+fi
 LOG="${TMPDIR:-/tmp}/perfectrouter-tests.log"
 RESULT="${TMPDIR:-/tmp}/perfectrouter-tests.xcresult"
 
