@@ -8,8 +8,15 @@ struct GasStationsSection: View {
 
     var body: some View {
         Section("Recommended fuel") {
-            SelectRecommendedFuelButton(viewModel: viewModel)
-            BufferedGasApplyRow(viewModel: viewModel)
+            // These controls are omitted until they have a button to show.
+            // An empty row is a focus container with no items, which UIKit
+            // aborts on iPad when the list rebuilds at the end of a plan.
+            if !viewModel.selectableRecommendedFuelStops.isEmpty {
+                SelectRecommendedFuelButton(viewModel: viewModel)
+            }
+            if !viewModel.bufferedGasStops.isEmpty {
+                BufferedGasApplyRow(viewModel: viewModel)
+            }
             if viewModel.isCalculating || viewModel.isSearchingGas || viewModel.gasLoadState == .pending {
                 ProgressView("Searching for gas along the route…")
             } else if viewModel.showsGasLoadFailed {
@@ -18,28 +25,42 @@ struct GasStationsSection: View {
                 Text("No gas stations found along this route.")
                     .foregroundStyle(.secondary)
             }
-            ForEach(viewModel.visibleFuelPlanEntries) { entry in
-                switch entry {
-                case .recommended(let stop):
-                    gasRow(stop, recommended: true, pastRange: false)
-                case .gap(let gap):
-                    Label(gap.warning, systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                        .font(.subheadline)
-                case .pastRange(let stop):
-                    gasRow(stop, recommended: false, pastRange: true)
+            if !viewModel.visibleFuelPlanEntries.isEmpty {
+                ForEach(viewModel.visibleFuelPlanEntries) { entry in
+                    switch entry {
+                    case .recommended(let stop):
+                        gasRow(stop, recommended: true, pastRange: false)
+                    case .gap(let gap):
+                        Label(gap.warning, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                            .font(.subheadline)
+                    case .pastRange(let stop):
+                        gasRow(stop, recommended: false, pastRange: true)
+                    }
                 }
             }
             if !viewModel.gasStations.isEmpty {
-                DisclosureGroup(
-                    "All gas on route",
-                    isExpanded: Binding(
-                        get: { viewModel.isShowingAllGasOnRoute },
-                        set: { viewModel.isShowingAllGasOnRoute = $0 }
-                    )
-                ) {
-                    ForEach(viewModel.gasStations) { stop in
-                        gasRow(stop, recommended: viewModel.isRecommendedFuelStop(stop))
+                // Group stays flat in the list. A collapsed DisclosureGroup
+                // would keep a focus container whose rows are not in the
+                // hierarchy, and iPad asserts when that container is empty.
+                Group {
+                    Button {
+                        viewModel.isShowingAllGasOnRoute.toggle()
+                    } label: {
+                        HStack {
+                            Text("All gas on route")
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                                .rotationEffect(.degrees(viewModel.isShowingAllGasOnRoute ? 90 : 0))
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    if viewModel.isShowingAllGasOnRoute {
+                        ForEach(viewModel.gasStations) { stop in
+                            gasRow(stop, recommended: viewModel.isRecommendedFuelStop(stop))
+                        }
                     }
                 }
             }
@@ -68,17 +89,14 @@ struct GasStationsSection: View {
                     Text("Added")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.secondary)
-                        .fixedSize()
                 } else if markedPast {
                     Text("Past your range")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.orange)
-                        .fixedSize()
                 } else if recommended {
                     Text("Recommended")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.green)
-                        .fixedSize()
                 }
                 if !onRoute {
                     Image(systemName: viewModel.isGasBuffered(stop)
@@ -121,11 +139,13 @@ struct WaypointsSection: View {
                     Label("Use Current Map Area as Start", systemImage: "mappin.and.ellipse")
                 }
             }
-            ForEach(viewModel.waypoints) { waypoint in
-                Label(waypoint.name, systemImage: "mappin.circle.fill")
+            if !viewModel.waypoints.isEmpty {
+                ForEach(viewModel.waypoints) { waypoint in
+                    Label(waypoint.name, systemImage: "mappin.circle.fill")
+                }
+                .onDelete { viewModel.removeWaypoint(at: $0) }
+                .onMove { viewModel.moveWaypoint(from: $0, to: $1) }
             }
-            .onDelete { viewModel.removeWaypoint(at: $0) }
-            .onMove { viewModel.moveWaypoint(from: $0, to: $1) }
         }
     }
 }
@@ -137,8 +157,12 @@ struct SuggestionsSection: View {
     var body: some View {
         Section("Suggested \(viewModel.selectedCategory.rawValue) Stops") {
             if viewModel.selectedCategory == .gas {
-                SelectRecommendedFuelButton(viewModel: viewModel)
-                BufferedGasApplyRow(viewModel: viewModel)
+                if !viewModel.selectableRecommendedFuelStops.isEmpty {
+                    SelectRecommendedFuelButton(viewModel: viewModel)
+                }
+                if !viewModel.bufferedGasStops.isEmpty {
+                    BufferedGasApplyRow(viewModel: viewModel)
+                }
             }
             if viewModel.isLoadingSuggestions {
                 ProgressView("Searching along your route…")
@@ -168,34 +192,36 @@ struct SuggestionsSection: View {
                 Text("Stops already on this route aren't listed again.")
                     .foregroundStyle(.secondary)
             }
-            ForEach(viewModel.addableSuggestions.prefix(15)) { stop in
-                Button {
-                    if stop.category == .gas {
-                        viewModel.toggleBufferedGasStop(stop)
-                    } else {
-                        viewModel.addStop(from: stop)
-                    }
-                } label: {
-                    HStack(alignment: .top, spacing: 8) {
-                        Image(systemName: stop.category.systemImage)
-                        if let caption = viewModel.fuelStopListCaption(for: stop) {
-                            FuelStopTextColumn(title: stop.name, caption: caption)
+            if !viewModel.addableSuggestions.isEmpty {
+                ForEach(viewModel.addableSuggestions.prefix(15)) { stop in
+                    Button {
+                        if stop.category == .gas {
+                            viewModel.toggleBufferedGasStop(stop)
                         } else {
-                            VStack(alignment: .leading) {
-                                Text(stop.name)
-                                Text("~\(formattedRideDistance(stop.distanceAlongRoute)) from start")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer(minLength: 8)
+                            viewModel.addStop(from: stop)
                         }
-                        Image(systemName: stop.category == .gas && viewModel.isGasBuffered(stop)
-                              ? "checkmark.circle.fill"
-                              : "plus.circle.fill")
-                            .foregroundStyle(stop.category == .gas && viewModel.isGasBuffered(stop) ? Color.green : Color.blue)
+                    } label: {
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: stop.category.systemImage)
+                            if let caption = viewModel.fuelStopListCaption(for: stop) {
+                                FuelStopTextColumn(title: stop.name, caption: caption)
+                            } else {
+                                VStack(alignment: .leading) {
+                                    Text(stop.name)
+                                    Text("~\(formattedRideDistance(stop.distanceAlongRoute)) from start")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer(minLength: 8)
+                            }
+                            Image(systemName: stop.category == .gas && viewModel.isGasBuffered(stop)
+                                  ? "checkmark.circle.fill"
+                                  : "plus.circle.fill")
+                                .foregroundStyle(stop.category == .gas && viewModel.isGasBuffered(stop) ? Color.green : Color.blue)
+                        }
                     }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
         }
     }
@@ -231,7 +257,8 @@ private struct SelectRecommendedFuelButton: View {
 }
 
 /// Station name, then the distance and riding-time caption. The name wraps
-/// instead of truncating, on the iPhone sheet and the wider iPad and Mac lists.
+/// (up to a few lines) on iPhone, iPad, and Mac. `fixedSize` is avoided:
+/// inside a list row it makes UIKit visit an empty focus cell on iPad.
 struct FuelStopTextColumn: View {
     let title: String
     let caption: String
@@ -242,17 +269,16 @@ struct FuelStopTextColumn: View {
             Text(title)
                 .foregroundStyle(titleColor)
                 .multilineTextAlignment(.leading)
-                .lineLimit(1...8)
-                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
             Text(caption)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.leading)
-                .lineLimit(1...6)
-                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(6)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .layoutPriority(1)
     }
 }
 

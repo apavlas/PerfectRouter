@@ -54,24 +54,26 @@ struct SearchSection: View {
                 Label("Choose from Contacts", systemImage: "person.crop.circle")
             }
 
-            ForEach(searchResults.prefix(6), id: \.self) { item in
-                Button {
-                    addSearchResult(item)
-                } label: {
-                    HStack {
-                        Image(systemName: "plus.circle")
-                            .foregroundStyle(.blue)
-                        VStack(alignment: .leading) {
-                            Text(item.name ?? "Unknown")
-                            if let locality = item.placemark.locality {
-                                Text(locality)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+            if !searchResults.isEmpty {
+                ForEach(searchResults.prefix(6), id: \.self) { item in
+                    Button {
+                        addSearchResult(item)
+                    } label: {
+                        HStack {
+                            Image(systemName: "plus.circle")
+                                .foregroundStyle(.blue)
+                            VStack(alignment: .leading) {
+                                Text(item.name ?? "Unknown")
+                                if let locality = item.placemark.locality {
+                                    Text(locality)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
                         }
                     }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
         }
         // The contact picker presents itself modally, so it lives invisibly in

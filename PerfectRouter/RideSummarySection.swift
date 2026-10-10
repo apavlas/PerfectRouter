@@ -25,7 +25,9 @@ struct RideSummarySection: View {
                     Label(formattedDuration(viewModel.totalExpectedTravelTime), systemImage: "clock")
                 }
                 .foregroundStyle(viewModel.isCalculating ? .secondary : .primary)
-                BufferedGasApplyRow(viewModel: viewModel)
+                if !viewModel.bufferedGasStops.isEmpty {
+                    BufferedGasApplyRow(viewModel: viewModel)
+                }
                 if !viewModel.isCalculating {
                     FuelPlanRows(viewModel: viewModel)
                 }
@@ -125,7 +127,10 @@ private struct FuelPlanRows: View {
     var body: some View {
         let entries = viewModel.visibleFuelPlanEntries
         let numbers = fuelNumbers(entries)
-        ForEach(entries) { entry in
+        // No row until a stop exists. An empty ForEach is a focus container
+        // with no items; iPad aborts in UIFocusSystem when the plan lands.
+        if !entries.isEmpty {
+            ForEach(entries) { entry in
             switch entry {
             case .recommended(let fuelStop):
                 Group {
@@ -145,21 +150,23 @@ private struct FuelPlanRows: View {
                     }
                     .buttonStyle(.plain)
 
-                    ForEach(foodNearFuelStop(fuelStop.id)) { food in
-                        Button {
-                            viewModel.addStop(from: food)
-                        } label: {
-                            HStack {
-                                Label(food.name, systemImage: "fork.knife")
-                                Spacer()
-                                Image(systemName: "plus.circle.fill")
-                                    .foregroundStyle(.blue)
+                    if !foodNearFuelStop(fuelStop.id).isEmpty {
+                        ForEach(foodNearFuelStop(fuelStop.id)) { food in
+                            Button {
+                                viewModel.addStop(from: food)
+                            } label: {
+                                HStack {
+                                    Label(food.name, systemImage: "fork.knife")
+                                    Spacer()
+                                    Image(systemName: "plus.circle.fill")
+                                        .foregroundStyle(.blue)
+                                }
+                                .font(.subheadline)
+                                .padding(.leading)
                             }
-                            .font(.subheadline)
-                            .padding(.leading)
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
                         }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
                     }
                 }
             case .gap(let gap):
@@ -182,6 +189,7 @@ private struct FuelPlanRows: View {
                     }
                 }
                 .buttonStyle(.plain)
+            }
             }
         }
     }
