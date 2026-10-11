@@ -76,6 +76,7 @@ enum PlaceDescriptionReader {
             .compactMap { $0 }
             .joined(separator: " ")
         let cityLine = [street, placemark.locality, placemark.administrativeArea, placemark.postalCode]
+            .compactMap { $0 }
             .filter { !$0.isEmpty }
             .joined(separator: " ")
         if !cityLine.isEmpty { rejects.append(cityLine) }
