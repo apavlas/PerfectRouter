@@ -877,7 +877,7 @@ final class CoreJourneyUITests: XCTestCase {
             "fuelStop", "Fuel stop", "recommendedFuelPlan", "Pilot", "Madison", "Shell", "On Route",
             "Quick Stop", "Home Fuel", "selectRecommended", "tankRange",
             "leaveLater", "routeStyle", "waypoint.", "noGas", "replan",
-            "Plan Ride", "gas station", "Navigate", "navigate", "Apply", "placeSearch"
+            "Plan Ride", "gas station", "Navigate", "Apply", "placeSearch"
         ]
         let highlights = full.split(separator: "\n").filter { line in
             keywords.contains { line.localizedCaseInsensitiveContains($0) }
