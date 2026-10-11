@@ -277,7 +277,9 @@ struct ContentView: View {
                 .padding(.bottom, showsMapReplanBanner ? 8 : 0)
                 .opacity(showsMapReplanBanner ? 1 : 0)
                 .accessibilityHidden(!showsMapReplanBanner)
-                .frame(maxHeight: showsMapReplanBanner ? nil : CGFloat(0))
+                // A zero-height clip leaves the stack with no focus region.
+                // One point, fully transparent, still has a child.
+                .frame(maxHeight: showsMapReplanBanner ? nil : CGFloat(1))
                 .clipped()
         }
         .frame(maxWidth: .infinity)
@@ -296,13 +298,16 @@ struct ContentView: View {
             ProgressView()
                 .controlSize(.small)
                 .accessibilityHidden(true)
-            // The sentence is only in the tree while the banner is up.
-            // An opacity-0 label still matched "Replanning for" on iPad,
-            // so the style test never saw the banner finish.
-            Text(showsMapReplanBanner ? status : " ")
+            // The spinner is hidden from focus. A space-only title is not a
+            // focus item either, so this stack had zero children at launch
+            // and iPad aborted in UIFocusSystem. The idle glyph is a real
+            // character, and it is not the "Replanning for …" sentence, so
+            // a finished replan does not keep matching the banner.
+            Text(verbatim: showsMapReplanBanner ? status : "·")
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
+                .focusable()
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)

@@ -236,7 +236,15 @@ private struct FuelPlanRows: View {
                     Image(systemName: "fuelpump.fill")
                         .foregroundStyle(.green)
                         .accessibilityHidden(true)
-                    FuelStopTextColumn(title: title, caption: caption, titleColor: .green)
+                    FuelStopTextColumn(
+                        title: title,
+                        caption: caption,
+                        titleColor: .green,
+                        rowIdentifier: AccessibilityID.fuelStop(
+                            fuelStop.name,
+                            checked: viewModel.isGasBuffered(fuelStop)
+                        )
+                    )
                     bufferMark(viewModel.isGasBuffered(fuelStop))
                         .accessibilityHidden(true)
                 }

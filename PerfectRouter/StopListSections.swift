@@ -110,7 +110,11 @@ struct GasStationsSection: View {
                 Image(systemName: "fuelpump.fill")
                     .foregroundStyle(markedPast ? Color.orange : (recommended ? Color.green : Color.secondary))
                     .accessibilityHidden(true)
-                FuelStopTextColumn(title: title, caption: caption)
+                FuelStopTextColumn(
+                    title: title,
+                    caption: caption,
+                    rowIdentifier: accessibility?.identifier ?? ""
+                )
                 if onRoute {
                     Text("Added")
                         .font(.caption2.weight(.semibold))
@@ -337,7 +341,11 @@ struct SuggestionsSection: View {
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: stop.category.systemImage)
                     .accessibilityHidden(true)
-                FuelStopTextColumn(title: title, caption: caption)
+                FuelStopTextColumn(
+                    title: title,
+                    caption: caption,
+                    rowIdentifier: accessibility?.identifier ?? ""
+                )
                 Image(systemName: stop.category == .gas && viewModel.isGasBuffered(stop)
                       ? "checkmark.circle.fill"
                       : "plus.circle.fill")
@@ -390,6 +398,9 @@ struct FuelStopTextColumn: View {
     let title: String
     let caption: String
     var titleColor: Color = .primary
+    /// Stamped on the title text. A List cell on iPhone exposes that text
+    /// even when it does not forward the surrounding button's identifier.
+    var rowIdentifier: String = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -397,6 +408,7 @@ struct FuelStopTextColumn: View {
                 .foregroundStyle(titleColor)
                 .multilineTextAlignment(.leading)
                 .lineLimit(8)
+                .accessibilityIdentifier(rowIdentifier)
             Text(caption)
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -424,15 +436,13 @@ struct FocusPlaceholderRow: View {
 }
 
 extension View {
-    /// Identifier and "Fuel stop N:" label on the button the list cell
-    /// exposes. Combining the caption stack, or replacing the row with an
-    /// accessibility stand-in, dropped that element out of the iPhone tree
-    /// while the map pin (the bare station name) stayed. The riding-time
-    /// caption is still drawn; it is included in the label.
+    /// Same shape as a search-result button, which XCUITest does return.
+    /// An accessibility label or a stand-in on this button hid the row on
+    /// iPhone and left only the map pin (the bare station name). The title
+    /// text also carries `fuelStop.<name>.checked`, and its string is
+    /// "Fuel stop N: Name". The riding-time caption stays under that title.
     func fuelRowAccessibility(_ accessibility: RecommendedFuelAccessibility) -> some View {
-        accessibilityLabel(Text(verbatim: accessibility.label))
-            .accessibilityIdentifier(accessibility.identifier)
-            .accessibilityAddTraits(.isButton)
+        accessibilityIdentifier(accessibility.identifier)
     }
 }
 

@@ -508,7 +508,20 @@ final class CoreJourneyUITests: XCTestCase {
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.12))
         }
-        XCTFail("Fuel stop \(name) did not appear.\n\n\(diagnosticTree(app))")
+        let unchecked = "fuelStop.\(name).unchecked"
+        let checked = "fuelStop.\(name).checked"
+        XCTFail(
+            """
+            Fuel stop \(name) did not appear.
+            mapPin=\(mapShowsStation(name, in: app))
+            buttonUnchecked=\(app.buttons[unchecked].exists) buttonChecked=\(app.buttons[checked].exists)
+            idUnchecked=\(identified(unchecked, in: app).exists) idChecked=\(identified(checked, in: app).exists)
+            label=\(fuelRowLabel(name, in: app).exists)
+            staticText=\(app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'Fuel stop' AND label CONTAINS %@", name)).firstMatch.exists)
+
+            \(diagnosticTree(app))
+            """
+        )
     }
 
     /// List rows read "Fuel stop N: Name …". Map pins use the bare name, so
@@ -741,20 +754,27 @@ final class CoreJourneyUITests: XCTestCase {
         return FuelScan(identifiers: identifiers, labels: labels)
     }
 
-    /// Lines that mention the ride, plus a truncated accessibility tree.
+    /// Full accessibility hierarchy. The first lines are the map, so a prefix
+    /// clip hid the planning list and made a missing fuel row look like the
+    /// whole failure.
     private func diagnosticTree(_ app: XCUIApplication) -> String {
         let full = app.debugDescription
         let keywords = [
-            "fuelStop", "Pilot", "Shell", "On Route", "Quick Stop", "Home Fuel",
-            "selectRecommended", "tankRange", "leaveLater", "routeStyle", "waypoint.",
-            "noGas", "replan", "Plan Ride", "gas station", "Navigate", "Apply"
+            "fuelStop", "Fuel stop", "Pilot", "Madison", "Shell", "On Route",
+            "Quick Stop", "Home Fuel", "selectRecommended", "tankRange",
+            "leaveLater", "routeStyle", "waypoint.", "noGas", "replan",
+            "Plan Ride", "gas station", "Navigate", "Apply", "placeSearch"
         ]
         let highlights = full.split(separator: "\n").filter { line in
             keywords.contains { line.localizedCaseInsensitiveContains($0) }
         }
-        let highlightBlock = highlights.prefix(100).joined(separator: "\n")
-        let clipped = full.count > 6000 ? String(full.prefix(6000)) + "\n… truncated" : full
-        return "Matching lines:\n\(highlightBlock)\n\nAccessibility tree:\n\(clipped)"
+        return """
+        Matching lines (\(highlights.count)):
+        \(highlights.joined(separator: "\n"))
+
+        Accessibility tree (\(full.count) chars):
+        \(full)
+        """
     }
 
     private func scrollToTop(_ app: XCUIApplication) {
