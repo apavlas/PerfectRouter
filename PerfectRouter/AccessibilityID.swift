@@ -12,6 +12,7 @@ enum AccessibilityID {
     static let tankRangeSlider = "tankRangeSlider"
     static let leaveLaterToggle = "leaveLaterToggle"
     static let noGasStations = "noGasStations"
+    static let navigate = "navigate"
 
     static func searchResult(_ name: String) -> String { "searchResult.\(name)" }
     static func waypoint(_ name: String) -> String { "waypoint.\(name)" }

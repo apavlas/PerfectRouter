@@ -292,28 +292,58 @@ final class CoreJourneyUITests: XCTestCase {
         return nil
     }
 
-    /// Navigate sits in the summary. On iPad that section is below the fold
-    /// after a fuel or tank scroll, so existence alone misses it.
-    private func waitForNavigate(in app: XCUIApplication, timeout: TimeInterval = 15) {
+    /// Navigate stays in the summary for as long as the route has legs. It is
+    /// not removed by a replan. A half-list fling jumps over that one row, so
+    /// walk down from the search field in short steps.
+    private func waitForNavigate(in app: XCUIApplication, timeout: TimeInterval = 20) {
         expandPlanningSheet(app)
+        scrollToTop(app)
         let deadline = Date().addingTimeInterval(timeout)
         var down = 0
         while Date() < deadline {
-            if app.buttons["Navigate"].firstMatch.exists { return }
-            let labeled = app.descendants(matching: .any)
-                .matching(NSPredicate(format: "label == 'Navigate'"))
-                .firstMatch
-            if labeled.exists { return }
-            if down >= 4 {
+            if navigateButton(in: app).exists { return }
+            if down >= 10 {
                 scrollToTop(app)
                 down = 0
             } else {
-                swipePlanningList(in: app, up: true)
+                nudgePlanningList(in: app, up: true)
                 down += 1
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.12))
         }
-        XCTFail("Navigate did not appear\n\n\(diagnosticTree(app))")
+        let labeled = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS 'Navigate'"))
+            .firstMatch
+        XCTFail(
+            "Navigate did not appear. id=\(identified("navigate", in: app).exists) label=\(labeled.exists) '\(labeled.label)'\n\n\(diagnosticTree(app))"
+        )
+    }
+
+    /// The summary hand-off. Identifier first: the symbol on the button can
+    /// change the accessibility label without changing the control.
+    private func navigateButton(in app: XCUIApplication) -> XCUIElement {
+        let byID = identified("navigate", in: app)
+        if byID.exists { return byID }
+        let button = app.buttons["Navigate"].firstMatch
+        if button.exists { return button }
+        return app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == 'Navigate' OR label BEGINSWITH 'Navigate,'"))
+            .firstMatch
+    }
+
+    /// A short, slow drag. The planning-list swipe is half the sheet and
+    /// keeps going after the finger lifts, which skips the Navigate row.
+    private func nudgePlanningList(in app: XCUIApplication, up: Bool) {
+        let list = planningList(in: app)
+        guard list.elementType != .application, list.exists, list.frame.width > 40, list.frame.height > 40 else {
+            swipePlanningList(in: app, up: up)
+            return
+        }
+        let startY: CGFloat = up ? 0.58 : 0.42
+        let endY: CGFloat = up ? 0.42 : 0.58
+        let start = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: startY))
+        let end = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: endY))
+        start.press(forDuration: 0.25, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2)
     }
 
     private func tapApply(in app: XCUIApplication) {
@@ -847,7 +877,7 @@ final class CoreJourneyUITests: XCTestCase {
             "fuelStop", "Fuel stop", "recommendedFuelPlan", "Pilot", "Madison", "Shell", "On Route",
             "Quick Stop", "Home Fuel", "selectRecommended", "tankRange",
             "leaveLater", "routeStyle", "waypoint.", "noGas", "replan",
-            "Plan Ride", "gas station", "Navigate", "Apply", "placeSearch"
+            "Plan Ride", "gas station", "Navigate", "navigate", "Apply", "placeSearch"
         ]
         let highlights = full.split(separator: "\n").filter { line in
             keywords.contains { line.localizedCaseInsensitiveContains($0) }
