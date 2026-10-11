@@ -247,6 +247,7 @@ struct WaypointsSection: View {
 /// Recommended stops along the route for the selected category — tap to add.
 struct SuggestionsSection: View {
     let viewModel: RoutePlannerViewModel
+    @State private var openDescription: OpenPlaceDescription?
 
     var body: some View {
         Section("Suggested \(viewModel.selectedCategory.rawValue) Stops") {
@@ -323,6 +324,9 @@ struct SuggestionsSection: View {
                 FocusPlaceholderRow()
             }
         }
+        .sheet(item: $openDescription) { item in
+            PlaceDescriptionSheet(name: item.name, text: item.text)
+        }
     }
 
     /// The distance line is always present, so the row stack does not gain
@@ -333,6 +337,50 @@ struct SuggestionsSection: View {
             ?? "~\(formattedRideDistance(stop.distanceAlongRoute)) from start"
         let accessibility = viewModel.recommendedFuelAccessibility(for: stop)
         let title = accessibility?.title ?? stop.name
+        if stop.category.showsPlaceDescription {
+            describedSuggestion(stop, title: title, caption: caption, accessibility: accessibility)
+        } else {
+            fuelSuggestionButton(stop, title: title, caption: caption, accessibility: accessibility)
+        }
+    }
+
+    /// Scenic and sights cards. The distance caption and the Add button stay
+    /// in the same places; the description sits under the name.
+    @ViewBuilder
+    private func describedSuggestion(
+        _ stop: SuggestedStop,
+        title: String,
+        caption: String,
+        accessibility: RecommendedFuelAccessibility?
+    ) -> some View {
+        let card = PlaceDescriptionCard(
+            name: title,
+            placeDescription: PlaceDescriptionDisplay.text(for: stop.placeDescription),
+            detail: caption,
+            systemImage: stop.category.systemImage,
+            titleIdentifier: accessibility?.identifier ?? "",
+            onOpen: { present(stop, title: title) },
+            onAdd: { viewModel.addStop(from: stop) }
+        )
+        if let accessibility {
+            card.fuelRowAccessibility(accessibility)
+        } else {
+            card
+        }
+    }
+
+    private func present(_ stop: SuggestedStop, title: String) {
+        guard let text = PlaceDescriptionDisplay.text(for: stop.placeDescription) else { return }
+        openDescription = OpenPlaceDescription(id: stop.id, name: title, text: text)
+    }
+
+    @ViewBuilder
+    private func fuelSuggestionButton(
+        _ stop: SuggestedStop,
+        title: String,
+        caption: String,
+        accessibility: RecommendedFuelAccessibility?
+    ) -> some View {
         let button = Button {
             if stop.category == .gas {
                 viewModel.toggleBufferedGasStop(stop)

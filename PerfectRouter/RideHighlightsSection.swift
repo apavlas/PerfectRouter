@@ -2,37 +2,39 @@ import SwiftUI
 
 /// Auto-recommended places of interest along the ride — a handful of
 /// low-detour sights, spread across the route, that make good stops.
-/// Tap one to add it to the ride.
+/// The Add button adds the stop. The card opens a published description
+/// when the place has one.
 struct RideHighlightsSection: View {
     let viewModel: RoutePlannerViewModel
+    @State private var openDescription: OpenPlaceDescription?
 
     var body: some View {
         Section {
             ForEach(viewModel.rideHighlights) { stop in
-                Button {
-                    viewModel.addStop(from: stop)
-                } label: {
-                    HStack {
-                        Image(systemName: "star.fill")
-                            .foregroundStyle(.purple)
-                        VStack(alignment: .leading) {
-                            Text(stop.name)
-                            Text(detailText(for: stop))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Image(systemName: "plus.circle.fill")
-                            .foregroundStyle(.blue)
-                    }
-                }
-                .buttonStyle(.plain)
+                PlaceDescriptionCard(
+                    name: stop.name,
+                    placeDescription: PlaceDescriptionDisplay.text(for: stop.placeDescription),
+                    detail: detailText(for: stop),
+                    systemImage: "star.fill",
+                    iconColor: .purple,
+                    alignment: .center,
+                    onOpen: { present(stop) },
+                    onAdd: { viewModel.addStop(from: stop) }
+                )
             }
         } header: {
             Text("Ride Highlights")
         } footer: {
             Text("Places of interest right along your route, spread across the ride.")
         }
+        .sheet(item: $openDescription) { item in
+            PlaceDescriptionSheet(name: item.name, text: item.text)
+        }
+    }
+
+    private func present(_ stop: SuggestedStop) {
+        guard let text = PlaceDescriptionDisplay.text(for: stop.placeDescription) else { return }
+        openDescription = OpenPlaceDescription(id: stop.id, name: stop.name, text: text)
     }
 
     private func detailText(for stop: SuggestedStop) -> String {

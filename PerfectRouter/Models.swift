@@ -56,6 +56,17 @@ enum StopCategory: String, CaseIterable, Identifiable {
         case .attraction: return "star.fill"
         }
     }
+
+    /// Scenic viewpoints and sights. Those cards can show a description.
+    /// Gas, food, and coffee stay one-tap rows without one.
+    var showsPlaceDescription: Bool {
+        switch self {
+        case .scenic, .attraction:
+            return true
+        case .gas, .food, .coffee:
+            return false
+        }
+    }
 }
 
 /// How the planner should bias route calculation.
@@ -125,6 +136,9 @@ struct SuggestedStop: Identifiable {
     /// rider takes to reach it. 0 when unknown (e.g. stops from a shared
     /// route link).
     var detourMeters: CLLocationDistance = 0
+    /// Prose Apple Maps or the place itself published. Nil means the card
+    /// shows no description — nothing is filled in.
+    var placeDescription: String? = nil
 
     var name: String { mapItem.name ?? "Unknown" }
     var coordinate: CLLocationCoordinate2D { mapItem.placemark.coordinate }
