@@ -1307,11 +1307,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             : nil
         // Geometry is committed. Drop the calculating flag before gas so a
         // tank-range tweak restarts the search once instead of the whole line.
+        // The banner is `isCalculating` and nothing else: it comes down as
+        // soon as the line is ready. UI tests watch it while the stubbed
+        // directions request is still in flight.
         if calcGen == calculatingGeneration {
-            if UITestStubLaunch.isEnabled {
-                try? await Task.sleep(for: UITestStubServices.replanBannerHold)
-                guard calcGen == calculatingGeneration, !Task.isCancelled else { return }
-            }
             isCalculating = false
             calculationStatus = nil
         }

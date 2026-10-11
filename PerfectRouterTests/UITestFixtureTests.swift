@@ -9,7 +9,10 @@ final class UITestFixtureTests: XCTestCase {
     func testLaunchArgumentIsStable() {
         XCTAssertEqual(UITestStubLaunch.argument, "-UITestStubServices")
         XCTAssertFalse(UITestStubLaunch.isEnabled)
-        XCTAssertGreaterThanOrEqual(UITestStubServices.replanBannerHold, .seconds(2))
+        // The stub delays the directions request itself. There is no second
+        // timer that pins the banner after the line is ready.
+        XCTAssertGreaterThanOrEqual(UITestStubServices.responseDelay, .seconds(1))
+        XCTAssertLessThan(UITestStubServices.responseDelay, .seconds(8))
     }
 
     func testCannedPumpsMatchAHundredMileTank() {

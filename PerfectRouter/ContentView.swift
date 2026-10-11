@@ -296,7 +296,10 @@ struct ContentView: View {
             ProgressView()
                 .controlSize(.small)
                 .accessibilityHidden(true)
-            Text(status)
+            // The sentence is only in the tree while the banner is up.
+            // An opacity-0 label still matched "Replanning for" on iPad,
+            // so the style test never saw the banner finish.
+            Text(showsMapReplanBanner ? status : " ")
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)

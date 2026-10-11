@@ -137,10 +137,7 @@ struct GasStationsSection: View {
         .disabled(onRoute)
 
         if let accessibility {
-            button.fuelRowAccessibility(accessibility) {
-                guard !onRoute else { return }
-                viewModel.toggleBufferedGasStop(stop)
-            }
+            button.fuelRowAccessibility(accessibility)
         } else {
             button
         }
@@ -351,13 +348,7 @@ struct SuggestionsSection: View {
         .buttonStyle(.plain)
 
         if let accessibility {
-            button.fuelRowAccessibility(accessibility) {
-                if stop.category == .gas {
-                    viewModel.toggleBufferedGasStop(stop)
-                } else {
-                    viewModel.addStop(from: stop)
-                }
-            }
+            button.fuelRowAccessibility(accessibility)
         } else {
             button
         }
@@ -433,23 +424,15 @@ struct FocusPlaceholderRow: View {
 }
 
 extension View {
-    /// Puts the fuel-stop identifier on the element XCUITest queries.
-    /// `children: .combine` kept that identifier on a container the query
-    /// does not return once the row held a caption stack. The stand-in
-    /// button performs the same check as the row.
-    func fuelRowAccessibility(
-        _ accessibility: RecommendedFuelAccessibility,
-        action: @escaping () -> Void
-    ) -> some View {
-        accessibilityLabel(accessibility.label)
+    /// Identifier and "Fuel stop N:" label on the button the list cell
+    /// exposes. Combining the caption stack, or replacing the row with an
+    /// accessibility stand-in, dropped that element out of the iPhone tree
+    /// while the map pin (the bare station name) stayed. The riding-time
+    /// caption is still drawn; it is included in the label.
+    func fuelRowAccessibility(_ accessibility: RecommendedFuelAccessibility) -> some View {
+        accessibilityLabel(Text(verbatim: accessibility.label))
             .accessibilityIdentifier(accessibility.identifier)
             .accessibilityAddTraits(.isButton)
-            .accessibilityRepresentation {
-                Button(action: action) {
-                    Text(verbatim: accessibility.label)
-                }
-                .accessibilityIdentifier(accessibility.identifier)
-            }
     }
 }
 

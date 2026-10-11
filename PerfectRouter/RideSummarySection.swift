@@ -132,8 +132,8 @@ struct RideSummarySection: View {
     }
 
     /// Single text, always in the section, so the row does not appear and
-    /// vanish as a replan starts. Hidden from XCUITest once the hold ends;
-    /// the visible string is not the "Replanning for …" sentinel then.
+    /// vanish as a replan starts. Hidden once calculating ends; the visible
+    /// string is not the "Replanning for …" sentence then.
     private var replanBannerRow: some View {
         let showing = viewModel.isCalculating
         return Text(showing ? replanStatus : " ")
@@ -248,9 +248,7 @@ private struct FuelPlanRows: View {
                     label: "\(title), \(caption)",
                     title: title
                 )
-            ) {
-                viewModel.toggleBufferedGasStop(fuelStop)
-            }
+            )
         case .food(let food):
             Button {
                 viewModel.addStop(from: food)

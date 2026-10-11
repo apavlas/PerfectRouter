@@ -206,13 +206,12 @@ final class StubMKRoute: MKRoute {
 /// Canned directions, corridor search, and place search for `-UITestStubServices`.
 @MainActor
 final class UITestStubServices: DirectionsProviding, StopSearching, PlaceSearching {
-    /// Long enough that a style change's replanning banner is visible to XCUITest.
-    static let responseDelay: Duration = .milliseconds(900)
-
-    /// Extra time the banner stays up after a stubbed line is ready.
-    /// iPad sheet scrolling can spend several seconds bringing the summary
-    /// back before the assertion starts polling.
-    static let replanBannerHold: Duration = .seconds(12)
+    /// Canned directions time. The replanning banner stays up while this
+    /// request is in flight, because `isCalculating` is still true — the
+    /// same rule as a live request. UI tests observe the banner during the
+    /// delay. Nothing keeps the banner up after the routes return, and a
+    /// normal launch never uses this stub.
+    static let responseDelay: Duration = .seconds(3)
 
     func calculateRoutes(
         from origin: CLLocationCoordinate2D,

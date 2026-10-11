@@ -128,7 +128,7 @@ final class CoreJourneyUITests: XCTestCase {
             selectRouteStyle(style, in: app)
             assertReplanBanner(contains: style, in: app)
             waitForBannerToFinish(in: app)
-            XCTAssertTrue(app.buttons["Navigate"].waitForExistence(timeout: 10))
+            waitForNavigate(in: app)
             waitForFuelName("Pilot Madison", in: app)
             assertNoEmptyGasMessage(in: app)
             XCTAssertFalse(
@@ -157,7 +157,7 @@ final class CoreJourneyUITests: XCTestCase {
         scrollUntilHittable(leaveLater, in: app)
         leaveLater.tap()
         assertReplanDoesNotClaimTheRoadIsEmpty(in: app)
-        XCTAssertTrue(app.buttons["Navigate"].waitForExistence(timeout: 10))
+        waitForNavigate(in: app)
     }
 
     // MARK: - Launch and search
@@ -236,19 +236,74 @@ final class CoreJourneyUITests: XCTestCase {
         expandPlanningSheet(app)
     }
 
-    /// The planner uses a text field. Wait for either that or a search field
-    /// so a regular-width sheet is not pinned to one element type.
-    private func waitForPlaceSearch(in app: XCUIApplication, timeout: TimeInterval = 5) -> XCUIElement {
+    /// The planner uses a text field. iPhone exposes it as a text field;
+    /// iPad's regular-width sheet can expose the same identifier on a search
+    /// field or a plain descendant, and a prior scroll drops it out of the
+    /// lazy list until the sheet is back at the top.
+    private func waitForPlaceSearch(in app: XCUIApplication, timeout: TimeInterval = 12) -> XCUIElement {
+        expandPlanningSheet(app)
+        scrollToTop(app)
         let deadline = Date().addingTimeInterval(timeout)
+        var nudges = 0
         while Date() < deadline {
-            let text = app.textFields["placeSearch"]
-            if text.exists { return text }
-            let search = app.searchFields["placeSearch"]
-            if search.exists { return search }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            if let field = placeSearchField(in: app) {
+                return field
+            }
+            swipePlanningList(in: app, up: false)
+            nudges += 1
+            if nudges % 4 == 0 {
+                expandPlanningSheet(app)
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.12))
         }
-        XCTFail("Place search did not appear")
+        XCTFail("Place search did not appear\n\n\(diagnosticTree(app))")
         return app.textFields["placeSearch"]
+    }
+
+    /// Any element carrying `placeSearch`, including the placeholder the
+    /// iPad sheet uses when the identifier is not on a text field.
+    private func placeSearchField(in app: XCUIApplication) -> XCUIElement? {
+        let identified = [
+            app.textFields["placeSearch"],
+            app.searchFields["placeSearch"],
+            app.textViews["placeSearch"],
+            app.otherElements["placeSearch"],
+            app.descendants(matching: .any).matching(identifier: "placeSearch").firstMatch
+        ]
+        for field in identified where field.exists {
+            return field
+        }
+        let byPlaceholder = app.descendants(matching: .any).matching(
+            NSPredicate(format: "placeholderValue CONTAINS[c] 'destination' OR label == 'Add a destination or stop'")
+        ).firstMatch
+        if byPlaceholder.exists {
+            return byPlaceholder
+        }
+        return nil
+    }
+
+    /// Navigate sits in the summary. On iPad that section is below the fold
+    /// after a fuel or tank scroll, so existence alone misses it.
+    private func waitForNavigate(in app: XCUIApplication, timeout: TimeInterval = 15) {
+        expandPlanningSheet(app)
+        let deadline = Date().addingTimeInterval(timeout)
+        var down = 0
+        while Date() < deadline {
+            if app.buttons["Navigate"].firstMatch.exists { return }
+            let labeled = app.descendants(matching: .any)
+                .matching(NSPredicate(format: "label == 'Navigate'"))
+                .firstMatch
+            if labeled.exists { return }
+            if down >= 4 {
+                scrollToTop(app)
+                down = 0
+            } else {
+                swipePlanningList(in: app, up: true)
+                down += 1
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.12))
+        }
+        XCTFail("Navigate did not appear\n\n\(diagnosticTree(app))")
     }
 
     private func tapApply(in app: XCUIApplication) {
@@ -334,25 +389,24 @@ final class CoreJourneyUITests: XCTestCase {
     // MARK: - Assertions
 
     private func assertReplanBanner(contains style: String, in app: XCUIApplication) {
-        // The summary (where the banner sits) may be scrolled off while the
-        // style picker is on screen. Bring it back while the stub still holds
-        // the banner up.
+        // The stub is still calculating when this starts. Look immediately.
+        // Scrolling the sheet to the top first used to burn the whole
+        // request, and the banner is only up while that request runs.
+        if bannerShows(style, in: app) { return }
         dismissKeyboard(app)
         expandPlanningSheet(app)
-        scrollToTop(app)
         let deadline = Date().addingTimeInterval(8)
         var lastLabel = ""
+        var nudges = 0
         while Date() < deadline {
-            let banner = app.descendants(matching: .any).matching(identifier: "replanBanner").firstMatch
-            if banner.exists {
-                lastLabel = banner.label
-                if banner.label.localizedCaseInsensitiveContains(style) { return }
+            if bannerShows(style, in: app, lastLabel: &lastLabel) { return }
+            // iPad can park the in-list copy under the fold. Nudge toward
+            // the top between polls; the pinned sheet banner needs no scroll.
+            if nudges % 3 == 2 {
+                swipePlanningList(in: app, up: false)
             }
-            let status = app.staticTexts.matching(
-                NSPredicate(format: "label CONTAINS %@", "Replanning for \(style)")
-            ).firstMatch
-            if status.exists { return }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+            nudges += 1
+            RunLoop.current.run(until: Date().addingTimeInterval(0.12))
         }
         // A stub replan can finish before the banner is queried. The style
         // landing, with the route still drawn, is the same outcome.
@@ -374,11 +428,7 @@ final class CoreJourneyUITests: XCTestCase {
         let deadline = Date().addingTimeInterval(25)
         var quiet = 0
         while Date() < deadline {
-            let banner = app.descendants(matching: .any).matching(identifier: "replanBanner").firstMatch
-            let status = app.staticTexts.matching(
-                NSPredicate(format: "label BEGINSWITH 'Replanning for'")
-            ).firstMatch
-            if !banner.exists && !status.exists {
+            if !replanBannerIsUp(in: app) {
                 quiet += 1
                 if quiet >= 2 { return }
             } else {
@@ -389,17 +439,67 @@ final class CoreJourneyUITests: XCTestCase {
         XCTFail("Replanning banner did not finish\n\n\(diagnosticTree(app))")
     }
 
+    /// True when some on-screen banner names `style`. Map chip and sheet
+    /// copy can both exist on iPad; `firstMatch` may be the idle placeholder.
+    private func bannerShows(
+        _ style: String,
+        in app: XCUIApplication,
+        lastLabel: inout String
+    ) -> Bool {
+        let banners = app.descendants(matching: .any).matching(identifier: "replanBanner")
+        for index in 0..<banners.count {
+            let banner = banners.element(boundBy: index)
+            guard banner.exists else { continue }
+            lastLabel = banner.label
+            if banner.label.localizedCaseInsensitiveContains(style) { return true }
+        }
+        let status = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "Replanning for \(style)")
+        ).firstMatch
+        if status.exists {
+            lastLabel = status.label
+            return true
+        }
+        return false
+    }
+
+    private func bannerShows(_ style: String, in app: XCUIApplication) -> Bool {
+        var unused = ""
+        return bannerShows(style, in: app, lastLabel: &unused)
+    }
+
+    /// True only while some element is actually saying "Replanning". An idle
+    /// placeholder that still carries `replanBanner` does not count, which is
+    /// what left the iPad style test waiting after the line had landed.
+    private func replanBannerIsUp(in app: XCUIApplication) -> Bool {
+        let banners = app.descendants(matching: .any).matching(identifier: "replanBanner")
+        for index in 0..<banners.count {
+            let banner = banners.element(boundBy: index)
+            if banner.exists && banner.label.localizedCaseInsensitiveContains("Replanning") {
+                return true
+            }
+        }
+        return app.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH 'Replanning for'")
+        ).firstMatch.exists
+    }
+
     /// Scrolls the planning sheet while waiting. SwiftUI lists omit rows that
     /// are off screen, so an identifier that is in the view tree can still be
     /// absent until the row is brought on.
     private func waitForFuelName(_ name: String, in app: XCUIApplication, timeout: TimeInterval = 25) {
+        // Fuel rows sit under the summary, which is near the top. They are
+        // published once the stubbed request returns, so keep coming back
+        // to the top instead of parking at the bottom of the sheet.
+        expandPlanningSheet(app)
+        scrollToTop(app)
         let deadline = Date().addingTimeInterval(timeout)
         var down = 0
         while Date() < deadline {
             if fuelListed(name, in: app) || fuelRowLabel(name, in: app).exists {
                 return
             }
-            if down >= 14 {
+            if down >= 4 {
                 scrollToTop(app)
                 down = 0
             } else {
@@ -427,7 +527,7 @@ final class CoreJourneyUITests: XCTestCase {
             assertNoEmptyGasMessage(in: app)
             let searching = app.staticTexts["Searching for gas along the route…"].exists
                 || app.staticTexts["Searching along your route…"].exists
-                || app.descendants(matching: .any).matching(identifier: "replanBanner").firstMatch.exists
+                || replanBannerIsUp(in: app)
             let station = ["Pilot Madison", "On Route Fuel", "Shell Knoxville", "Quick Stop", "Home Fuel"]
                 .contains { name in
                     fuelListed(name, in: app)
@@ -709,7 +809,9 @@ final class CoreJourneyUITests: XCTestCase {
     /// beside the sheet on a regular-width iPad.
     private func swipePlanningList(in app: XCUIApplication, up: Bool) {
         let list = planningList(in: app)
-        if list.elementType != .application, list.exists, list.isHittable {
+        // iPad can report the sheet list as not hittable while a drag inside
+        // its frame still scrolls it. Require a real frame, not isHittable.
+        if list.elementType != .application, list.exists, list.frame.width > 40, list.frame.height > 40 {
             let startY: CGFloat = up ? 0.8 : 0.3
             let endY: CGFloat = up ? 0.3 : 0.8
             let start = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: startY))
