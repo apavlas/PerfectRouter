@@ -1,6 +1,27 @@
 import SwiftUI
 import MapKit
 
+/// Nav-bar copy of the replan sentence. A large iPad sheet covers the map
+/// chip, and the in-list row is gone once that section scrolls away. The
+/// idle glyph stays in the item so the bar never drops to zero focus children.
+private struct NavigationReplanBanner: View {
+    var calculating: Bool
+    var status: String
+
+    var body: some View {
+        Text(verbatim: calculating ? "Replanning…" : "·")
+            .font(.caption.weight(.semibold))
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .opacity(calculating ? 1 : 0)
+            .accessibilityIdentifier(calculating ? AccessibilityID.replanBanner : "replanNavIdle")
+            .accessibilityLabel(calculating ? status : " ")
+            .accessibilityHidden(!calculating)
+            .allowsHitTesting(false)
+            .focusable()
+    }
+}
+
 struct ContentView: View {
     /// Becomes `true` once the launch splash has faded, signaling that it's a
     /// good time to ask for location permission (so the system alert doesn't
@@ -251,7 +272,10 @@ struct ContentView: View {
     /// stays in the inset when nothing is replanning, so the container never
     /// drops to zero children.
     private var sheetReplanBanner: some View {
-        let showing = showsMapReplanBanner
+        // The map chip waits for an existing line. This one is the copy that
+        // stays in the sheet for the whole calculation, including the moment
+        // a large iPad sheet covers the map.
+        let showing = viewModel.isCalculating
         let status = RoutePlannerViewModel.routeReplanStatus(style: viewModel.routeStyle)
         return Text(showing ? status : " ")
             .font(showing ? .subheadline.weight(.semibold) : .system(size: 1))
@@ -398,6 +422,16 @@ struct ContentView: View {
                 }
             }
             .toolbar {
+                // The sheet list drops its banner row when that section is
+                // scrolled off, and the map chip sits behind a large iPad
+                // sheet. This bar item stays on screen for the whole
+                // calculation. Idle text is a glyph, not an empty container.
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationReplanBanner(
+                        calculating: viewModel.isCalculating,
+                        status: RoutePlannerViewModel.routeReplanStatus(style: viewModel.routeStyle)
+                    )
+                }
                 ToolbarItem(placement: .topBarLeading) {
                     Menu {
                         Button {
