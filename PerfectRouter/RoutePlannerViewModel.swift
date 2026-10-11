@@ -407,6 +407,11 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             stopSearchOverride = nil
             placeSearchOverride = nil
         }
+        if UITestStubLaunch.isEnabled {
+            // Before the reads below. Otherwise a previous test's Scenic
+            // style or tank value is the plan this launch recommends.
+            UITestStubLaunch.resetPersistedRidePreferences()
+        }
         super.init()
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters
@@ -676,9 +681,36 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     }
 
     /// Category suggestions the rider can still add. Places already on the
-    /// route (including an applied gas stop) are left off the list.
+    /// route, and stops already shown in the fuel plan, are left off so the
+    /// sheet does not list the same pump twice (riding time in the summary,
+    /// and again as "~80 mi from start").
     var addableSuggestions: [SuggestedStop] {
-        suggestedStops.filter { !isStopOnRoute($0) }
+        suggestedStops.filter { stop in
+            !isStopOnRoute(stop) && !isShownAsFuelPlanRow(stop)
+        }
+    }
+
+    /// True when the summary already renders this place as a fuel row.
+    func isShownAsFuelPlanRow(_ stop: SuggestedStop) -> Bool {
+        visibleFuelPlanEntries.contains { entry in
+            switch entry {
+            case .recommended(let fuel), .pastRange(let fuel):
+                return Self.sameFuelPlace(fuel, stop)
+            case .gap:
+                return false
+            }
+        }
+    }
+
+    /// Identifier whose suffix is the in-range recommendations, in ride
+    /// order. UI tests wait for these names instead of a station that is
+    /// only a map pin.
+    var recommendedFuelPlanAccessibilityID: String {
+        let names = visibleFuelPlanEntries.compactMap { entry -> String? in
+            guard case .recommended(let stop) = entry else { return nil }
+            return stop.name
+        }
+        return "recommendedFuelPlan." + names.joined(separator: "|")
     }
 
     /// Gas stations on the rider's side of travel (no crossing oncoming

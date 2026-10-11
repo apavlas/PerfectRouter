@@ -23,12 +23,26 @@ struct RideSummarySection: View {
                 } else {
                     FocusPlaceholderRow()
                 }
-                HStack {
-                    Label(formattedRideDistance(viewModel.totalDistanceMeters), systemImage: "road.lanes")
-                    Spacer()
-                    Label(formattedDuration(viewModel.totalExpectedTravelTime), systemImage: "clock")
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack {
+                        Label(formattedRideDistance(viewModel.totalDistanceMeters), systemImage: "road.lanes")
+                        Spacer()
+                        Label(formattedDuration(viewModel.totalExpectedTravelTime), systemImage: "clock")
+                    }
+                    .foregroundStyle(viewModel.isCalculating ? .secondary : .primary)
+                    // Sits in the distance row, which the list always exposes.
+                    // A separate one-point row was easy for the lazy list to
+                    // omit, and combining this identifier onto the distance
+                    // stack hid the mileage label. Not focusable() on the
+                    // stack: that would group the children and hide this id.
+                    Text(verbatim: "Ride summary")
+                        .font(.system(size: 1))
+                        .foregroundStyle(.clear)
+                        .frame(maxWidth: .infinity, minHeight: 1, maxHeight: 1)
+                        .accessibilityIdentifier(viewModel.recommendedFuelPlanAccessibilityID)
+                        .accessibilityLabel(Text(verbatim: "Ride summary"))
+                        .focusable()
                 }
-                .foregroundStyle(viewModel.isCalculating ? .secondary : .primary)
                 if !viewModel.bufferedGasStops.isEmpty {
                     BufferedGasApplyRow(viewModel: viewModel)
                 } else {

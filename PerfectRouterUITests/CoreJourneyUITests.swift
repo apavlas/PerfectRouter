@@ -78,7 +78,12 @@ final class CoreJourneyUITests: XCTestCase {
 
         assertReplanBanner(contains: "Fastest", in: app)
         waitForBannerToFinish(in: app)
-        waitForFuelName("Pilot Madison", in: app)
+        // Apply turns the recommendations into waypoints. There is no
+        // fuel-stop row for Pilot Madison after that.
+        XCTAssertTrue(
+            reveal("waypoint.Pilot Madison", in: app).exists,
+            diagnosticTree(app)
+        )
 
         XCTAssertEqual(routeGeneration(in: app), before + 1)
         XCTAssertFalse(identified("routeGeneration.\(before + 2)", in: app).exists)
@@ -98,7 +103,10 @@ final class CoreJourneyUITests: XCTestCase {
         tapApply(in: app)
         assertReplanBanner(contains: "Fastest", in: app)
         waitForBannerToFinish(in: app)
-        waitForFuelName("Pilot Madison", in: app)
+        XCTAssertTrue(
+            reveal("waypoint.Pilot Madison", in: app).exists,
+            diagnosticTree(app)
+        )
 
         let afterApply = waypointNames(in: app)
         let select = app.buttons["selectRecommended"]
@@ -108,7 +116,10 @@ final class CoreJourneyUITests: XCTestCase {
             if app.buttons["applyStops"].waitForExistence(timeout: 1) {
                 tapApply(in: app)
                 waitForBannerToFinish(in: app)
-                waitForFuelName("Pilot Madison", in: app)
+                XCTAssertTrue(
+                    reveal("waypoint.Pilot Madison", in: app).exists,
+                    diagnosticTree(app)
+                )
             }
         }
 
@@ -129,7 +140,9 @@ final class CoreJourneyUITests: XCTestCase {
             assertReplanBanner(contains: style, in: app)
             waitForBannerToFinish(in: app)
             waitForNavigate(in: app)
-            waitForFuelName("Pilot Madison", in: app)
+            // A bowed style can recommend a different pump. Wait for the
+            // stations the planner published, not a name that is only a pin.
+            _ = waitForPublishedRecommendations(in: app)
             assertNoEmptyGasMessage(in: app)
             XCTAssertFalse(
                 app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Routing failed'")).firstMatch.exists
@@ -201,9 +214,12 @@ final class CoreJourneyUITests: XCTestCase {
         search("Test Origin", in: app)
         search("Test Destination", in: app)
         expandPlanningSheet(app)
-        waitForFuelName("Pilot Madison", in: app)
-        waitForFuelName("On Route Fuel", in: app)
-        waitForFuelName("Shell Knoxville", in: app)
+        let names = waitForPublishedRecommendations(in: app)
+        XCTAssertEqual(
+            names,
+            ["Pilot Madison", "On Route Fuel", "Shell Knoxville"],
+            "The 100-mile stub plan did not match the fixture.\n\n\(diagnosticTree(app))"
+        )
         assertNoEmptyGasMessage(in: app)
     }
 
@@ -212,8 +228,11 @@ final class CoreJourneyUITests: XCTestCase {
         XCTAssertTrue(identified("waypoint.On Route Fuel", in: app).waitForExistence(timeout: 5))
         assertReplanBanner(contains: "Fastest", in: app)
         waitForBannerToFinish(in: app)
-        waitForFuelName("Pilot Madison", in: app)
-        waitForFuelName("Shell Knoxville", in: app)
+        let names = waitForPublishedRecommendations(in: app)
+        XCTAssertFalse(
+            names.contains("On Route Fuel"),
+            "On Route Fuel stayed a recommendation after it was a waypoint: \(names)\n\n\(diagnosticTree(app))"
+        )
         XCTAssertFalse(fuel("On Route Fuel", checked: false, in: app).exists)
         XCTAssertFalse(fuel("On Route Fuel", checked: true, in: app).exists)
     }
@@ -484,20 +503,42 @@ final class CoreJourneyUITests: XCTestCase {
         ).firstMatch.exists
     }
 
-    /// Scrolls the planning sheet while waiting. SwiftUI lists omit rows that
-    /// are off screen, so an identifier that is in the view tree can still be
-    /// absent until the row is brought on.
-    private func waitForFuelName(_ name: String, in app: XCUIApplication, timeout: TimeInterval = 25) {
-        // Fuel rows sit under the summary, which is near the top. They are
-        // published once the stubbed request returns, so keep coming back
-        // to the top instead of parking at the bottom of the sheet.
+    /// Names the summary is currently recommending, in ride order. Empty
+    /// while a replan has cleared the rows and not published the next plan.
+    private func publishedFuelNames(in app: XCUIApplication) -> [String] {
+        let element = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'recommendedFuelPlan.'"))
+            .firstMatch
+        guard element.exists else { return [] }
+        let suffix = String(element.identifier.dropFirst("recommendedFuelPlan.".count))
+        guard !suffix.isEmpty else { return [] }
+        return suffix.split(separator: "|").map(String.init)
+    }
+
+    /// Scrolls until every station the planner published is a fuel row or,
+    /// after Apply, a waypoint. A map pin alone does not count. The plan id
+    /// and a lower row do not have to be on screen in the same frame.
+    private func waitForPublishedRecommendations(
+        in app: XCUIApplication,
+        timeout: TimeInterval = 25
+    ) -> [String] {
         expandPlanningSheet(app)
         scrollToTop(app)
         let deadline = Date().addingTimeInterval(timeout)
         var down = 0
+        var latest: [String] = []
+        var confirmed = Set<String>()
         while Date() < deadline {
-            if fuelListed(name, in: app) || fuelRowLabel(name, in: app).exists {
-                return
+            let published = publishedFuelNames(in: app)
+            if !published.isEmpty && published != latest {
+                latest = published
+                confirmed = confirmed.filter { published.contains($0) }
+            }
+            for name in latest where fuelStopOrWaypoint(name, in: app) {
+                confirmed.insert(name)
+            }
+            if !latest.isEmpty, latest.allSatisfy({ confirmed.contains($0) }) {
+                return latest
             }
             if down >= 4 {
                 scrollToTop(app)
@@ -508,20 +549,22 @@ final class CoreJourneyUITests: XCTestCase {
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.12))
         }
-        let unchecked = "fuelStop.\(name).unchecked"
-        let checked = "fuelStop.\(name).checked"
-        XCTFail(
-            """
-            Fuel stop \(name) did not appear.
-            mapPin=\(mapShowsStation(name, in: app))
-            buttonUnchecked=\(app.buttons[unchecked].exists) buttonChecked=\(app.buttons[checked].exists)
-            idUnchecked=\(identified(unchecked, in: app).exists) idChecked=\(identified(checked, in: app).exists)
-            label=\(fuelRowLabel(name, in: app).exists)
-            staticText=\(app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'Fuel stop' AND label CONTAINS %@", name)).firstMatch.exists)
+        let detail = latest.map { name -> String in
+            let row = fuelListed(name, in: app) || fuelRowLabel(name, in: app).exists
+            let waypoint = identified("waypoint.\(name)", in: app).exists
+            let pin = mapShowsStation(name, in: app)
+            let seen = confirmed.contains(name)
+            return "\(name) row=\(row) waypoint=\(waypoint) pin=\(pin) seen=\(seen)"
+        }.joined(separator: "\n")
+        XCTFail("Published fuel plan did not appear as rows.\nplan=\(latest)\n\(detail)\n\n\(diagnosticTree(app))")
+        return latest
+    }
 
-            \(diagnosticTree(app))
-            """
-        )
+    /// A recommended stop leaves the fuel list once Apply makes it a waypoint.
+    private func fuelStopOrWaypoint(_ name: String, in app: XCUIApplication) -> Bool {
+        fuelListed(name, in: app)
+            || fuelRowLabel(name, in: app).exists
+            || identified("waypoint.\(name)", in: app).exists
     }
 
     /// List rows read "Fuel stop N: Name …". Map pins use the bare name, so
@@ -760,7 +803,7 @@ final class CoreJourneyUITests: XCTestCase {
     private func diagnosticTree(_ app: XCUIApplication) -> String {
         let full = app.debugDescription
         let keywords = [
-            "fuelStop", "Fuel stop", "Pilot", "Madison", "Shell", "On Route",
+            "fuelStop", "Fuel stop", "recommendedFuelPlan", "Pilot", "Madison", "Shell", "On Route",
             "Quick Stop", "Home Fuel", "selectRecommended", "tankRange",
             "leaveLater", "routeStyle", "waypoint.", "noGas", "replan",
             "Plan Ride", "gas station", "Navigate", "Apply", "placeSearch"

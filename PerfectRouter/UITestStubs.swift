@@ -10,6 +10,20 @@ enum UITestStubLaunch {
     static var isEnabled: Bool {
         ProcessInfo.processInfo.arguments.contains(argument)
     }
+
+    /// UI tests share the simulator's defaults. A style change or tank edit
+    /// in one test must not decide the next test's fuel plan. Called only
+    /// from a stub launch.
+    static func resetPersistedRidePreferences() {
+        UserDefaults.standard.set(
+            RouteStyle.fastest.rawValue,
+            forKey: AppSettings.Keys.routeStyle
+        )
+        UserDefaults.standard.set(
+            AppSettings.defaultFuelRangeMilesDefault,
+            forKey: AppSettings.Keys.defaultFuelRangeMiles
+        )
+    }
 }
 
 /// Fixed ride used by simulator UI tests. The road runs due north from
