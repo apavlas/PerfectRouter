@@ -12,6 +12,38 @@ final class PlaceDescriptionTests: XCTestCase {
 
     func testCollapsedCardsUseTwoLines() {
         XCTAssertEqual(PlaceDescriptionDisplay.collapsedLineLimit, 2)
+        XCTAssertEqual(PlaceDescriptionDisplay.rowSentenceLimit, 2)
+    }
+
+    func testRowKeepsAtMostTwoSentencesAndTheSheetKeepsTheRest() {
+        let source = "First published sentence. Second published sentence. Third sentence stays in the sheet."
+        XCTAssertEqual(PlaceDescriptionDisplay.text(for: source), source)
+        XCTAssertEqual(
+            PlaceDescriptionDisplay.rowText(for: source),
+            "First published sentence. Second published sentence."
+        )
+        XCTAssertNil(PlaceDescriptionDisplay.rowText(for: nil))
+        XCTAssertNil(PlaceDescriptionDisplay.rowText(for: "   "))
+        XCTAssertEqual(
+            PlaceDescriptionDisplay.rowText(for: "Only one sentence."),
+            "Only one sentence."
+        )
+    }
+
+    func testStreetAndMountainAbbreviationsAreNotSentenceEnds() {
+        let source = "The trail starts on Main St. near the river. It climbs Mt. Mitchell after the bridge. Bring water."
+        XCTAssertEqual(
+            PlaceDescriptionDisplay.rowText(for: source),
+            "The trail starts on Main St. near the river. It climbs Mt. Mitchell after the bridge."
+        )
+        XCTAssertEqual(
+            PlaceDescriptionDisplay.rowText(for: "Visit St. Louis today. The arch is downtown. Go early."),
+            "Visit St. Louis today. The arch is downtown."
+        )
+        XCTAssertEqual(
+            PlaceDescriptionDisplay.rowText(for: "Watch the edge! Is the path open? Bring a light."),
+            "Watch the edge! Is the path open?"
+        )
     }
 
     func testBlankTextIsNoDescription() {

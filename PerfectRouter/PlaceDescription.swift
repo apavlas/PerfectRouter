@@ -1,18 +1,28 @@
 import Foundation
 import MapKit
 
-/// Collapsed cards show two lines. The sheet shows this same string in full.
+/// The row shows at most two sentences, then clips those to two lines.
+/// The sheet shows the same source string in full.
 ///
 /// Apple Maps place objects expose a name, address, category, phone, and URL.
-/// A card shows text only when MapKit already stored a sentence, or when the
-/// place's own page published a description. Nothing is written to fill a gap.
+/// A card shows text only when `MKPlacemark.subtitle` is already a sentence,
+/// or when the place's own page published a description. Nothing is written
+/// to fill a gap.
 enum PlaceDescriptionDisplay {
     static let collapsedLineLimit = 2
+    static let rowSentenceLimit = 2
 
     /// Blank input is "no description". Non-blank input is returned unchanged
-    /// aside from trimming and collapsing whitespace.
+    /// aside from trimming and collapsing whitespace. This is the sheet text.
     static func text(for description: String?) -> String? {
         PlaceDescriptionReader.normalize(description)
+    }
+
+    /// The row's copy of `text(for:)`, cut after the second sentence.
+    /// "St." and "Mt." are not endings. A shorter source is returned whole.
+    static func rowText(for description: String?) -> String? {
+        guard let text = text(for: description) else { return nil }
+        return PlaceDescriptionReader.firstSentences(in: text, limit: rowSentenceLimit)
     }
 }
 
@@ -169,6 +179,23 @@ enum PlaceDescriptionReader {
         return hasSentenceEnding(text)
     }
 
+    /// Prefix through the `limit`th real sentence ending. Fewer endings
+    /// returns `text` unchanged. Periods in "St." and "Mt." do not count.
+    static func firstSentences(in text: String, limit: Int) -> String {
+        guard limit > 0 else { return text }
+        let scalars = Array(text)
+        var found = 0
+        for index in scalars.indices {
+            guard isSentenceEnding(scalars, at: index) else { continue }
+            found += 1
+            if found == limit {
+                let end = text.index(text.startIndex, offsetBy: index + 1)
+                return String(text[..<end])
+            }
+        }
+        return text
+    }
+
     // MARK: - HTML
 
     static func metaContent(in html: String, attribute: String, equals expected: String) -> String? {
@@ -218,18 +245,21 @@ enum PlaceDescriptionReader {
 
     static func hasSentenceEnding(_ text: String) -> Bool {
         let scalars = Array(text)
-        for index in scalars.indices {
-            let character = scalars[index]
-            guard character == "." || character == "!" || character == "?" else { continue }
-            if character == "." {
-                let word = wordImmediatelyBefore(scalars, index: index).lowercased()
-                if word.isEmpty || word.count <= 1 || abbreviations.contains(word) { continue }
-            }
-            let next = index + 1
-            if next == scalars.count { return true }
-            if scalars[next].isWhitespace || scalars[next] == "\"" || scalars[next] == "”" { return true }
+        return scalars.indices.contains { isSentenceEnding(scalars, at: $0) }
+    }
+
+    /// A `.`, `!`, or `?` that closes a sentence. A period after "St." or
+    /// "Mt." does not, and neither does a one-letter initial.
+    private static func isSentenceEnding(_ scalars: [Character], at index: Int) -> Bool {
+        let character = scalars[index]
+        guard character == "." || character == "!" || character == "?" else { return false }
+        if character == "." {
+            let word = wordImmediatelyBefore(scalars, index: index).lowercased()
+            if word.isEmpty || word.count <= 1 || abbreviations.contains(word) { return false }
         }
-        return false
+        let next = index + 1
+        if next == scalars.count { return true }
+        return scalars[next].isWhitespace || scalars[next] == "\"" || scalars[next] == "”"
     }
 
     private static func wordImmediatelyBefore(_ scalars: [Character], index: Int) -> String {

@@ -59,13 +59,15 @@ final class CoreJourneyUITests: XCTestCase {
         )
         let clippedLabel = description.label
         XCTAssertTrue(
-            clippedLabel.hasPrefix("Granite walls drop from the rim"),
+            clippedLabel.hasPrefix("UI test fixture sentence one"),
             clippedLabel
         )
-        if clippedLabel.contains("The last overlook faces the river bend.") {
-            XCTAssertGreaterThan(clippedLabel.count, 280, clippedLabel)
-        }
-        // Two lines of subheadline. The label may still be the full paragraph.
+        XCTAssertFalse(
+            clippedLabel.contains("UI test fixture sentence three"),
+            "The row showed more than the first two sentences: \(clippedLabel)"
+        )
+        // The label is the first two sentences. The frame is those sentences
+        // clipped to two lines of subheadline.
         XCTAssertGreaterThan(description.frame.height, 12, "Description had no height")
         XCTAssertLessThan(
             description.frame.height,
@@ -90,15 +92,12 @@ final class CoreJourneyUITests: XCTestCase {
             full.waitForExistence(timeout: 5),
             "Tapping the clipped description did not open the full text.\n\(diagnosticTree(app))"
         )
-        XCTAssertTrue(full.label.hasPrefix("Granite walls drop from the rim"), full.label)
+        XCTAssertTrue(full.label.hasPrefix("UI test fixture sentence one"), full.label)
         XCTAssertTrue(
-            full.label.contains("The last overlook faces the river bend."),
+            full.label.contains("UI test fixture sentence three appears only in the full sheet."),
             full.label
         )
-        XCTAssertGreaterThanOrEqual(full.label.count, clippedLabel.count)
-        if !clippedLabel.contains("The last overlook faces the river bend.") {
-            XCTAssertGreaterThan(full.label.count, clippedLabel.count)
-        }
+        XCTAssertGreaterThan(full.label.count, clippedLabel.count)
         attachScreenshot("Ride highlight description expanded", of: app)
     }
 

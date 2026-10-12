@@ -15,7 +15,7 @@ struct RideHighlightsSection: View {
             ForEach(viewModel.rideHighlights) { stop in
                 PlaceDescriptionCard(
                     name: stop.name,
-                    placeDescription: PlaceDescriptionDisplay.text(for: stop.placeDescription),
+                    placeDescription: PlaceDescriptionDisplay.rowText(for: stop.placeDescription),
                     detail: detailText(for: stop),
                     systemImage: "star.fill",
                     iconColor: .purple,

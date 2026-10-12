@@ -356,7 +356,7 @@ struct SuggestionsSection: View {
     ) -> some View {
         let card = PlaceDescriptionCard(
             name: title,
-            placeDescription: PlaceDescriptionDisplay.text(for: stop.placeDescription),
+            placeDescription: PlaceDescriptionDisplay.rowText(for: stop.placeDescription),
             detail: caption,
             systemImage: stop.category.systemImage,
             titleIdentifier: accessibility?.identifier ?? "",

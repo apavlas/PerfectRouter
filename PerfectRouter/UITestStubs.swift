@@ -68,10 +68,12 @@ enum UITestFixture {
 
     static let describedHighlightName = "Tallulah Gorge"
     static let plainHighlightName = "Bare Overlook"
-    /// Long enough that two lines of subheadline cannot show the last sentence.
-    static let publishedHighlightDescription = "Granite walls drop from the rim straight down to the river in a series of shelves. A short trail follows the overlook above the water for a few quiet minutes. Picnic tables sit back from the edge under the pines, away from the drop. Riders leave the motorcycle at the pullout and walk the rim path. The gorge stays in view the whole way along the fence. The last overlook faces the river bend."
-    static let highlightDescriptionOpening = "Granite walls drop from the rim"
-    static let highlightDescriptionTail = "The last overlook faces the river bend."
+    /// Canned UI-test copy only. A normal launch never builds these stops.
+    /// Two long sentences land on the row; later sentences exist so the sheet
+    /// can show text the row does not.
+    static let publishedHighlightDescription = "UI test fixture sentence one describes the canned highlight and keeps going so the row cannot show it all. UI test fixture sentence two is also on the row and continues past two lines of subheadline. UI test fixture sentence three appears only in the full sheet. UI test fixture sentence four is stub data and not a real place description."
+    static let highlightDescriptionOpening = "UI test fixture sentence one"
+    static let highlightDescriptionTail = "UI test fixture sentence three appears only in the full sheet."
 
     static let highlights: [Highlight] = [
         Highlight(
@@ -88,9 +90,8 @@ enum UITestFixture {
         ),
     ]
 
-    /// Projects canned sights onto the stub polyline. A description already
-    /// on the stop is the place's published text; the plain sight has none
-    /// and no page to fetch.
+    /// Projects canned sights onto the stub polyline. The paragraph is fixture
+    /// text for the UI test, not a MapKit field. The plain sight has none.
     static func attractionStops(
         alongPolylines polylines: [[CLLocationCoordinate2D]],
         corridorRadiusMeters: CLLocationDistance
