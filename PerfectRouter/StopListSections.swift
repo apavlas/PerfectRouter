@@ -219,6 +219,7 @@ struct WaypointsSection: View {
                     Text(waypoint.name)
                         .multilineTextAlignment(.leading)
                         .lineLimit(4)
+                        .accessibilityIdentifier(AccessibilityID.waypoint(waypoint.name))
                     Text(caption)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -229,6 +230,7 @@ struct WaypointsSection: View {
                 Text(waypoint.name)
                     .multilineTextAlignment(.leading)
                     .lineLimit(4)
+                    .accessibilityIdentifier(AccessibilityID.waypoint(waypoint.name))
             }
         } icon: {
             Image(systemName: "mappin.circle.fill")

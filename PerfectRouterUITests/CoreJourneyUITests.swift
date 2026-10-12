@@ -143,10 +143,7 @@ final class CoreJourneyUITests: XCTestCase {
         waitForBannerToFinish(in: app)
         // Apply turns the recommendations into waypoints. There is no
         // fuel-stop row for Pilot Madison after that.
-        XCTAssertTrue(
-            reveal("waypoint.Pilot Madison", in: app).exists,
-            diagnosticTree(app)
-        )
+        assertWaypointListed("Pilot Madison", in: app)
 
         XCTAssertEqual(routeGeneration(in: app), before + 1)
         XCTAssertFalse(identified("routeGeneration.\(before + 2)", in: app).exists)
@@ -166,10 +163,7 @@ final class CoreJourneyUITests: XCTestCase {
         tapApply(in: app)
         assertReplanBanner(contains: "Fastest", in: app)
         waitForBannerToFinish(in: app)
-        XCTAssertTrue(
-            reveal("waypoint.Pilot Madison", in: app).exists,
-            diagnosticTree(app)
-        )
+        assertWaypointListed("Pilot Madison", in: app)
 
         let afterApply = waypointNames(in: app)
         let select = app.buttons["selectRecommended"]
@@ -179,10 +173,7 @@ final class CoreJourneyUITests: XCTestCase {
             if app.buttons["applyStops"].waitForExistence(timeout: 1) {
                 tapApply(in: app)
                 waitForBannerToFinish(in: app)
-                XCTAssertTrue(
-                    reveal("waypoint.Pilot Madison", in: app).exists,
-                    diagnosticTree(app)
-                )
+                assertWaypointListed("Pilot Madison", in: app)
             }
         }
 
@@ -364,28 +355,58 @@ final class CoreJourneyUITests: XCTestCase {
         return nil
     }
 
-    /// Navigate sits in the summary. On iPad that section is below the fold
-    /// after a fuel or tank scroll, so existence alone misses it.
-    private func waitForNavigate(in app: XCUIApplication, timeout: TimeInterval = 15) {
+    /// Navigate stays in the summary for as long as the route has legs. It is
+    /// not removed by a replan. A half-list fling jumps over that one row, so
+    /// walk down from the search field in short steps.
+    private func waitForNavigate(in app: XCUIApplication, timeout: TimeInterval = 20) {
         expandPlanningSheet(app)
+        scrollToTop(app)
         let deadline = Date().addingTimeInterval(timeout)
         var down = 0
         while Date() < deadline {
-            if app.buttons["Navigate"].firstMatch.exists { return }
-            let labeled = app.descendants(matching: .any)
-                .matching(NSPredicate(format: "label == 'Navigate'"))
-                .firstMatch
-            if labeled.exists { return }
-            if down >= 4 {
+            if navigateButton(in: app).exists { return }
+            if down >= 10 {
                 scrollToTop(app)
                 down = 0
             } else {
-                swipePlanningList(in: app, up: true)
+                nudgePlanningList(in: app, up: true)
                 down += 1
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.12))
         }
-        XCTFail("Navigate did not appear\n\n\(diagnosticTree(app))")
+        let labeled = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS 'Navigate'"))
+            .firstMatch
+        XCTFail(
+            "Navigate did not appear. id=\(identified("navigate", in: app).exists) label=\(labeled.exists) '\(labeled.label)'\n\n\(diagnosticTree(app))"
+        )
+    }
+
+    /// The summary hand-off. Identifier first: the symbol on the button can
+    /// change the accessibility label without changing the control.
+    private func navigateButton(in app: XCUIApplication) -> XCUIElement {
+        let byID = identified("navigate", in: app)
+        if byID.exists { return byID }
+        let button = app.buttons["Navigate"].firstMatch
+        if button.exists { return button }
+        return app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == 'Navigate' OR label BEGINSWITH 'Navigate,'"))
+            .firstMatch
+    }
+
+    /// A short, slow drag. The planning-list swipe is half the sheet and
+    /// keeps going after the finger lifts, which skips the Navigate row.
+    private func nudgePlanningList(in app: XCUIApplication, up: Bool) {
+        let list = planningList(in: app)
+        guard list.elementType != .application, list.exists, list.frame.width > 40, list.frame.height > 40 else {
+            swipePlanningList(in: app, up: up)
+            return
+        }
+        let startY: CGFloat = up ? 0.58 : 0.42
+        let endY: CGFloat = up ? 0.42 : 0.58
+        let start = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: startY))
+        let end = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: endY))
+        start.press(forDuration: 0.25, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2)
     }
 
     private func tapApply(in app: XCUIApplication) {
@@ -477,33 +498,51 @@ final class CoreJourneyUITests: XCTestCase {
         if bannerShows(style, in: app) { return }
         dismissKeyboard(app)
         expandPlanningSheet(app)
-        let deadline = Date().addingTimeInterval(8)
+        // Four applied stops are four sequential stub requests. Keep looking
+        // until that line can finish, then accept the banner or the completed
+        // replan. A gas-search spinner means the route request already ended.
+        let deadline = Date().addingTimeInterval(20)
         var lastLabel = ""
         var nudges = 0
         while Date() < deadline {
             if bannerShows(style, in: app, lastLabel: &lastLabel) { return }
-            // iPad can park the in-list copy under the fold. Nudge toward
-            // the top between polls; the pinned sheet banner needs no scroll.
+            if nudges >= 4, routeRequestHasFinished(style: style, in: app) { return }
+            // iPad can park the in-list copy under the fold. Alternate
+            // toward the top and just past it; the nav-bar copy needs no scroll.
             if nudges % 3 == 2 {
-                swipePlanningList(in: app, up: false)
+                swipePlanningList(in: app, up: (nudges / 3) % 2 == 1)
             }
             nudges += 1
             RunLoop.current.run(until: Date().addingTimeInterval(0.12))
         }
-        // A stub replan can finish before the banner is queried. The style
-        // landing, with the route still drawn, is the same outcome.
-        expandPlanningSheet(app)
-        _ = reveal("activeRouteStyle", in: app)
-        let active = identified("activeRouteStyle", in: app)
-        let styleLanded = active.exists && active.label == style
-        let routeHeld = app.buttons["Navigate"].exists
-            || fuelListed("Pilot Madison", in: app)
-            || fuelListed("Shell Knoxville", in: app)
-            || mapShowsStation("Pilot Madison", in: app)
+        if bannerShows(style, in: app, lastLabel: &lastLabel) { return }
+        if routeRequestHasFinished(style: style, in: app) { return }
+        let bannerIDs = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier CONTAINS 'replan'"))
+            .allElementsBoundByIndex
+            .map { "\($0.identifier) label=\($0.label)" }
+            .joined(separator: "\n")
+        XCTFail("Replanning banner for \(style) did not appear (last label: \(lastLabel))\nBanner ids:\n\(bannerIDs)\n\n\(diagnosticTree(app))")
+    }
+
+    /// The route request is done. Gas search may still be spinning; that
+    /// starts only after `isCalculating` drops and the banner comes down.
+    /// A style control that is on screen must already show `style`, so a
+    /// leftover plan from the previous style does not count.
+    private func routeRequestHasFinished(style: String, in app: XCUIApplication) -> Bool {
+        if replanBannerIsUp(in: app) { return false }
         let failed = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Routing failed'")).firstMatch.exists
             || app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'No route found'")).firstMatch.exists
-        if styleLanded && routeHeld && !failed { return }
-        XCTFail("Replanning banner for \(style) did not appear (last label: \(lastLabel))\n\n\(diagnosticTree(app))")
+        if failed { return false }
+        let active = identified("activeRouteStyle", in: app)
+        if active.exists, active.label != style { return false }
+        // "Searching along your route…" is also the in-list copy while the
+        // line is still calculating, so it is not proof the request finished.
+        // The gas-search sentence and a republished plan both start after
+        // `isCalculating` drops.
+        let gasFollowUp = app.staticTexts["Searching for gas along the route…"].exists
+            || !publishedFuelNames(in: app).isEmpty
+        return gasFollowUp
     }
 
     private func waitForBannerToFinish(in app: XCUIApplication) {
@@ -740,7 +779,7 @@ final class CoreJourneyUITests: XCTestCase {
             ordered.append(contentsOf: names)
         }
         absorb(visibleNames())
-        for _ in 0..<8 {
+        for _ in 0..<12 {
             swipePlanningList(in: app, up: true)
             absorb(visibleNames())
         }
@@ -765,6 +804,37 @@ final class CoreJourneyUITests: XCTestCase {
         XCTAssertTrue(element.isHittable, "Control was not on screen.\n\n\(diagnosticTree(app))")
     }
 
+    /// Route rows only. Map pins use the bare station name and are not stops
+    /// on the ride. The failure names the rows that were found so a pin dump
+    /// is not read as a duplicate list.
+    private func assertWaypointListed(
+        _ name: String,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        expandPlanningSheet(app)
+        scrollToTop(app)
+        var names = waypointNames(in: app)
+        if !names.contains(name) {
+            scrollToTop(app)
+            names = waypointNames(in: app)
+        }
+        let pins = ["Pilot Madison", "On Route Fuel", "Shell Knoxville", "Quick Stop", "Home Fuel"]
+            .filter { mapShowsStation($0, in: app) }
+        XCTAssertTrue(
+            names.contains(name),
+            """
+            \(name) was not a route row.
+            Route rows: \(names)
+            Map pins: \(pins)
+            \(diagnosticTree(app))
+            """,
+            file: file,
+            line: line
+        )
+    }
+
     /// Brings `id` on screen. Does not fail; callers assert and attach the tree.
     private func reveal(_ id: String, in app: XCUIApplication, timeout: TimeInterval = 20) -> XCUIElement {
         revealEither([id], in: app, timeout: timeout)
@@ -772,6 +842,7 @@ final class CoreJourneyUITests: XCTestCase {
 
     private func revealEither(_ ids: [String], in app: XCUIApplication, timeout: TimeInterval) -> XCUIElement {
         expandPlanningSheet(app)
+        scrollToTop(app)
         let deadline = Date().addingTimeInterval(timeout)
         var down = 0
         while Date() < deadline {
@@ -886,7 +957,12 @@ final class CoreJourneyUITests: XCTestCase {
 
     private func scrollToTop(_ app: XCUIApplication) {
         expandPlanningSheet(app)
-        for _ in 0..<6 {
+        for _ in 0..<12 {
+            if let field = placeSearchField(in: app),
+               field.frame.height > 1,
+               field.frame.minY < app.frame.height * 0.55 {
+                return
+            }
             swipePlanningList(in: app, up: false)
         }
         expandPlanningSheet(app)

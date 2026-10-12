@@ -108,6 +108,8 @@ struct RideSummarySection: View {
                         .font(.headline)
                 }
                 .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier(AccessibilityID.navigate)
+                .accessibilityLabel("Navigate")
                 .listRowInsets(EdgeInsets())
                 .listRowBackground(Color.clear)
 
