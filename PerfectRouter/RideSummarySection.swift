@@ -305,6 +305,7 @@ private struct FuelPlanRows: View {
                         caption: viewModel.fuelStopRidingCaption(for: stop, pastRange: true),
                         titleColor: .orange
                     )
+                    PastYourRangeLabel()
                     bufferMark(viewModel.isGasBuffered(stop))
                         .accessibilityHidden(true)
                 }

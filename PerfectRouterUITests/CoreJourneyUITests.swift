@@ -115,43 +115,8 @@ final class CoreJourneyUITests: XCTestCase {
         planFixedRoute(in: app)
         addOnRouteFuel(in: app)
 
-        let select = reveal("selectRecommended", in: app)
-        scrollUntilHittable(select, in: app)
-        select.tap()
-
-        // Fuel rows sit above this button. A List only keeps on-screen cells,
-        // so scroll back up before reading the checked identifiers.
-        let fuels = scanFuelRows(in: app)
-        assertFuelRow("Pilot Madison", checked: true, in: fuels, app: app)
-        assertFuelRow("Shell Knoxville", checked: true, in: fuels, app: app)
-        XCTAssertFalse(fuels.mentions("On Route Fuel"), diagnosticTree(app))
-        XCTAssertFalse(fuels.mentions("Quick Stop"), diagnosticTree(app))
-        XCTAssertFalse(fuels.mentions("Home Fuel"), diagnosticTree(app))
-
-        _ = reveal("applyStops", in: app)
-        let apply = app.buttons["applyStops"].firstMatch
-        XCTAssertTrue(apply.exists, diagnosticTree(app))
-        XCTAssertTrue(
-            apply.label.contains("Apply 2 stops"),
-            "Select recommended included a stop that is not an in-range recommendation: \(apply.label)\n\(diagnosticTree(app))"
-        )
-        XCTAssertEqual(waypointNames(in: app).filter { $0 == "On Route Fuel" }.count, 1)
-    }
-
-    func testApplyReplansOnceWithStopsInRideOrder() {
-        let app = launch()
-        planFixedRoute(in: app)
-        addOnRouteFuel(in: app)
-        tapSelectRecommended(in: app)
-
         let before = routeGeneration(in: app)
-        tapApply(in: app)
-
-        assertReplanBanner(contains: "Fastest", in: app)
-        waitForBannerToFinish(in: app)
-        // Apply turns the recommendations into waypoints. There is no
-        // fuel-stop row for Pilot Madison after that.
-        assertWaypointListed("Pilot Madison", in: app)
+        tapSelectRecommended(in: app)
 
         XCTAssertEqual(routeGeneration(in: app), before + 1)
         XCTAssertFalse(identified("routeGeneration.\(before + 2)", in: app).exists)
@@ -159,6 +124,32 @@ final class CoreJourneyUITests: XCTestCase {
             waypointNames(in: app),
             ["Test Origin", "Pilot Madison", "On Route Fuel", "Shell Knoxville", "Test Destination"]
         )
+        XCTAssertEqual(waypointNames(in: app).filter { $0 == "On Route Fuel" }.count, 1)
+        XCTAssertFalse(fuel("Pilot Madison", checked: true, in: app).exists)
+        XCTAssertFalse(fuel("Pilot Madison", checked: false, in: app).exists)
+        XCTAssertFalse(fuel("Shell Knoxville", checked: true, in: app).exists)
+        XCTAssertFalse(fuel("Shell Knoxville", checked: false, in: app).exists)
+        XCTAssertFalse(fuel("Quick Stop", checked: false, in: app).exists)
+        XCTAssertFalse(fuel("Home Fuel", checked: false, in: app).exists)
+        XCTAssertFalse(app.buttons["applyStops"].firstMatch.exists, diagnosticTree(app))
+        assertNoEmptyGasMessage(in: app)
+    }
+
+    func testApplyReplansOnceWithStopsInRideOrder() {
+        let app = launch()
+        planFixedRoute(in: app)
+        addOnRouteFuel(in: app)
+        let before = routeGeneration(in: app)
+        tapSelectRecommended(in: app)
+
+        assertWaypointListed("Pilot Madison", in: app)
+        XCTAssertEqual(routeGeneration(in: app), before + 1)
+        XCTAssertFalse(identified("routeGeneration.\(before + 2)", in: app).exists)
+        XCTAssertEqual(
+            waypointNames(in: app),
+            ["Test Origin", "Pilot Madison", "On Route Fuel", "Shell Knoxville", "Test Destination"]
+        )
+        XCTAssertFalse(app.buttons["selectRecommended"].firstMatch.exists, diagnosticTree(app))
         assertNoEmptyGasMessage(in: app)
     }
 
@@ -167,10 +158,6 @@ final class CoreJourneyUITests: XCTestCase {
         planFixedRoute(in: app)
         addOnRouteFuel(in: app)
         tapSelectRecommended(in: app)
-
-        tapApply(in: app)
-        assertReplanBanner(contains: "Fastest", in: app)
-        waitForBannerToFinish(in: app)
         assertWaypointListed("Pilot Madison", in: app)
 
         let afterApply = waypointNames(in: app)
@@ -448,7 +435,9 @@ final class CoreJourneyUITests: XCTestCase {
         let select = reveal("selectRecommended", in: app)
         scrollUntilHittable(select, in: app)
         select.tap()
-        _ = reveal("fuelStop.Pilot Madison.checked", in: app)
+        assertReplanBanner(contains: "Fastest", in: app)
+        waitForBannerToFinish(in: app)
+        assertWaypointListed("Pilot Madison", in: app)
     }
 
     // MARK: - Route style

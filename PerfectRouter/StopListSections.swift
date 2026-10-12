@@ -95,7 +95,9 @@ struct GasStationsSection: View {
     @ViewBuilder
     private func gasRow(_ stop: SuggestedStop, recommended: Bool, pastRange: Bool = false) -> some View {
         let onRoute = viewModel.isStopOnRoute(stop)
-        let markedPast = pastRange || viewModel.isPastRangeFuelStop(stop)
+        let markedPast = pastRange
+            || viewModel.isPastRangeFuelStop(stop)
+            || viewModel.isBeyondRemainingRange(distanceAlongRoute: stop.distanceAlongRoute)
         let showsRidingTime = recommended || viewModel.isRecommendedFuelStop(stop) || markedPast
         let caption = showsRidingTime
             ? viewModel.fuelStopRidingCaption(for: stop, pastRange: markedPast)
@@ -120,9 +122,7 @@ struct GasStationsSection: View {
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.secondary)
                 } else if markedPast {
-                    Text("Past your range")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.orange)
+                    PastYourRangeLabel()
                 } else if recommended {
                     Text("Recommended")
                         .font(.caption2.weight(.semibold))
@@ -213,6 +213,7 @@ struct WaypointsSection: View {
     /// so a replan never leaves an empty stack in the row.
     @ViewBuilder
     private func waypointRow(index: Int, waypoint: Waypoint) -> some View {
+        let pastRange = viewModel.waypointIsBeyondRemainingRange(at: index)
         Label {
             if let caption = viewModel.waypointRidingCaption(at: index) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -225,6 +226,17 @@ struct WaypointsSection: View {
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.leading)
                         .lineLimit(4)
+                    if pastRange {
+                        PastYourRangeLabel()
+                    }
+                }
+            } else if pastRange {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(waypoint.name)
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(4)
+                        .accessibilityIdentifier(AccessibilityID.waypoint(waypoint.name))
+                    PastYourRangeLabel()
                 }
             } else {
                 Text(waypoint.name)
@@ -236,13 +248,27 @@ struct WaypointsSection: View {
             Image(systemName: "mappin.circle.fill")
                 .accessibilityHidden(true)
         }
+        .id(waypoint.id)
     }
 
     private func waypointAccessibilityLabel(index: Int, waypoint: Waypoint) -> String {
+        var parts = [waypoint.name]
         if let caption = viewModel.waypointRidingCaption(at: index) {
-            return "\(waypoint.name), \(caption)"
+            parts.append(caption)
         }
-        return waypoint.name
+        if viewModel.waypointIsBeyondRemainingRange(at: index) {
+            parts.append("Past your range")
+        }
+        return parts.joined(separator: ", ")
+    }
+}
+
+/// Orange caption on a stop the remaining tank cannot reach.
+struct PastYourRangeLabel: View {
+    var body: some View {
+        Text("Past your range")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.orange)
     }
 }
 
@@ -338,10 +364,24 @@ struct SuggestionsSection: View {
             ?? "~\(formattedRideDistance(stop.distanceAlongRoute)) from start"
         let accessibility = viewModel.recommendedFuelAccessibility(for: stop)
         let title = accessibility?.title ?? stop.name
+        let pastRange = viewModel.isPastRangeFuelStop(stop)
+            || viewModel.isBeyondRemainingRange(distanceAlongRoute: stop.distanceAlongRoute)
         if stop.category.showsPlaceDescription {
-            describedSuggestion(stop, title: title, caption: caption, accessibility: accessibility)
+            describedSuggestion(
+                stop,
+                title: title,
+                caption: caption,
+                pastRange: pastRange,
+                accessibility: accessibility
+            )
         } else {
-            fuelSuggestionButton(stop, title: title, caption: caption, accessibility: accessibility)
+            fuelSuggestionButton(
+                stop,
+                title: title,
+                caption: caption,
+                pastRange: pastRange,
+                accessibility: accessibility
+            )
         }
     }
 
@@ -352,12 +392,14 @@ struct SuggestionsSection: View {
         _ stop: SuggestedStop,
         title: String,
         caption: String,
+        pastRange: Bool,
         accessibility: RecommendedFuelAccessibility?
     ) -> some View {
         let card = PlaceDescriptionCard(
             name: title,
             placeDescription: PlaceDescriptionDisplay.rowText(for: stop.placeDescription),
             detail: caption,
+            showsPastRange: pastRange,
             systemImage: stop.category.systemImage,
             titleIdentifier: accessibility?.identifier ?? "",
             onOpen: { present(stop, title: title) },
@@ -380,6 +422,7 @@ struct SuggestionsSection: View {
         _ stop: SuggestedStop,
         title: String,
         caption: String,
+        pastRange: Bool,
         accessibility: RecommendedFuelAccessibility?
     ) -> some View {
         let button = Button {
@@ -397,6 +440,9 @@ struct SuggestionsSection: View {
                     caption: caption,
                     rowIdentifier: accessibility?.identifier ?? ""
                 )
+                if pastRange {
+                    PastYourRangeLabel()
+                }
                 Image(systemName: stop.category == .gas && viewModel.isGasBuffered(stop)
                       ? "checkmark.circle.fill"
                       : "plus.circle.fill")
@@ -429,8 +475,8 @@ struct GasLoadFailedButton: View {
     }
 }
 
-/// One tap checks every recommended fuel stop. When those are all checked,
-/// the same button clears them. Sits at the top of the buffered gas rows.
+/// One tap checks every recommended fuel stop, in ride order, and adds
+/// them. Sits at the top of the buffered gas rows.
 private struct SelectRecommendedFuelButton: View {
     let viewModel: RoutePlannerViewModel
 

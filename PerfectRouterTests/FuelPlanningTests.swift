@@ -63,8 +63,10 @@ final class FuelPlanningTests: XCTestCase {
             range: 100_000
         )
         XCTAssertFalse(hasGap)
-        // From 0: farthest <= 85 km is 80 km. From 80: farthest <= 165 km is 160 km.
-        XCTAssertEqual(stops.map { Int($0.distanceAlongRoute) }, [80_000, 160_000])
+        // From 0: farthest <= 85 km is 80 km. From 80: farthest <= 165 km is
+        // 160 km. 90 km is still past the reserve, so the 240 km station is
+        // the last stop and the destination stays inside that reserve.
+        XCTAssertEqual(stops.map { Int($0.distanceAlongRoute) }, [80_000, 160_000, 240_000])
     }
 
     func testFallsBackToHardRangeWhenComfortWindowEmpty() {
@@ -214,19 +216,20 @@ final class FuelPlanningTests: XCTestCase {
             filledAt: [80_000]
         )
         XCTAssertFalse(hasGap)
-        XCTAssertEqual(stops.map { Int($0.distanceAlongRoute) }, [160_000])
+        XCTAssertEqual(stops.map { Int($0.distanceAlongRoute) }, [160_000, 240_000])
     }
 
     func testMidPlanFillDropsEarlierAutoRecommendations() {
-        // Unfilled: 80 then 160. A fill at 50 km replans from there — 80 is
-        // no longer the pick; farthest in the 50+85 km comfort window is 120.
+        // Unfilled: 80, 160, then 240 so the last leg stays inside the reserve.
+        // A fill at 50 km replans from there — 80 is no longer the pick;
+        // farthest in the 50+85 km comfort window is 120.
         let stations = stride(from: 20_000.0, through: 240_000.0, by: 20_000.0).map { gas(at: $0) }
         let (withoutFill, _) = RoutePlannerViewModel.planFuelStops(
             from: stations,
             totalDistance: 250_000,
             range: 100_000
         )
-        XCTAssertEqual(withoutFill.map { Int($0.distanceAlongRoute) }, [80_000, 160_000])
+        XCTAssertEqual(withoutFill.map { Int($0.distanceAlongRoute) }, [80_000, 160_000, 240_000])
 
         let (withFill, hasGap) = RoutePlannerViewModel.planFuelStops(
             from: stations,
@@ -275,7 +278,7 @@ final class FuelPlanningTests: XCTestCase {
             filledAt: []
         )
         XCTAssertFalse(hasGap)
-        XCTAssertEqual(stops.map { Int($0.distanceAlongRoute) }, [80_000, 160_000])
+        XCTAssertEqual(stops.map { Int($0.distanceAlongRoute) }, [80_000, 160_000, 240_000])
     }
 
     func testComfortWindowUnchangedWithFill() {
@@ -300,7 +303,9 @@ final class FuelPlanningTests: XCTestCase {
         let gasOnly = gas(at: 80_000)
         let (stops, hasGap) = lunchPlan(from: [withFood, gasOnly], preferringFoodAt: [withFood.id])
         XCTAssertFalse(hasGap)
-        XCTAssertEqual(stops.map(\.id), [withFood.id])
+        // Food wins the first window. The pump at 80 km keeps the last leg
+        // inside the reserve.
+        XCTAssertEqual(stops.map(\.id), [withFood.id, gasOnly.id])
     }
 
     func testPicksFarthestFoodStopInsideTheTankWindowAtMealTime() {
@@ -378,7 +383,7 @@ final class FuelPlanningTests: XCTestCase {
             preferringFoodAt: []
         )
         XCTAssertFalse(hasGap)
-        XCTAssertEqual(stops.map { Int($0.distanceAlongRoute) }, [80_000, 160_000])
+        XCTAssertEqual(stops.map { Int($0.distanceAlongRoute) }, [80_000, 160_000, 240_000])
     }
 
     func testMissingFoodDoesNotSkipLaterTanks() {
@@ -620,5 +625,34 @@ final class FuelPlanningTests: XCTestCase {
         )
         let ids = RoutePlannerViewModel.gasStopsWithNearbyFood([pump], food: [diner])
         XCTAssertTrue(ids.isEmpty)
+    }
+
+    /// A coast-to-coast ride on a 200-mile tank needs more than a handful of
+    /// stops. Each leg, including the one to the destination, stays inside
+    /// the range left after the 15% reserve. The count itself is not fixed.
+    func testLongRideKeepsEveryLegInsideTheReserve() {
+        let mile = AppSettings.metersPerMile
+        let range = 200 * mile
+        let total = 2_600 * mile
+        XCTAssertGreaterThan(total, 2_500 * mile)
+        let stations = stride(from: 20.0, through: 2_580.0, by: 20.0).map { gas(at: $0 * mile) }
+        let plan = RoutePlannerViewModel.fuelPlan(
+            from: stations,
+            totalDistance: total,
+            range: range
+        )
+        let comfort = range * RoutePlannerViewModel.fuelSafetyFactor
+        XCTAssertGreaterThanOrEqual(plan.stops.count, 7)
+        XCTAssertFalse(plan.hasGap)
+        var previous: CLLocationDistance = 0
+        let points = plan.stops.map(\.distanceAlongRoute) + [total]
+        for distance in points {
+            XCTAssertLessThanOrEqual(
+                distance - previous,
+                comfort + 1,
+                "leg of \((distance - previous) / mile) mi exceeds the reserve"
+            )
+            previous = distance
+        }
     }
 }
