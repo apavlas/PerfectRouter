@@ -90,16 +90,17 @@ struct RiderGroupDetailView: View {
                     if group.riders.isEmpty {
                         Text("No riders yet. Add people from your contacts.")
                             .foregroundStyle(.secondary)
-                    }
-                    ForEach(group.riders) { rider in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(rider.name)
-                            Text(rider.phoneNumber)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(group.riders) { rider in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(rider.name)
+                                Text(rider.phoneNumber)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
+                        .onDelete { viewModel.removeRiders(at: $0, fromGroup: groupID) }
                     }
-                    .onDelete { viewModel.removeRiders(at: $0, fromGroup: groupID) }
                 }
 
                 Section {

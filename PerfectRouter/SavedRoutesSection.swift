@@ -13,26 +13,28 @@ struct SavedRoutesSection: View {
             if viewModel.savedRoutes.isEmpty {
                 Text("Save a ride with the bookmark button to find it here later.")
                     .foregroundStyle(.secondary)
-            }
-            ForEach(viewModel.savedRoutes) { saved in
-                Button {
-                    onLoad(saved)
-                } label: {
-                    HStack {
-                        Image(systemName: "bookmark.fill")
-                            .foregroundStyle(.blue)
-                        VStack(alignment: .leading) {
-                            Text(saved.name)
-                            Text(saved.savedAt, format: .dateTime.month().day().year())
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                    .focusable()
+            } else {
+                ForEach(viewModel.savedRoutes) { saved in
+                    Button {
+                        onLoad(saved)
+                    } label: {
+                        HStack {
+                            Image(systemName: "bookmark.fill")
+                                .foregroundStyle(.blue)
+                            VStack(alignment: .leading) {
+                                Text(saved.name)
+                                Text(saved.savedAt, format: .dateTime.month().day().year())
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
                         }
-                        Spacer()
                     }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
+                .onDelete { viewModel.deleteSavedRoutes(at: $0) }
             }
-            .onDelete { viewModel.deleteSavedRoutes(at: $0) }
         }
     }
 }

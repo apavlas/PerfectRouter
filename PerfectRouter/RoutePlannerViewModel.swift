@@ -102,6 +102,15 @@ struct FuelGap: Equatable {
     }
 }
 
+/// Accessibility values XCUITest reads on a recommended fuel row.
+struct RecommendedFuelAccessibility: Equatable {
+    var identifier: String
+    /// "Fuel stop N: Name, caption". Contains both "Fuel stop" and the name.
+    var label: String
+    /// "Fuel stop N: Name", shown on the row and inside `label`.
+    var title: String
+}
+
 /// One row of the fuel list: an in-range recommendation, the named gap that
 /// follows it, or the next station marked past the tank.
 enum FuelPlanEntry: Identifiable {
@@ -196,6 +205,15 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     var plannedCorridor: [[CLLocationCoordinate2D]] = []
 
     private var suggestionService = StopSuggestionService()
+
+    /// Live MapKit directions, or the canned provider for `-UITestStubServices`.
+    private let directionsProvider: any DirectionsProviding
+
+    /// Set only for UI tests. Replaces corridor `MKLocalSearch`.
+    private let stopSearchOverride: (any StopSearching)?
+
+    /// Set only for UI tests. Replaces the place-search field's `MKLocalSearch`.
+    private let placeSearchOverride: (any PlaceSearching)?
 
     /// Rides the rider has saved on this device, most recent first.
     private(set) var savedRoutes: [SavedRoute] = []
@@ -379,6 +397,21 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     }
 
     override init() {
+        let stubs = UITestStubLaunch.isEnabled ? UITestStubServices() : nil
+        if let stubs {
+            directionsProvider = stubs
+            stopSearchOverride = stubs
+            placeSearchOverride = stubs
+        } else {
+            directionsProvider = MapKitDirectionsProvider()
+            stopSearchOverride = nil
+            placeSearchOverride = nil
+        }
+        if UITestStubLaunch.isEnabled {
+            // Before the reads below. Otherwise a previous test's Scenic
+            // style or tank value is the plan this launch recommends.
+            UITestStubLaunch.resetPersistedRidePreferences()
+        }
         super.init()
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters
@@ -389,14 +422,18 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         routeStyle = AppSettings.defaultRouteStyle
         suggestionService.sampleIntervalMeters = AppSettings.searchIntervalMeters
         // If already authorized from a previous launch, begin tracking now.
-        startTrackingIfAuthorized()
+        // UI tests keep location nil so the two fixed search points are the
+        // ride ends, and so the system permission alert never covers the sheet.
+        if !UITestStubLaunch.isEnabled {
+            startTrackingIfAuthorized()
+        }
 
 #if targetEnvironment(simulator)
         // The simulator has no GPS fix unless one is set in Features ▸ Location,
         // leaving the rider unable to auto-route from "here". Seed a sensible
         // default so route planning works out of the box on the simulator. A
         // real (simulated) location update overrides this as soon as it arrives.
-        if currentLocation == nil {
+        if currentLocation == nil, !UITestStubLaunch.isEnabled {
             currentLocation = Self.simulatorDefaultLocation
         }
 #endif
@@ -552,10 +589,128 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         }
     }
 
+    /// Test identity for one in-range recommendation. Summary rows and the
+    /// plain station rows share it, so a list cell that only shows the
+    /// station name still exposes `fuelStop.<name>.checked` and a
+    /// "Fuel stop N:" label. Past-range rows are not fuel stops.
+    func recommendedFuelAccessibility(for stop: SuggestedStop) -> RecommendedFuelAccessibility? {
+        var number = 0
+        for entry in visibleFuelPlanEntries {
+            guard case .recommended(let fuel) = entry else { continue }
+            number += 1
+            guard Self.sameFuelPlace(fuel, stop) else { continue }
+            let caption = fuelStopRidingCaption(for: fuel)
+            let title = "Fuel stop \(number): \(fuel.name)"
+            let checked = isGasBuffered(stop) || isGasBuffered(fuel)
+            return RecommendedFuelAccessibility(
+                identifier: AccessibilityID.fuelStop(fuel.name, checked: checked),
+                label: "\(title), \(caption)",
+                title: title
+            )
+        }
+        return nil
+    }
+
+    /// Summary, suggestion, and gas-list rows are separate searches, so they
+    /// do not share a UUID. The name is what the ride list shows.
+    nonisolated static func sameFuelPlace(_ fuel: SuggestedStop, _ stop: SuggestedStop) -> Bool {
+        fuel.id == stop.id
+            || fuel.name == stop.name
+            || sameCoordinate(fuel.coordinate, stop.coordinate)
+    }
+
+    /// Distance, then riding time, for one fuel-stop row.
+    ///
+    /// "212 mi · 6h 05m riding (1h 40m since last)". The first stop says
+    /// "since departure". Time is each current leg's drive time spread
+    /// along that leg's polyline, so a style change, tank-range search,
+    /// applied stop, or leave-time replan updates it with the new line.
+    /// Applied gas fills count as the previous stop; time sitting at a
+    /// stop is not added.
+    func fuelStopRidingCaption(for stop: SuggestedStop, pastRange: Bool = false) -> String {
+        let caption = FuelStopRidingTime.caption(
+            distanceMeters: stop.distanceAlongRoute,
+            anchors: fuelRidingAnchorDistances(including: stop.distanceAlongRoute),
+            legs: driveLegTimings()
+        )
+        guard pastRange else { return caption }
+        return "\(caption) — past your range"
+    }
+
+    /// Riding caption when `stop` is a recommended or past-range fuel stop.
+    func fuelStopListCaption(for stop: SuggestedStop) -> String? {
+        let pastRange = isPastRangeFuelStop(stop)
+        guard pastRange || isRecommendedFuelStop(stop) else { return nil }
+        return fuelStopRidingCaption(for: stop, pastRange: pastRange)
+    }
+
+    /// Visible fuel rows plus applied gas fills. The fill is no longer a
+    /// row after Apply, but the next recommendation is still "since last"
+    /// from that pump.
+    private func fuelRidingAnchorDistances(including distance: CLLocationDistance) -> [CLLocationDistance] {
+        var anchors = gasFillDistances
+        for entry in visibleFuelPlanEntries {
+            switch entry {
+            case .recommended(let other), .pastRange(let other):
+                anchors.append(other.distanceAlongRoute)
+            case .gap:
+                break
+            }
+        }
+        anchors.append(distance)
+        return anchors
+    }
+
+    /// Subtitle for a row in "Route (N stops)". The origin has none.
+    /// Every later row, including the destination, uses the current legs,
+    /// so a replan replaces the line. The destination's cumulative time is
+    /// the whole trip. Nil while the published legs do not match the list.
+    func waypointRidingCaption(at index: Int) -> String? {
+        guard legs.count + 1 == waypoints.count else { return nil }
+        return FuelStopRidingTime.waypointCaption(index: index, legs: driveLegTimings())
+    }
+
+    /// Polyline length and `expectedTravelTime` for each current leg.
+    private func driveLegTimings() -> [FuelStopRidingTime.Leg] {
+        legs.map { route in
+            FuelStopRidingTime.leg(
+                polyline: RouteGeometry.coordinates(of: route.polyline),
+                expectedTravelTime: route.expectedTravelTime
+            )
+        }
+    }
+
     /// Category suggestions the rider can still add. Places already on the
-    /// route (including an applied gas stop) are left off the list.
+    /// route, and stops already shown in the fuel plan, are left off so the
+    /// sheet does not list the same pump twice (riding time in the summary,
+    /// and again as "~80 mi from start").
     var addableSuggestions: [SuggestedStop] {
-        suggestedStops.filter { !isStopOnRoute($0) }
+        suggestedStops.filter { stop in
+            !isStopOnRoute(stop) && !isShownAsFuelPlanRow(stop)
+        }
+    }
+
+    /// True when the summary already renders this place as a fuel row.
+    func isShownAsFuelPlanRow(_ stop: SuggestedStop) -> Bool {
+        visibleFuelPlanEntries.contains { entry in
+            switch entry {
+            case .recommended(let fuel), .pastRange(let fuel):
+                return Self.sameFuelPlace(fuel, stop)
+            case .gap:
+                return false
+            }
+        }
+    }
+
+    /// Identifier whose suffix is the in-range recommendations, in ride
+    /// order. UI tests wait for these names instead of a station that is
+    /// only a map pin.
+    var recommendedFuelPlanAccessibilityID: String {
+        let names = visibleFuelPlanEntries.compactMap { entry -> String? in
+            guard case .recommended(let stop) = entry else { return nil }
+            return stop.name
+        }
+        return "recommendedFuelPlan." + names.joined(separator: "|")
     }
 
     /// Gas stations on the rider's side of travel (no crossing oncoming
@@ -896,7 +1051,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     /// A station the fuel list marks past the tank. Never part of the
     /// one-tap recommended selection, even if it also sits in `fuelStops`.
-    private func isPastRangeFuelStop(_ stop: SuggestedStop) -> Bool {
+    func isPastRangeFuelStop(_ stop: SuggestedStop) -> Bool {
         fuelPlanEntries.contains { entry in
             guard case .pastRange(let past) = entry else { return false }
             return past.id == stop.id || Self.sameCoordinate(past.coordinate, stop.coordinate)
@@ -1184,6 +1339,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             : nil
         // Geometry is committed. Drop the calculating flag before gas so a
         // tank-range tweak restarts the search once instead of the whole line.
+        // The banner is `isCalculating` and nothing else: it comes down as
+        // soon as the line is ready. UI tests watch it while the stubbed
+        // directions request is still in flight.
         if calcGen == calculatingGeneration {
             isCalculating = false
             calculationStatus = nil
@@ -1533,17 +1691,62 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         alternates: Bool
     ) async throws -> [MKRoute] {
         guard origin.isValidLocation, destination.isValidLocation else { return [] }
-        let request = MKDirections.Request()
-        request.source = MKMapItem(placemark: MKPlacemark(coordinate: origin))
-        request.destination = MKMapItem(placemark: MKPlacemark(coordinate: destination))
-        request.transportType = .automobile
-        // Let MapKit factor predicted traffic for the planned departure
-        // into the route choice and travel-time estimates.
-        request.departureDate = effectiveDeparture
-        request.highwayPreference = avoidsHighways ? .avoid : .any
-        request.tollPreference = avoidsTolls ? .avoid : .any
-        request.requestsAlternateRoutes = alternates
-        return try await MKDirections(request: request).calculate().routes
+        return try await directionsProvider.calculateRoutes(
+            from: origin,
+            to: destination,
+            avoidsHighways: avoidsHighways,
+            avoidsTolls: avoidsTolls,
+            alternates: alternates,
+            departure: effectiveDeparture
+        )
+    }
+
+    /// Corridor search. UI tests skip `MKLocalSearch` and project canned
+    /// pumps onto the stub polyline. Live planning keeps `StopSuggestionService`.
+    private func searchStops(
+        category: StopCategory,
+        alongLegs legs: [MKRoute],
+        sampleDistances: [CLLocationDistance]? = nil,
+        corridorRadiusMeters: CLLocationDistance? = nil,
+        generation: Int = 0,
+        maxSearches: Int? = nil
+    ) async -> CorridorSearchResult {
+        if let stopSearchOverride {
+            return await stopSearchOverride.findStops(
+                category: category,
+                alongLegs: legs,
+                sampleDistances: sampleDistances,
+                corridorRadiusMeters: corridorRadiusMeters,
+                generation: generation
+            )
+        }
+        var service = suggestionService
+        if let maxSearches {
+            service.maxSearches = maxSearches
+        }
+        return await service.findStops(
+            category: category,
+            alongLegs: legs,
+            sampleDistances: sampleDistances,
+            corridorRadiusMeters: corridorRadiusMeters,
+            generation: generation
+        )
+    }
+
+    private func searchFood(
+        near coordinate: CLLocationCoordinate2D,
+        alongPolylines legPolylines: [[CLLocationCoordinate2D]]
+    ) async -> [SuggestedStop] {
+        if let stopSearchOverride {
+            return await stopSearchOverride.findFood(
+                near: coordinate,
+                alongPolylines: legPolylines
+            )
+        }
+        return await suggestionService.findFood(
+            near: coordinate,
+            alongPolylines: legPolylines
+        )
     }
 
     private static func chosenTwisty(in pool: [TwistyPoolEntry], fastestID: Int) -> [MKRoute]? {
@@ -1757,7 +1960,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 return nil
             }
             gasLog.info("search start gen=\(generation, privacy: .public) attempt=\(attempt, privacy: .public) samples=\(sampleDistances.count, privacy: .public)")
-            let result = await suggestionService.findStops(
+            let result = await searchStops(
                 category: .gas,
                 alongLegs: legs,
                 sampleDistances: sampleDistances,
@@ -1878,7 +2081,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         let legPolylines = legs.map { RouteGeometry.coordinates(of: $0.polyline) }
         var paired: [FuelFoodStop] = []
         for stop in fuelStops {
-            let food = await suggestionService.findFood(
+            let food = await searchFood(
                 near: stop.coordinate,
                 alongPolylines: legPolylines
             )
@@ -2270,9 +2473,11 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         if selectedCategory == .attraction, !suggestedStops.isEmpty {
             candidates = suggestedStops
         } else {
-            var service = suggestionService
-            service.maxSearches = suggestionService.maxSearches / 2
-            let found = await service.findStops(category: .attraction, alongLegs: legs)
+            let found = await searchStops(
+                category: .attraction,
+                alongLegs: legs,
+                maxSearches: suggestionService.maxSearches / 2
+            )
             guard !Task.isCancelled, found.status == .completed else { return }
             candidates = found.stops
         }
@@ -2338,7 +2543,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 isLoadingSuggestions = false
             }
         }
-        let found = await suggestionService.findStops(
+        let found = await searchStops(
             category: selectedCategory,
             alongLegs: legs
         )
@@ -2601,6 +2806,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     // MARK: - Search (for adding waypoints by name)
 
     func searchPlaces(query: String, near region: MKCoordinateRegion) async -> [MKMapItem] {
+        if let placeSearchOverride {
+            return await placeSearchOverride.searchPlaces(query: query, near: region)
+        }
         guard !query.trimmingCharacters(in: .whitespaces).isEmpty else { return [] }
         let request = MKLocalSearch.Request()
         request.naturalLanguageQuery = query

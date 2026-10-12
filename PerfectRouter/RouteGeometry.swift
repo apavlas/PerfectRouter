@@ -90,6 +90,21 @@ enum RouteGeometry {
                                        longitude: nearest.point.longitude))
     }
 
+    /// Polyline length in meters, summing the same segment distances
+    /// `distanceAlongRoute` uses. A stop's `distanceAlongRoute` and a leg's
+    /// length therefore share one ruler, which riding-time interpolation needs.
+    static func length(of coordinates: [CLLocationCoordinate2D]) -> CLLocationDistance {
+        guard coordinates.count > 1 else { return 0 }
+        var total: CLLocationDistance = 0
+        for index in 1..<coordinates.count {
+            let start = coordinates[index - 1]
+            let end = coordinates[index]
+            total += CLLocation(latitude: start.latitude, longitude: start.longitude)
+                .distance(from: CLLocation(latitude: end.latitude, longitude: end.longitude))
+        }
+        return total
+    }
+
     // MARK: - Nearest-segment scan (shared core)
 
     /// Everything about the route point nearest to a coordinate. Produced by

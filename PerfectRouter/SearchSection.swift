@@ -16,6 +16,7 @@ struct SearchSection: View {
     @State private var searchText = ""
     @State private var searchResults: [MKMapItem] = []
     @State private var showingContactPicker = false
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
         Section {
@@ -23,18 +24,24 @@ struct SearchSection: View {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
                 TextField("Add a destination or stop", text: $searchText)
+                    .accessibilityIdentifier(AccessibilityID.placeSearch)
+                    .focused($searchFocused)
                     .autocorrectionDisabled()
                     .submitLabel(.search)
-                if !searchText.isEmpty {
-                    Button {
-                        searchText = ""
-                        searchResults = []
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
+                // Stays in the row while the field is empty. Removing it
+                // left the search stack with a focus child that appeared
+                // and disappeared as a replan cleared the query.
+                Button {
+                    searchText = ""
+                    searchResults = []
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
                 }
+                .buttonStyle(.plain)
+                .opacity(searchText.isEmpty ? 0 : 1)
+                .disabled(searchText.isEmpty)
+                .accessibilityHidden(searchText.isEmpty)
             }
             // Live search, debounced: re-fires 0.4s after the user stops typing.
             .task(id: searchText) {
@@ -54,24 +61,31 @@ struct SearchSection: View {
                 Label("Choose from Contacts", systemImage: "person.crop.circle")
             }
 
-            ForEach(searchResults.prefix(6), id: \.self) { item in
-                Button {
-                    addSearchResult(item)
-                } label: {
-                    HStack {
-                        Image(systemName: "plus.circle")
-                            .foregroundStyle(.blue)
-                        VStack(alignment: .leading) {
-                            Text(item.name ?? "Unknown")
+            if !searchResults.isEmpty {
+                ForEach(searchResults.prefix(6), id: \.self) { item in
+                    Button {
+                        addSearchResult(item)
+                    } label: {
+                        HStack {
+                            Image(systemName: "plus.circle")
+                                .foregroundStyle(.blue)
                             if let locality = item.placemark.locality {
-                                Text(locality)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                VStack(alignment: .leading) {
+                                    Text(item.name ?? "Unknown")
+                                    Text(locality)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            } else {
+                                Text(item.name ?? "Unknown")
                             }
                         }
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier(AccessibilityID.searchResult(item.name ?? "Unknown"))
                 }
-                .buttonStyle(.plain)
+            } else {
+                FocusPlaceholderRow()
             }
         }
         // The contact picker presents itself modally, so it lives invisibly in
@@ -93,6 +107,7 @@ struct SearchSection: View {
         viewModel.addWaypoint(waypoint)
         searchResults = []
         searchText = ""
+        searchFocused = false
         onWaypointAdded(waypoint)
     }
 

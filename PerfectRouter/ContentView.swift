@@ -1,6 +1,27 @@
 import SwiftUI
 import MapKit
 
+/// Nav-bar copy of the replan sentence. A large iPad sheet covers the map
+/// chip, and the in-list row is gone once that section scrolls away. The
+/// idle glyph stays in the item so the bar never drops to zero focus children.
+private struct NavigationReplanBanner: View {
+    var calculating: Bool
+    var status: String
+
+    var body: some View {
+        Text(verbatim: calculating ? "Replanning…" : "·")
+            .font(.caption.weight(.semibold))
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .opacity(calculating ? 1 : 0)
+            .accessibilityIdentifier(calculating ? AccessibilityID.replanBanner : "replanNavIdle")
+            .accessibilityLabel(calculating ? status : " ")
+            .accessibilityHidden(!calculating)
+            .allowsHitTesting(false)
+            .focusable()
+    }
+}
+
 struct ContentView: View {
     /// Becomes `true` once the launch splash has faded, signaling that it's a
     /// good time to ask for location permission (so the system alert doesn't
@@ -20,7 +41,7 @@ struct ContentView: View {
     )
     @State private var visibleRegion: MKCoordinateRegion?
     @State private var showSheet = true
-    @State private var sheetDetent: PresentationDetent = .medium
+    @State private var sheetDetent: PresentationDetent = UITestStubLaunch.isEnabled ? .large : .medium
     @State private var showingSaveDialog = false
     @State private var saveRouteName = ""
     @State private var showingSettings = false
@@ -54,19 +75,24 @@ struct ContentView: View {
         Map(position: $cameraPosition) {
             UserAnnotation()
 
-            // Waypoint markers
-            ForEach(Array(viewModel.waypoints.enumerated()), id: \.element.id) { index, waypoint in
-                Marker(waypoint.name, systemImage: markerIcon(for: index), coordinate: waypoint.coordinate)
-                    .tint(index == 0 ? .green : (index == viewModel.waypoints.count - 1 ? .red : .orange))
+            // Waypoint markers. An empty ForEach is omitted: during a replan
+            // it is a focus container with no children.
+            if !viewModel.waypoints.isEmpty {
+                ForEach(Array(viewModel.waypoints.enumerated()), id: \.element.id) { index, waypoint in
+                    Marker(waypoint.name, systemImage: markerIcon(for: index), coordinate: waypoint.coordinate)
+                        .tint(index == 0 ? .green : (index == viewModel.waypoints.count - 1 ? .red : .orange))
+                }
             }
 
             // Route polylines, one per leg
-            ForEach(viewModel.legs, id: \.self) { leg in
-                MapPolyline(leg.polyline)
-                    .stroke(
-                        viewModel.dimsRouteLine ? Color.blue.opacity(0.35) : Color.blue,
-                        lineWidth: 5
-                    )
+            if !viewModel.legs.isEmpty {
+                ForEach(viewModel.legs, id: \.self) { leg in
+                    MapPolyline(leg.polyline)
+                        .stroke(
+                            viewModel.dimsRouteLine ? Color.blue.opacity(0.35) : Color.blue,
+                            lineWidth: 5
+                        )
+                }
             }
 
 
@@ -74,10 +100,8 @@ struct ContentView: View {
             // "All gas on route" list is open. Recommended pumps and the
             // selected-category pins stay regardless. Hidden in Gas, where
             // the suggestions layer already covers stations.
-            if viewModel.showsAllGasPins {
-                ForEach(viewModel.gasStations.filter {
-                    !viewModel.isRecommendedFuelStop($0) && !viewModel.isStopOnRoute($0)
-                }) { stop in
+            if viewModel.showsAllGasPins, !extraGasPins.isEmpty {
+                ForEach(extraGasPins) { stop in
                     Annotation(stop.name, coordinate: stop.coordinate) {
                         Button {
                             viewModel.toggleBufferedGasStop(stop)
@@ -95,11 +119,8 @@ struct ContentView: View {
             // Suggested stops for the selected category — tap a pin to add it.
             // Recommended fuel stops and ride highlights are excluded here so
             // they aren't drawn twice (their own highlighted layers cover them).
-            ForEach(viewModel.suggestedStops.filter {
-                !viewModel.isRecommendedFuelStop($0)
-                    && !viewModel.isRideHighlight($0)
-                    && !viewModel.isStopOnRoute($0)
-            }) { stop in
+            if !categoryPins.isEmpty {
+            ForEach(categoryPins) { stop in
                 Annotation(stop.name, coordinate: stop.coordinate) {
                     Button {
                         viewModel.addStop(from: stop)
@@ -112,10 +133,12 @@ struct ContentView: View {
                     }
                 }
             }
+            }
 
             // Recommended ride highlights — purple star pins so places worth
             // a stop stand out from ordinary suggestions.
-            ForEach(viewModel.rideHighlights.filter { !viewModel.isStopOnRoute($0) }) { stop in
+            if !highlightPins.isEmpty {
+            ForEach(highlightPins) { stop in
                 Annotation(stop.name, coordinate: stop.coordinate) {
                     Button {
                         viewModel.addStop(from: stop)
@@ -125,17 +148,20 @@ struct ContentView: View {
                             .foregroundStyle(.white)
                             .padding(9)
                             .background(.purple, in: Circle())
-                            .overlay(Circle().stroke(.white, lineWidth: 2.5))
+                            .padding(2.5)
+                            .background(.white, in: Circle())
                             .shadow(radius: 3)
                     }
                 }
+            }
             }
 
             // Recommended fuel stops (one per tank) — drawn last so they sit on
             // top, and highlighted (larger, ringed green pump) so they're easy
             // to pick out in any category. Exactly one marker per recommended
             // stop, across all the layers above.
-            ForEach(viewModel.fuelStops.filter { !viewModel.isStopOnRoute($0) }) { stop in
+            if !fuelPins.isEmpty {
+            ForEach(fuelPins) { stop in
                 Annotation(stop.name, coordinate: stop.coordinate) {
                     Button {
                         viewModel.toggleBufferedGasStop(stop)
@@ -145,10 +171,12 @@ struct ContentView: View {
                             .foregroundStyle(.white)
                             .padding(9)
                             .background(viewModel.isGasBuffered(stop) ? Color.blue : Color.green, in: Circle())
-                            .overlay(Circle().stroke(.white, lineWidth: 2.5))
+                            .padding(2.5)
+                            .background(.white, in: Circle())
                             .shadow(radius: 3)
                     }
                 }
+            }
             }
         }
         .onMapCameraChange { context in
@@ -161,7 +189,10 @@ struct ContentView: View {
             // keep tracking (started in the view model's init) regardless.
             if ready {
                 viewModel.applySettings(seedFuelRange: true)
-                viewModel.requestLocationPermission()
+                // UI tests stub location and must not raise the system alert.
+                if !UITestStubLaunch.isEnabled {
+                    viewModel.requestLocationPermission()
+                }
             }
         }
         .onChange(of: scenePhase) { _, phase in
@@ -202,55 +233,114 @@ struct ContentView: View {
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
-            VStack(spacing: 0) {
-                categoryPicker
-                if RoutePlannerViewModel.showsMapReplanBanner(
-                    isCalculating: viewModel.isCalculating,
-                    hasLegs: !viewModel.legs.isEmpty
-                ) {
-                    mapReplanBanner
-                        .padding(.top, 4)
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 8)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .animation(.easeInOut(duration: 0.2), value: viewModel.isCalculating)
+            // Two complete stacks. A banner `if` inside the chip stack is an
+            // empty focus container on the frames it is hidden, which is
+            // when a replan starts and ends.
+            mapTopChrome
         }
         .sheet(isPresented: Binding(
             get: { showSheet && planningSheetEnabled },
             set: { showSheet = $0 }
         )) {
             planningSheet
-                .presentationDetents([.fraction(0.15), .medium, .large], selection: $sheetDetent)
+                .presentationDetents(
+                    // The first detent is what the system uses if it ignores the
+                    // selection binding. UI tests need the large one so list rows
+                    // are in the accessibility tree; riders still open at medium.
+                    UITestStubLaunch.isEnabled
+                        ? [.large, .medium, .fraction(0.15)]
+                        : [.fraction(0.15), .medium, .large],
+                    selection: $sheetDetent
+                )
+                // A downward drag at the top of the list otherwise shrinks the
+                // sheet, which drops the fuel rows out of the accessibility tree.
+                .presentationContentInteraction(UITestStubLaunch.isEnabled ? .scrolls : .automatic)
                 .presentationBackgroundInteraction(.enabled(upThrough: .medium))
                 .interactiveDismissDisabled()
         }
     }
 
+    private var showsMapReplanBanner: Bool {
+        RoutePlannerViewModel.showsMapReplanBanner(
+            isCalculating: viewModel.isCalculating,
+            hasLegs: !viewModel.legs.isEmpty
+        )
+    }
+
+    /// Pinned under the sheet's navigation bar. The in-list copy scrolls off
+    /// on iPad after Apply adds stops; this one does not. A one-point row
+    /// stays in the inset when nothing is replanning, so the container never
+    /// drops to zero children.
+    private var sheetReplanBanner: some View {
+        // The map chip waits for an existing line. This one is the copy that
+        // stays in the sheet for the whole calculation, including the moment
+        // a large iPad sheet covers the map.
+        let showing = viewModel.isCalculating
+        let status = RoutePlannerViewModel.routeReplanStatus(style: viewModel.routeStyle)
+        return Text(showing ? status : " ")
+            .font(showing ? .subheadline.weight(.semibold) : .system(size: 1))
+            .foregroundStyle(showing ? Color.primary : Color.clear)
+            .frame(maxWidth: .infinity)
+            .frame(maxHeight: showing ? nil : CGFloat(1))
+            .padding(.vertical, showing ? 8 : 0)
+            .background(showing ? AnyShapeStyle(.regularMaterial) : AnyShapeStyle(.clear))
+            .accessibilityIdentifier(showing ? AccessibilityID.replanBanner : "replanSheetIdle")
+            .accessibilityLabel(showing ? status : " ")
+            .accessibilityHidden(!showing)
+            .focusable()
+    }
+
+    private var mapTopChrome: some View {
+        // One stack the whole time. Swapping the inset's root when a replan
+        // starts left a frame with no focus children.
+        VStack(spacing: 0) {
+            categoryPicker
+            mapReplanBanner
+                .padding(.top, showsMapReplanBanner ? 4 : 0)
+                .padding(.horizontal, showsMapReplanBanner ? 16 : 0)
+                .padding(.bottom, showsMapReplanBanner ? 8 : 0)
+                .opacity(showsMapReplanBanner ? 1 : 0)
+                .accessibilityHidden(!showsMapReplanBanner)
+                // A zero-height clip leaves the stack with no focus region.
+                // One point, fully transparent, still has a child.
+                .frame(maxHeight: showsMapReplanBanner ? nil : CGFloat(1))
+                .clipped()
+        }
+        .frame(maxWidth: .infinity)
+    }
+
     /// Floats on the map, under the category chips, so a style switch is
     /// visible while the planning sheet is collapsed or scrolled past the
     /// summary. Same layout on iPhone, iPad, and Mac.
+    ///
+    /// The hairline used to be an overlay. That overlay is a focus container
+    /// with no children, and iPad aborts in UIFocusSystem when the banner
+    /// appears during a replan.
     private var mapReplanBanner: some View {
-        HStack(spacing: 10) {
+        let status = RoutePlannerViewModel.routeReplanStatus(style: viewModel.routeStyle)
+        return HStack(spacing: 10) {
             ProgressView()
                 .controlSize(.small)
-            Text(RoutePlannerViewModel.routeReplanStatus(style: viewModel.routeStyle))
+                .accessibilityHidden(true)
+            // The spinner is hidden from focus. A space-only title is not a
+            // focus item either, so this stack had zero children at launch
+            // and iPad aborted in UIFocusSystem. The idle glyph is a real
+            // character, and it is not the "Replanning for …" sentence, so
+            // a finished replan does not keep matching the banner.
+            Text(verbatim: showsMapReplanBanner ? status : "·")
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
+                .focusable()
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(.regularMaterial, in: Capsule())
-        .overlay {
-            Capsule()
-                .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
-        }
         .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(RoutePlannerViewModel.routeReplanStatus(style: viewModel.routeStyle))
+        .accessibilityIdentifier(showsMapReplanBanner ? AccessibilityID.replanBanner : "mapReplanIdle")
+        .accessibilityLabel(showsMapReplanBanner ? status : " ")
+        .accessibilityHidden(!showsMapReplanBanner)
         .allowsHitTesting(false)
     }
 
@@ -298,19 +388,50 @@ struct ContentView: View {
                 RideSummarySection(viewModel: viewModel)
                 if !viewModel.rideHighlights.isEmpty {
                     RideHighlightsSection(viewModel: viewModel)
+                } else {
+                    FocusPlaceholderRow()
                 }
                 SuggestionsSection(viewModel: viewModel)
-                if viewModel.selectedCategory != .gas && !viewModel.legs.isEmpty {
+                if viewModel.selectedCategory != .gas,
+                   !viewModel.legs.isEmpty,
+                   GasStationsSection.hasContent(viewModel) {
                     GasStationsSection(viewModel: viewModel)
+                } else {
+                    FocusPlaceholderRow()
                 }
                 FuelRangeSection(viewModel: viewModel)
                 DepartureSection(viewModel: viewModel)
                 RouteStyleSection(viewModel: viewModel)
                 SavedRoutesSection(viewModel: viewModel, onLoad: loadSaved)
             }
+            .accessibilityIdentifier("planningList")
+            // Placeholder rows are one point tall. The default minimum would
+            // turn each absent `if` into a full blank cell.
+            .environment(\.defaultMinListRowHeight, 1)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                // Stays on screen while the summary is scrolled off the large
+                // iPad sheet. Always has a child, so the inset is not an
+                // empty focus container when the replan starts or ends.
+                sheetReplanBanner
+            }
             .navigationTitle("Plan Ride")
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear {
+                if UITestStubLaunch.isEnabled {
+                    sheetDetent = .large
+                }
+            }
             .toolbar {
+                // The sheet list drops its banner row when that section is
+                // scrolled off, and the map chip sits behind a large iPad
+                // sheet. This bar item stays on screen for the whole
+                // calculation. Idle text is a glyph, not an empty container.
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationReplanBanner(
+                        calculating: viewModel.isCalculating,
+                        status: RoutePlannerViewModel.routeReplanStatus(style: viewModel.routeStyle)
+                    )
+                }
                 ToolbarItem(placement: .topBarLeading) {
                     Menu {
                         Button {
@@ -454,6 +575,28 @@ struct ContentView: View {
         if let start = viewModel.waypoints.first {
             recenter(on: start.coordinate, spanDelta: 0.5)
         }
+    }
+
+    private var extraGasPins: [SuggestedStop] {
+        viewModel.gasStations.filter {
+            !viewModel.isRecommendedFuelStop($0) && !viewModel.isStopOnRoute($0)
+        }
+    }
+
+    private var categoryPins: [SuggestedStop] {
+        viewModel.suggestedStops.filter {
+            !viewModel.isRecommendedFuelStop($0)
+                && !viewModel.isRideHighlight($0)
+                && !viewModel.isStopOnRoute($0)
+        }
+    }
+
+    private var highlightPins: [SuggestedStop] {
+        viewModel.rideHighlights.filter { !viewModel.isStopOnRoute($0) }
+    }
+
+    private var fuelPins: [SuggestedStop] {
+        viewModel.fuelStops.filter { !viewModel.isStopOnRoute($0) }
     }
 
     private func markerIcon(for index: Int) -> String {

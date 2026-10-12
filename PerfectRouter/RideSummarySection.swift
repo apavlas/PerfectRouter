@@ -11,52 +11,90 @@ struct RideSummarySection: View {
         Section {
             if viewModel.isCalculating, viewModel.legs.isEmpty {
                 ProgressView(viewModel.calculationStatus ?? RoutePlannerViewModel.routeReplanStatus(style: viewModel.routeStyle))
+                    .focusable()
             } else if !viewModel.legs.isEmpty {
-                if viewModel.isCalculating {
-                    Label(viewModel.calculationStatus ?? "Replanning…", systemImage: viewModel.routeStyle.systemImage)
-                        .font(.subheadline.weight(.semibold))
-                    if viewModel.showsReplanProgress {
-                        ProgressView(viewModel.replanStepDetail ?? "Still planning this route…")
+                // Always mounted. A bare `if` that appears only while
+                // calculating is a focus container with no children on the
+                // frame the replan ends.
+                replanBannerRow
+                if viewModel.isCalculating, viewModel.showsReplanProgress {
+                    ProgressView(viewModel.replanStepDetail ?? "Still planning this route…")
+                        .focusable()
+                } else {
+                    FocusPlaceholderRow()
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack {
+                        Label(formattedRideDistance(viewModel.totalDistanceMeters), systemImage: "road.lanes")
+                        Spacer()
+                        Label(formattedDuration(viewModel.totalExpectedTravelTime), systemImage: "clock")
                     }
+                    .foregroundStyle(viewModel.isCalculating ? .secondary : .primary)
+                    // Sits in the distance row, which the list always exposes.
+                    // A separate one-point row was easy for the lazy list to
+                    // omit, and combining this identifier onto the distance
+                    // stack hid the mileage label. Not focusable() on the
+                    // stack: that would group the children and hide this id.
+                    Text(verbatim: "Ride summary")
+                        .font(.system(size: 1))
+                        .foregroundStyle(.clear)
+                        .frame(maxWidth: .infinity, minHeight: 1, maxHeight: 1)
+                        .accessibilityIdentifier(viewModel.recommendedFuelPlanAccessibilityID)
+                        .accessibilityLabel(Text(verbatim: "Ride summary"))
+                        .focusable()
                 }
-                HStack {
-                    Label(formattedRideDistance(viewModel.totalDistanceMeters), systemImage: "road.lanes")
-                    Spacer()
-                    Label(formattedDuration(viewModel.totalExpectedTravelTime), systemImage: "clock")
+                if !viewModel.bufferedGasStops.isEmpty {
+                    BufferedGasApplyRow(viewModel: viewModel)
+                } else {
+                    FocusPlaceholderRow()
                 }
-                .foregroundStyle(viewModel.isCalculating ? .secondary : .primary)
-                BufferedGasApplyRow(viewModel: viewModel)
-                if !viewModel.isCalculating {
+                // Mount the fuel list only once it has rows. An empty
+                // FuelPlanRows is a focus container with no children, and
+                // iPad aborts in UIFocusSystem when a replan clears the
+                // stops before the next search publishes them.
+                if !viewModel.isCalculating, !viewModel.visibleFuelPlanEntries.isEmpty {
                     FuelPlanRows(viewModel: viewModel)
+                } else {
+                    FocusPlaceholderRow()
                 }
                 if viewModel.isSearchingGas {
                     ProgressView("Searching for gas along the route…")
+                        .focusable()
+                } else {
+                    FocusPlaceholderRow()
                 }
                 if viewModel.showsGasLoadFailed {
                     GasLoadFailedButton(viewModel: viewModel)
+                } else {
+                    FocusPlaceholderRow()
                 }
                 if let rainWarning = viewModel.rainWarning {
                     Label(rainWarning, systemImage: "cloud.rain.fill")
                         .foregroundStyle(.blue)
+                        .focusable()
                 } else if viewModel.isCheckingWeather {
                     Label("Checking weather along your route…", systemImage: "cloud.sun.fill")
                         .foregroundStyle(.secondary)
+                        .focusable()
+                } else {
+                    FocusPlaceholderRow()
                 }
                 // Active style sits immediately above Navigate so the rider
-                // can see which line they're about to hand off.
+                // can see which line they're about to hand off. The
+                // representation is only the style name: a combined label
+                // includes the detail and misses the banner fallback.
                 VStack(alignment: .leading, spacing: 2) {
                     Label(viewModel.routeStyle.rawValue, systemImage: viewModel.routeStyle.systemImage)
                         .font(.subheadline.weight(.semibold))
-                    Text(viewModel.routeStyle.detail)
+                    Text(routeStyleDetail)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
-                    if let note = viewModel.twistyLimitationNote {
-                        Text(note)
-                            .font(.footnote)
-                            .foregroundStyle(.orange)
-                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityRepresentation {
+                    Text(viewModel.routeStyle.rawValue)
+                        .accessibilityIdentifier(AccessibilityID.activeRouteStyle)
+                }
                 // Primary, one-tap hand-off. Apple Maps is CarPlay-native, so
                 // its turn-by-turn guidance automatically continues on the car
                 // display once the rider connects to CarPlay.
@@ -70,6 +108,8 @@ struct RideSummarySection: View {
                         .font(.headline)
                 }
                 .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier(AccessibilityID.navigate)
+                .accessibilityLabel("Navigate")
                 .listRowInsets(EdgeInsets())
                 .listRowBackground(Color.clear)
 
@@ -81,7 +121,11 @@ struct RideSummarySection: View {
                     } label: {
                         Label("Open in Google Maps", systemImage: "location.north.line.fill")
                     }
+                } else {
+                    FocusPlaceholderRow()
                 }
+            } else {
+                FocusPlaceholderRow()
             }
             if let here = viewModel.currentLocation,
                let shareURL = NavigationLauncher.currentLocationShareURL(here) {
@@ -92,11 +136,41 @@ struct RideSummarySection: View {
                 ) {
                     Label("Share Current Location", systemImage: "dot.radiowaves.left.and.right")
                 }
+            } else {
+                FocusPlaceholderRow()
             }
             if let error = viewModel.errorMessage {
                 Text(error).foregroundStyle(.red)
+            } else {
+                FocusPlaceholderRow()
             }
         }
+    }
+
+    /// Single text, always in the section, so the row does not appear and
+    /// vanish as a replan starts. Hidden once calculating ends; the visible
+    /// string is not the "Replanning for …" sentence then.
+    private var replanBannerRow: some View {
+        let showing = viewModel.isCalculating
+        return Text(showing ? replanStatus : " ")
+            .font(showing ? .subheadline.weight(.semibold) : .system(size: 1))
+            .foregroundStyle(showing ? Color.primary : Color.clear)
+            .accessibilityIdentifier(showing ? AccessibilityID.replanBanner : "replanBannerIdle")
+            .accessibilityLabel(showing ? replanStatus : " ")
+            .accessibilityHidden(!showing)
+            .focusable()
+    }
+
+    private var routeStyleDetail: String {
+        if let note = viewModel.twistyLimitationNote {
+            return "\(viewModel.routeStyle.detail)\n\(note)"
+        }
+        return viewModel.routeStyle.detail
+    }
+
+    private var replanStatus: String {
+        viewModel.calculationStatus
+            ?? RoutePlannerViewModel.routeReplanStatus(style: viewModel.routeStyle)
     }
 
     private func launchAppleMaps() {
@@ -117,84 +191,131 @@ struct RideSummarySection: View {
 
 }
 
+/// One list row in the fuel plan. Flattened so a stop with no nearby food
+/// does not leave an empty container beside the fuel button.
+private struct FuelPlanRow: Identifiable {
+    enum Kind {
+        case recommended(SuggestedStop, number: Int)
+        case food(SuggestedStop)
+        case gap(FuelGap)
+        case pastRange(SuggestedStop)
+    }
+
+    var id: String
+    var kind: Kind
+}
+
 /// In-range fuel stops, with the named gap written where the tank runs out
 /// and the next station marked past range instead of numbered as a fuel stop.
 private struct FuelPlanRows: View {
     let viewModel: RoutePlannerViewModel
 
     var body: some View {
-        let entries = viewModel.visibleFuelPlanEntries
-        let numbers = fuelNumbers(entries)
-        ForEach(entries) { entry in
+        // Caller mounts this only when `planRows` is non-empty. Food is
+        // flattened in so a stop with no nearby food is not an `if` whose
+        // false branch is an empty focus container.
+        ForEach(planRows) { row in
+            rowContent(row)
+        }
+    }
+
+    private var planRows: [FuelPlanRow] {
+        var rows: [FuelPlanRow] = []
+        var number = 0
+        for entry in viewModel.visibleFuelPlanEntries {
             switch entry {
             case .recommended(let fuelStop):
-                Group {
-                    Button {
-                        viewModel.toggleBufferedGasStop(fuelStop)
-                    } label: {
-                        HStack {
-                            Label("Fuel stop \(numbers[entry.id] ?? 0): \(fuelStop.name) (~\(formattedRideDistance(fuelStop.distanceAlongRoute)) in)",
-                                  systemImage: "fuelpump.fill")
-                            Spacer()
-                            bufferMark(viewModel.isGasBuffered(fuelStop))
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.green)
-
-                    ForEach(foodNearFuelStop(fuelStop.id)) { food in
-                        Button {
-                            viewModel.addStop(from: food)
-                        } label: {
-                            HStack {
-                                Label(food.name, systemImage: "fork.knife")
-                                Spacer()
-                                Image(systemName: "plus.circle.fill")
-                                    .foregroundStyle(.blue)
-                            }
-                            .font(.subheadline)
-                            .padding(.leading)
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
-                    }
+                number += 1
+                rows.append(FuelPlanRow(id: entry.id, kind: .recommended(fuelStop, number: number)))
+                for food in foodNearFuelStop(fuelStop.id) {
+                    rows.append(FuelPlanRow(id: "food-\(food.id.uuidString)", kind: .food(food)))
                 }
             case .gap(let gap):
-                Label(gap.warning, systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
-                    .font(.subheadline)
+                rows.append(FuelPlanRow(id: entry.id, kind: .gap(gap)))
             case .pastRange(let stop):
-                Button {
-                    viewModel.toggleBufferedGasStop(stop)
-                } label: {
-                    HStack {
-                        Label("\(stop.name) (~\(formattedRideDistance(stop.distanceAlongRoute))) — past your range",
-                              systemImage: "fuelpump")
-                        Spacer()
-                        bufferMark(viewModel.isGasBuffered(stop))
-                    }
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.orange)
+                rows.append(FuelPlanRow(id: entry.id, kind: .pastRange(stop)))
             }
+        }
+        return rows
+    }
+
+    @ViewBuilder
+    private func rowContent(_ row: FuelPlanRow) -> some View {
+        switch row.kind {
+        case .recommended(let fuelStop, let number):
+            let title = "Fuel stop \(number): \(fuelStop.name)"
+            let caption = viewModel.fuelStopRidingCaption(for: fuelStop)
+            Button {
+                viewModel.toggleBufferedGasStop(fuelStop)
+            } label: {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "fuelpump.fill")
+                        .foregroundStyle(.green)
+                        .accessibilityHidden(true)
+                    FuelStopTextColumn(
+                        title: title,
+                        caption: caption,
+                        titleColor: .green,
+                        rowIdentifier: AccessibilityID.fuelStop(
+                            fuelStop.name,
+                            checked: viewModel.isGasBuffered(fuelStop)
+                        )
+                    )
+                    bufferMark(viewModel.isGasBuffered(fuelStop))
+                        .accessibilityHidden(true)
+                }
+            }
+            .buttonStyle(.plain)
+            .fuelRowAccessibility(
+                RecommendedFuelAccessibility(
+                    identifier: AccessibilityID.fuelStop(fuelStop.name, checked: viewModel.isGasBuffered(fuelStop)),
+                    label: "\(title), \(caption)",
+                    title: title
+                )
+            )
+        case .food(let food):
+            Button {
+                viewModel.addStop(from: food)
+            } label: {
+                HStack {
+                    Label(food.name, systemImage: "fork.knife")
+                    Spacer()
+                    Image(systemName: "plus.circle.fill")
+                        .foregroundStyle(.blue)
+                }
+                .font(.subheadline)
+                .padding(.leading)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+        case .gap(let gap):
+            Label(gap.warning, systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .font(.subheadline)
+        case .pastRange(let stop):
+            Button {
+                viewModel.toggleBufferedGasStop(stop)
+            } label: {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "fuelpump")
+                        .foregroundStyle(.orange)
+                        .accessibilityHidden(true)
+                    FuelStopTextColumn(
+                        title: stop.name,
+                        caption: viewModel.fuelStopRidingCaption(for: stop, pastRange: true),
+                        titleColor: .orange
+                    )
+                    bufferMark(viewModel.isGasBuffered(stop))
+                        .accessibilityHidden(true)
+                }
+            }
+            .buttonStyle(.plain)
         }
     }
 
     private func bufferMark(_ buffered: Bool) -> some View {
         Image(systemName: buffered ? "checkmark.circle.fill" : "circle")
             .foregroundStyle(buffered ? Color.green : Color.secondary)
-    }
-
-    private func fuelNumbers(_ entries: [FuelPlanEntry]) -> [String: Int] {
-        var numbers: [String: Int] = [:]
-        var count = 0
-        for entry in entries {
-            if case .recommended = entry {
-                count += 1
-                numbers[entry.id] = count
-            }
-        }
-        return numbers
     }
 
     private func foodNearFuelStop(_ fuelStopID: UUID) -> [SuggestedStop] {
