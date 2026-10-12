@@ -151,7 +151,7 @@ final class PlaceDescriptionTests: XCTestCase {
             websiteURL: URL(string: "https://maps.apple.com/place?id=1")
         )
         let text = await PlaceDescriptionLoader.text(for: query) { _ in
-            "<meta name=\"description\" content=\"\(gorge)\">"
+            "<meta name=\"description\" content=\"\(self.gorge)\">"
         }
         XCTAssertNil(text)
         XCTAssertFalse(PlaceDescriptionReader.isPlaceWebsite(URL(string: "http://example.com/place")!))
