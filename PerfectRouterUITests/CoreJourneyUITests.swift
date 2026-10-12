@@ -197,6 +197,9 @@ final class CoreJourneyUITests: XCTestCase {
             ["Test Origin", "Pilot Madison", "On Route Fuel", "Shell Knoxville", "Test Destination"],
             "Waypoint rows: \(names)"
         )
+        for name in ["Pilot Madison", "On Route Fuel", "Shell Knoxville"] {
+            XCTAssertEqual(names.filter { $0 == name }.count, 1, name)
+        }
     }
 
     func testRouteStyleChangesShowReplanBannerAndFinish() {
@@ -560,7 +563,10 @@ final class CoreJourneyUITests: XCTestCase {
                         nudgePlanningList(in: app, up: true)
                     }
                 }
-                if routeRequestHasFinished(style: style, in: app) { return }
+                // A few passes first, so a banner that is about to appear is
+                // not treated as already finished. The scroll above is what
+                // puts the summary back after the highlight rows unload it.
+                if nudges >= 4, routeRequestHasFinished(style: style, in: app) { return }
             }
             // iPad can park the in-list copy under the fold. Alternate
             // toward the top and just past it; the nav-bar copy needs no scroll.
