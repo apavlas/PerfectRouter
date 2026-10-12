@@ -6,7 +6,9 @@ import SwiftUI
 /// when the place has one.
 struct RideHighlightsSection: View {
     let viewModel: RoutePlannerViewModel
-    @State private var openDescription: OpenPlaceDescription?
+    /// Owned by the planning sheet, outside the list. A sheet attached to
+    /// this section never presents: the row's cell swallows the presentation.
+    @Binding var openDescription: OpenPlaceDescription?
 
     var body: some View {
         Section {
@@ -30,18 +32,16 @@ struct RideHighlightsSection: View {
         } footer: {
             Text("Places of interest right along your route, spread across the ride.")
         }
-        .sheet(item: $openDescription) { item in
-            PlaceDescriptionSheet(
-                name: item.name,
-                text: item.text,
-                textIdentifier: AccessibilityID.rideHighlightDescriptionFull(item.name)
-            )
-        }
     }
 
     private func present(_ stop: SuggestedStop) {
         guard let text = PlaceDescriptionDisplay.text(for: stop.placeDescription) else { return }
-        openDescription = OpenPlaceDescription(id: stop.id, name: stop.name, text: text)
+        openDescription = OpenPlaceDescription(
+            id: stop.id,
+            name: stop.name,
+            text: text,
+            textIdentifier: AccessibilityID.rideHighlightDescriptionFull(stop.name)
+        )
     }
 
     private func detailText(for stop: SuggestedStop) -> String {

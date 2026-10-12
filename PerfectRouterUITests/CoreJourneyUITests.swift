@@ -471,28 +471,57 @@ final class CoreJourneyUITests: XCTestCase {
             return
         }
         scrollUntilHittable(picker, in: app)
+        // Highlights lengthen the list, so this picker is found at the bottom
+        // edge. An iPad menu opened from there sits off the sheet and Twisty
+        // exists but is not hittable. Lift the anchor into the upper half.
+        var lifts = 0
+        while picker.exists, picker.frame.midY > app.frame.height * 0.45, lifts < 8 {
+            nudgePlanningList(in: app, up: true)
+            lifts += 1
+        }
+        if !picker.isHittable {
+            scrollUntilHittable(picker, in: app)
+        }
         picker.tap()
 
-        let byID = identified("routeStyleOption.\(style)", in: app)
-        if byID.waitForExistence(timeout: 2), byID.isHittable {
-            byID.tap()
-            return
-        }
-        // iPhone shows a menu of buttons. iPad can show the same choices in a popover
-        // whose rows are cells or static texts, so match the label on any hittable element.
-        let byLabel = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", style))
-        let optionDeadline = Date().addingTimeInterval(3)
+        let started = Date()
+        let optionDeadline = started.addingTimeInterval(5)
         while Date() < optionDeadline {
-            for index in 0..<byLabel.count {
-                let option = byLabel.element(boundBy: index)
-                if option.isHittable {
-                    option.tap()
-                    return
-                }
-            }
+            // Give the menu a moment to become hittable. A coordinate tap
+            // before that can hit the closed picker instead of Twisty.
+            let allowCoordinate = Date().timeIntervalSince(started) > 1.5
+            if tapRouteStyleOption(style, in: app, allowCoordinate: allowCoordinate) { return }
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         }
         XCTFail("Route style \(style) was not hittable")
+    }
+
+    /// Menu row for `style`. Prefer a hittable control. A visible iPad popover
+    /// row can report not hittable while its center is still on screen; a
+    /// coordinate tap hits that point.
+    private func tapRouteStyleOption(
+        _ style: String,
+        in app: XCUIApplication,
+        allowCoordinate: Bool
+    ) -> Bool {
+        var candidates = [identified("routeStyleOption.\(style)", in: app)]
+        let labeled = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", style))
+        for index in 0..<labeled.count {
+            candidates.append(labeled.element(boundBy: index))
+        }
+        let visible = candidates.filter { option in
+            guard option.exists, option.frame.width > 8, option.frame.height > 8 else { return false }
+            return app.frame.contains(CGPoint(x: option.frame.midX, y: option.frame.midY))
+        }
+        if let hittable = visible.first(where: \.isHittable) {
+            hittable.tap()
+            return true
+        }
+        if allowCoordinate, let option = visible.first {
+            option.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            return true
+        }
+        return false
     }
 
     // MARK: - Assertions
@@ -512,7 +541,19 @@ final class CoreJourneyUITests: XCTestCase {
         var nudges = 0
         while Date() < deadline {
             if bannerShows(style, in: app, lastLabel: &lastLabel) { return }
-            if nudges >= 4, routeRequestHasFinished(style: style, in: app) { return }
+            // A cached style (Fastest, after the other three) finishes before
+            // the banner can be read. The summary that proves it landed sits
+            // above the highlight rows and is unloaded while the style picker
+            // is on screen.
+            if !replanBannerIsUp(in: app) {
+                if !identified("activeRouteStyle", in: app).exists {
+                    scrollToTop(app)
+                    if !identified("activeRouteStyle", in: app).exists {
+                        nudgePlanningList(in: app, up: true)
+                    }
+                }
+                if routeRequestHasFinished(style: style, in: app) { return }
+            }
             // iPad can park the in-list copy under the fold. Alternate
             // toward the top and just past it; the nav-bar copy needs no scroll.
             if nudges % 3 == 2 {
@@ -541,14 +582,18 @@ final class CoreJourneyUITests: XCTestCase {
             || app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'No route found'")).firstMatch.exists
         if failed { return false }
         let active = identified("activeRouteStyle", in: app)
-        if active.exists, active.label != style { return false }
+        // Off-screen does not count. A fuel plan left over from the previous
+        // style is still in the tree until the summary is visited, and the
+        // highlight rows are what push that summary out of the lazy list.
+        guard active.exists else { return false }
+        guard active.label == style || active.label.hasPrefix(style) else { return false }
         // "Searching along your route…" is also the in-list copy while the
         // line is still calculating, so it is not proof the request finished.
-        // The gas-search sentence and a republished plan both start after
-        // `isCalculating` drops.
+        // The gas-search sentence, a republished plan, and Navigate all start
+        // after `isCalculating` drops.
         let gasFollowUp = app.staticTexts["Searching for gas along the route…"].exists
             || !publishedFuelNames(in: app).isEmpty
-        return gasFollowUp
+        return gasFollowUp || navigateButton(in: app).exists
     }
 
     private func waitForBannerToFinish(in app: XCUIApplication) {

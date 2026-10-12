@@ -6,6 +6,8 @@ struct OpenPlaceDescription: Identifiable {
     let id: UUID
     let name: String
     let text: String
+    /// Stamped on the sheet's full text. Empty for cards the UI tests do not open.
+    var textIdentifier: String = ""
 }
 
 /// Place name, then the published description, then the existing distance
@@ -33,20 +35,19 @@ struct PlaceDescriptionCard: View {
         HStack(alignment: alignment, spacing: spacing) {
             icon
             VStack(alignment: .leading, spacing: 2) {
-                cardButton(identifier: titleIdentifier, action: { openIfDescribed() }) {
-                    Text(name)
-                        .foregroundStyle(.primary)
-                        .multilineTextAlignment(.leading)
-                        .lineLimit(8)
-                }
+                Text(name)
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(8)
+                    .modifier(IdentifierIfPresent(identifier: titleIdentifier))
+                    .modifier(OpenDescriptionTap(isActive: placeDescription != nil, action: onOpen))
                 descriptionText
-                cardButton(identifier: "", action: { openIfDescribed() }) {
-                    Text(detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.leading)
-                        .lineLimit(6)
-                }
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(6)
+                    .modifier(OpenDescriptionTap(isActive: placeDescription != nil, action: onOpen))
             }
             Spacer(minLength: 0)
             Button(action: onAdd) {
@@ -57,28 +58,6 @@ struct PlaceDescriptionCard: View {
             .buttonStyle(.borderless)
             .accessibilityLabel("Add \(name)")
         }
-    }
-
-    /// Borderless, with an explicit content shape. In a List, `.plain` turns
-    /// every button into the cell button, and the Add button's row-sized
-    /// target was the view that received the description tap.
-    private func cardButton<Label: View>(
-        identifier: String,
-        action: @escaping () -> Void,
-        @ViewBuilder label: () -> Label
-    ) -> some View {
-        Button(action: action) {
-            label()
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.borderless)
-        .modifier(IdentifierIfPresent(identifier: identifier))
-        .modifier(OpenDescriptionHint(isActive: placeDescription != nil))
-    }
-
-    private func openIfDescribed() {
-        guard placeDescription != nil else { return }
-        onOpen()
     }
 
     @ViewBuilder
@@ -93,18 +72,20 @@ struct PlaceDescriptionCard: View {
 
     /// Inserted under the name. Absent when the place published nothing, so
     /// the distance line stays directly under the name.
-    /// Its own button. The identifier the UI test taps has to be this control,
-    /// not a text nested in a different button that swallows the hit.
+    ///
+    /// The identifier sits on this text. XCUITest taps the center of that
+    /// frame, which is the middle of the two clipped lines — not the Add
+    /// button and not a parent row button.
     @ViewBuilder
     private var descriptionText: some View {
         if let placeDescription {
-            cardButton(identifier: descriptionIdentifier, action: { onOpen() }) {
-                Text(placeDescription)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.leading)
-                    .lineLimit(PlaceDescriptionDisplay.collapsedLineLimit)
-            }
+            Text(placeDescription)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.leading)
+                .lineLimit(PlaceDescriptionDisplay.collapsedLineLimit)
+                .modifier(IdentifierIfPresent(identifier: descriptionIdentifier))
+                .modifier(OpenDescriptionTap(isActive: true, action: onOpen))
         }
     }
 }
@@ -135,13 +116,22 @@ struct PlaceDescriptionSheet: View {
     }
 }
 
-/// VoiceOver hint only when a tap can open the published text.
-private struct OpenDescriptionHint: ViewModifier {
+/// Tap target for a published description. `contentShape` fills the two-line
+/// layout rect, including the gap between glyphs, so the center point
+/// XCUITest uses is inside the gesture. `highPriorityGesture` wins over the
+/// list row, which otherwise swallows a tap that starts on a nested button.
+private struct OpenDescriptionTap: ViewModifier {
     var isActive: Bool
+    var action: () -> Void
 
     func body(content: Content) -> some View {
         if isActive {
-            content.accessibilityHint("Shows the full description")
+            content
+                .contentShape(Rectangle())
+                .highPriorityGesture(TapGesture().onEnded { action() })
+                .accessibilityAddTraits(.isButton)
+                .accessibilityHint("Shows the full description")
+                .accessibilityAction(.default) { action() }
         } else {
             content
         }

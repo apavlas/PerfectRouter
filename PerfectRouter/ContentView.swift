@@ -48,6 +48,9 @@ struct ContentView: View {
     @State private var showingHistory = false
     @State private var showingShareRide = false
     @State private var showingRiderGroups = false
+    /// Full place description. Held here, not on a list row: a `.sheet` inside
+    /// a `List` section does not present when the row handles the tap.
+    @State private var openPlaceDescription: OpenPlaceDescription?
 
     var body: some View {
         GeometryReader { geo in
@@ -387,11 +390,17 @@ struct ContentView: View {
                 WaypointsSection(viewModel: viewModel, onUseMapCenterAsStart: addStartFromMapCenter)
                 RideSummarySection(viewModel: viewModel)
                 if !viewModel.rideHighlights.isEmpty {
-                    RideHighlightsSection(viewModel: viewModel)
+                    RideHighlightsSection(
+                        viewModel: viewModel,
+                        openDescription: $openPlaceDescription
+                    )
                 } else {
                     FocusPlaceholderRow()
                 }
-                SuggestionsSection(viewModel: viewModel)
+                SuggestionsSection(
+                    viewModel: viewModel,
+                    openDescription: $openPlaceDescription
+                )
                 if viewModel.selectedCategory != .gas,
                    !viewModel.legs.isEmpty,
                    GasStationsSection.hasContent(viewModel) {
@@ -405,6 +414,13 @@ struct ContentView: View {
                 SavedRoutesSection(viewModel: viewModel, onLoad: loadSaved)
             }
             .accessibilityIdentifier("planningList")
+            .sheet(item: $openPlaceDescription) { item in
+                PlaceDescriptionSheet(
+                    name: item.name,
+                    text: item.text,
+                    textIdentifier: item.textIdentifier
+                )
+            }
             // Placeholder rows are one point tall. The default minimum would
             // turn each absent `if` into a full blank cell.
             .environment(\.defaultMinListRowHeight, 1)

@@ -249,7 +249,9 @@ struct WaypointsSection: View {
 /// Recommended stops along the route for the selected category — tap to add.
 struct SuggestionsSection: View {
     let viewModel: RoutePlannerViewModel
-    @State private var openDescription: OpenPlaceDescription?
+    /// Same binding as ride highlights. The sheet is presented by the
+    /// planning sheet, not by this list section.
+    @Binding var openDescription: OpenPlaceDescription?
 
     var body: some View {
         Section("Suggested \(viewModel.selectedCategory.rawValue) Stops") {
@@ -326,9 +328,6 @@ struct SuggestionsSection: View {
                 FocusPlaceholderRow()
             }
         }
-        .sheet(item: $openDescription) { item in
-            PlaceDescriptionSheet(name: item.name, text: item.text)
-        }
     }
 
     /// The distance line is always present, so the row stack does not gain
@@ -373,7 +372,7 @@ struct SuggestionsSection: View {
 
     private func present(_ stop: SuggestedStop, title: String) {
         guard let text = PlaceDescriptionDisplay.text(for: stop.placeDescription) else { return }
-        openDescription = OpenPlaceDescription(id: stop.id, name: title, text: text)
+        openDescription = OpenPlaceDescription(id: stop.id, name: title, text: text, textIdentifier: "")
     }
 
     @ViewBuilder
