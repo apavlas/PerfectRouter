@@ -95,13 +95,14 @@ struct GasStationsSection: View {
     @ViewBuilder
     private func gasRow(_ stop: SuggestedStop, recommended: Bool, pastRange: Bool = false) -> some View {
         let onRoute = viewModel.isStopOnRoute(stop)
+        let along = viewModel.distanceFromStart(of: stop)
         let markedPast = pastRange
             || viewModel.isPastRangeFuelStop(stop)
-            || viewModel.isBeyondRemainingRange(distanceAlongRoute: stop.distanceAlongRoute)
+            || viewModel.isBeyondRemainingRange(distanceAlongRoute: along)
         let showsRidingTime = recommended || viewModel.isRecommendedFuelStop(stop) || markedPast
         let caption = showsRidingTime
             ? viewModel.fuelStopRidingCaption(for: stop, pastRange: markedPast)
-            : "~\(formattedRideDistance(stop.distanceAlongRoute)) from start"
+            : "~\(formattedRideDistance(along)) from start"
         let accessibility = viewModel.recommendedFuelAccessibility(for: stop)
         let title = accessibility?.title ?? stop.name
         let button = Button {
@@ -360,12 +361,13 @@ struct SuggestionsSection: View {
     /// and lose a child when a replan reclassifies the stop.
     @ViewBuilder
     private func suggestionButton(_ stop: SuggestedStop) -> some View {
+        let along = viewModel.distanceFromStart(of: stop)
         let caption = viewModel.fuelStopListCaption(for: stop)
-            ?? "~\(formattedRideDistance(stop.distanceAlongRoute)) from start"
+            ?? "~\(formattedRideDistance(along)) from start"
         let accessibility = viewModel.recommendedFuelAccessibility(for: stop)
         let title = accessibility?.title ?? stop.name
         let pastRange = viewModel.isPastRangeFuelStop(stop)
-            || viewModel.isBeyondRemainingRange(distanceAlongRoute: stop.distanceAlongRoute)
+            || viewModel.isBeyondRemainingRange(distanceAlongRoute: along)
         if stop.category.showsPlaceDescription {
             describedSuggestion(
                 stop,

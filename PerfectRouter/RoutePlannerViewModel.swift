@@ -206,7 +206,20 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     /// Polyline of the last successful plan. Fuel stops that sit on it are
     /// stitched with one directions request instead of a via cascade.
+    /// Suggestion distances project onto this copy, which was read on the
+    /// main actor. A later `MKPolyline` read can come back empty and would
+    /// otherwise label every stop "~0 ft from start".
     var plannedCorridor: [[CLLocationCoordinate2D]] = []
+
+    /// Route geometry for "miles from start". Prefer the corridor captured
+    /// when the route was published. Read the live legs only when that
+    /// cache has no segment.
+    private var suggestionRoutePolylines: [[CLLocationCoordinate2D]] {
+        if plannedCorridor.contains(where: { $0.count > 1 }) {
+            return plannedCorridor
+        }
+        return legs.map { RouteGeometry.coordinates(of: $0.polyline) }
+    }
 
     private var suggestionService = StopSuggestionService()
 
@@ -632,9 +645,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// line. Applied gas fills count as the previous stop; time sitting at
     /// a stop is not added.
     func fuelStopRidingCaption(for stop: SuggestedStop, pastRange: Bool = false) -> String {
+        let distance = distanceFromStart(of: stop)
         let caption = FuelStopRidingTime.caption(
-            distanceMeters: stop.distanceAlongRoute,
-            anchors: fuelRidingAnchorDistances(including: stop.distanceAlongRoute),
+            distanceMeters: distance,
+            anchors: fuelRidingAnchorDistances(including: distance),
             legs: driveLegTimings()
         )
         guard pastRange else { return caption }
@@ -1762,6 +1776,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         generation: Int = 0,
         maxSearches: Int? = nil
     ) async -> CorridorSearchResult {
+        // Copy the polyline before the search hops off the main actor.
+        // `MKPolyline` reads from that hop can be empty, and every stop
+        // then stores 0 m ("~0 ft from start").
+        let routePolylines = suggestionRoutePolylines
         if let stopSearchOverride {
             return await stopSearchOverride.findStops(
                 category: category,
@@ -1780,7 +1798,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             alongLegs: legs,
             sampleDistances: sampleDistances,
             corridorRadiusMeters: corridorRadiusMeters,
-            generation: generation
+            generation: generation,
+            routePolylines: routePolylines
         )
     }
 
@@ -2632,6 +2651,44 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     // MARK: - Suggestions
 
+    /// Meters from the ride start for one suggestion row. The stop is
+    /// projected onto the published route polyline, so a stored 0 still
+    /// shows the real mile mark. The stored distance is kept only when
+    /// the route has no measurable length.
+    func distanceFromStart(of stop: SuggestedStop) -> CLLocationDistance {
+        Self.distanceFromStart(of: stop, alongPolylines: suggestionRoutePolylines)
+    }
+
+    nonisolated static func distanceFromStart(
+        of stop: SuggestedStop,
+        alongPolylines polylines: [[CLLocationCoordinate2D]]
+    ) -> CLLocationDistance {
+        guard polylinesAreMeasurable(polylines) else { return stop.distanceAlongRoute }
+        return RouteGeometry.distanceAlongRoute(of: stop.coordinate, alongPolylines: polylines)
+    }
+
+    /// Copies each suggested stop with its projected distance from the
+    /// start and returns them in ride order. Ids stay put. An
+    /// unmeasurable route leaves the stored distances alone.
+    nonisolated static func projectingDistancesFromStart(
+        _ stops: [SuggestedStop],
+        alongPolylines polylines: [[CLLocationCoordinate2D]]
+    ) -> [SuggestedStop] {
+        guard polylinesAreMeasurable(polylines) else { return stops }
+        return stops.map { stop in
+            stop.withDistanceAlongRoute(
+                RouteGeometry.distanceAlongRoute(of: stop.coordinate, alongPolylines: polylines)
+            )
+        }
+        .sorted { $0.distanceAlongRoute < $1.distanceAlongRoute }
+    }
+
+    nonisolated private static func polylinesAreMeasurable(
+        _ polylines: [[CLLocationCoordinate2D]]
+    ) -> Bool {
+        polylines.contains { RouteGeometry.length(of: $0) > 1 }
+    }
+
     func refreshSuggestions() async {
         guard !legs.isEmpty else { return }
         suggestionGeneration += 1
@@ -2649,7 +2706,11 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         // A throttle or a cancel must not replace the list with [] and read
         // as "no stops". Only a completed search publishes.
         guard generation == suggestionGeneration, !Task.isCancelled, found.status == .completed else { return }
-        let published = applyingKnownPlaceDescriptions(found.stops)
+        let projected = Self.projectingDistancesFromStart(
+            found.stops,
+            alongPolylines: suggestionRoutePolylines
+        )
+        let published = applyingKnownPlaceDescriptions(projected)
         suggestedStops = published
         // The corridor search is done. Page descriptions fill in afterwards
         // and must not keep the "searching" row on screen.
