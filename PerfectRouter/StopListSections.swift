@@ -102,7 +102,7 @@ struct GasStationsSection: View {
         let showsRidingTime = recommended || viewModel.isRecommendedFuelStop(stop) || markedPast
         let caption = showsRidingTime
             ? viewModel.fuelStopRidingCaption(for: stop, pastRange: markedPast)
-            : "~\(formattedRideDistance(along)) from start"
+            : milesFromStartCaption(along)
         let accessibility = viewModel.recommendedFuelAccessibility(for: stop)
         let title = accessibility?.title ?? stop.name
         let button = Button {
@@ -363,7 +363,7 @@ struct SuggestionsSection: View {
     private func suggestionButton(_ stop: SuggestedStop) -> some View {
         let along = viewModel.distanceFromStart(of: stop)
         let caption = viewModel.fuelStopListCaption(for: stop)
-            ?? "~\(formattedRideDistance(along)) from start"
+            ?? milesFromStartCaption(along)
         let accessibility = viewModel.recommendedFuelAccessibility(for: stop)
         let title = accessibility?.title ?? stop.name
         let pastRange = viewModel.isPastRangeFuelStop(stop)

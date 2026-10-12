@@ -75,6 +75,21 @@ enum RouteGeometry {
         nearestProjection(of: coordinate, alongPolylines: polylines)?.distanceAlong ?? 0
     }
 
+    /// A projection of a few hundred feet is the route origin, or a polyline
+    /// read that collapsed. `known` is a mile mark already measured along the
+    /// route (the search sample, or the distance stored on the stop). Prefer
+    /// that over labeling a distant station "~400 ft from start".
+    static func preferredDistanceAlongRoute(
+        projected: CLLocationDistance,
+        known: CLLocationDistance
+    ) -> CLLocationDistance {
+        let footScale: CLLocationDistance = 250
+        if projected < footScale, known >= AppSettings.metersPerMile {
+            return known
+        }
+        return projected
+    }
+
     /// The straight-line distance (meters) from `coordinate` to the nearest
     /// point on the route — i.e. how far off-route a stop sits, the detour a
     /// rider takes to reach it. Returns 0 when there's no usable route geometry.
