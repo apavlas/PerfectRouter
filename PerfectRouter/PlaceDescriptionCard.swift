@@ -90,7 +90,7 @@ struct PlaceDescriptionCard: View {
     }
 }
 
-/// Full published text. The list card keeps the two-line clip.
+/// The same two stored sentences, with no line limit. The list card clips them.
 struct PlaceDescriptionSheet: View {
     let name: String
     let text: String

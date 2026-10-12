@@ -15,19 +15,25 @@ final class PlaceDescriptionTests: XCTestCase {
         XCTAssertEqual(PlaceDescriptionDisplay.rowSentenceLimit, 2)
     }
 
-    func testRowKeepsAtMostTwoSentencesAndTheSheetKeepsTheRest() {
-        let source = "First published sentence. Second published sentence. Third sentence stays in the sheet."
-        XCTAssertEqual(PlaceDescriptionDisplay.text(for: source), source)
-        XCTAssertEqual(
-            PlaceDescriptionDisplay.rowText(for: source),
-            "First published sentence. Second published sentence."
-        )
+    func testRowAndSheetShareTheTwoSentenceCap() {
+        let source = "First published sentence. Second published sentence. Third sentence stays out."
+        let capped = "First published sentence. Second published sentence."
+        XCTAssertEqual(PlaceDescriptionDisplay.text(for: source), capped)
+        XCTAssertEqual(PlaceDescriptionDisplay.rowText(for: source), capped)
         XCTAssertNil(PlaceDescriptionDisplay.rowText(for: nil))
         XCTAssertNil(PlaceDescriptionDisplay.rowText(for: "   "))
         XCTAssertEqual(
             PlaceDescriptionDisplay.rowText(for: "Only one sentence."),
             "Only one sentence."
         )
+        let stored = SuggestedStop(
+            name: "Overlook",
+            coordinate: CLLocationCoordinate2D(latitude: 34.6, longitude: -83.4),
+            category: .attraction,
+            distanceAlongRoute: 1_000,
+            detourMeters: 40
+        ).withPlaceDescription(source)
+        XCTAssertEqual(stored.placeDescription, capped)
     }
 
     func testStreetAndMountainAbbreviationsAreNotSentenceEnds() {
@@ -111,6 +117,93 @@ final class PlaceDescriptionTests: XCTestCase {
             "<meta name=\"description\" content=\"Different words from the website.\">"
         }
         XCTAssertEqual(text, sentence)
+    }
+
+    func testAddressPhoneAndCategorySubtitlesFallThroughToTheWebsite() async {
+        let page = gorge
+        let html = "<meta name=\"description\" content=\"\(page)\">"
+        let subtitles = [
+            "120 Ridge Road, Clayton, GA 30525",
+            "Main Street, Springfield, Illinois.",
+            "Manchester, New Hampshire.",
+            "(706) 555-0148",
+            "Phone: (706) 555-0148",
+            "706-555-0148 ext 2",
+            "Gas Station",
+            "Restaurant",
+            "Hotel",
+            "National Park",
+            "Tourist Attraction",
+            "Point of Interest.",
+        ]
+        for subtitle in subtitles {
+            let query = PlaceDescriptionQuery(
+                id: UUID(),
+                name: "Tallulah Gorge",
+                appleMapsCandidate: subtitle,
+                rejectIfEqual: [],
+                websiteURL: URL(string: "https://tallulahgorge.example/visit")
+            )
+            let text = await PlaceDescriptionLoader.text(for: query) { _ in html }
+            XCTAssertEqual(text, page, subtitle)
+        }
+
+        let addressOnly = PlaceDescriptionQuery(
+            id: UUID(),
+            name: "Tallulah Gorge",
+            appleMapsCandidate: "120 Ridge Road, Clayton, GA 30525",
+            rejectIfEqual: [],
+            websiteURL: nil
+        )
+        let missing = await PlaceDescriptionLoader.text(for: addressOnly) { _ in
+            "This page must not be fetched without a place URL."
+        }
+        XCTAssertNil(missing)
+    }
+
+    func testRealSubtitleIsKeptAndLaterSentencesAreDropped() async {
+        let sentence = "A family restaurant on the square since opening day. The kitchen still bakes its bread. The third sentence is not stored."
+        let query = PlaceDescriptionQuery(
+            id: UUID(),
+            name: "Square Cafe",
+            appleMapsCandidate: sentence,
+            rejectIfEqual: ["Square Cafe"],
+            websiteURL: URL(string: "https://example.com/cafe")
+        )
+        let text = await PlaceDescriptionLoader.text(for: query) { _ in
+            "<meta name=\"description\" content=\"Different words from the website.\">"
+        }
+        XCTAssertEqual(
+            text,
+            "A family restaurant on the square since opening day. The kitchen still bakes its bread."
+        )
+    }
+
+    func testWebsiteDropsCallToActionSentencesBeforeTheCap() {
+        let html = """
+        <meta name="description" content="Book now. A granite gorge on the Tallulah River. Call today. Trails stay open all year. Order online. A third trail sentence stays out.">
+        """
+        XCTAssertEqual(
+            PlaceDescriptionReader.placeText(from: html, name: "Tallulah Gorge"),
+            "A granite gorge on the Tallulah River. Trails stay open all year."
+        )
+        XCTAssertEqual(
+            PlaceDescriptionReader.placeText(
+                from: "<meta name=\"description\" content=\"Book now. Reserve a dawn tour of the gorge if you want the quiet.\">",
+                name: "Tallulah Gorge"
+            ),
+            "Reserve a dawn tour of the gorge if you want the quiet."
+        )
+    }
+
+    func testWebsiteThatIsOnlyCallsToActionIsNil() {
+        let phrases = "Book now. Call today. Order online. Reserve your table. Shop now."
+        let html = "<meta name=\"description\" content=\"\(phrases)\">"
+        XCTAssertNil(PlaceDescriptionReader.placeText(from: html, name: "Cafe"))
+        XCTAssertNil(PlaceDescriptionReader.placeText(
+            from: "<meta property=\"og:description\" content=\"Shop now! Buy tickets.\">",
+            name: "Cafe"
+        ))
     }
 
     func testAddressAndCategoryAreNotDescriptions() {

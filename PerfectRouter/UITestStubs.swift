@@ -69,8 +69,9 @@ enum UITestFixture {
     static let describedHighlightName = "Tallulah Gorge"
     static let plainHighlightName = "Bare Overlook"
     /// Canned UI-test copy only. A normal launch never builds these stops.
-    /// Two long sentences land on the row; later sentences exist so the sheet
-    /// can show text the row does not.
+    /// Four sentences go in. The model keeps the first two, the row clips
+    /// those to two lines, and the sheet shows the same two. Sentence three
+    /// must not appear.
     static let publishedHighlightDescription = "UI test fixture sentence one describes the canned highlight and keeps going so the row cannot show it all. UI test fixture sentence two is also on the row and continues past two lines of subheadline. UI test fixture sentence three appears only in the full sheet. UI test fixture sentence four is stub data and not a real place description."
     static let highlightDescriptionOpening = "UI test fixture sentence one"
     static let highlightDescriptionTail = "UI test fixture sentence three appears only in the full sheet."

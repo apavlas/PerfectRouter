@@ -85,6 +85,7 @@ final class CoreJourneyUITests: XCTestCase {
 
         let clipped = reveal("highlight.Tallulah Gorge.description", in: app)
         scrollUntilHittable(clipped, in: app)
+        let rowHeight = clipped.frame.height
         clipped.tap()
 
         let full = identified("highlight.Tallulah Gorge.description.full", in: app)
@@ -94,10 +95,18 @@ final class CoreJourneyUITests: XCTestCase {
         )
         XCTAssertTrue(full.label.hasPrefix("UI test fixture sentence one"), full.label)
         XCTAssertTrue(
-            full.label.contains("UI test fixture sentence three appears only in the full sheet."),
+            full.label.contains("UI test fixture sentence two is also on the row"),
             full.label
         )
-        XCTAssertGreaterThan(full.label.count, clippedLabel.count)
+        XCTAssertFalse(
+            full.label.contains("UI test fixture sentence three"),
+            "The sheet showed a sentence past the two-sentence cap: \(full.label)"
+        )
+        XCTAssertGreaterThan(
+            full.frame.height,
+            rowHeight,
+            "The sheet clipped the two sentences instead of showing them in full. sheet=\(full.frame) rowHeight=\(rowHeight)"
+        )
         attachScreenshot("Ride highlight description expanded", of: app)
     }
 

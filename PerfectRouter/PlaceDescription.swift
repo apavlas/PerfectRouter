@@ -1,28 +1,29 @@
 import Foundation
 import MapKit
 
-/// The row shows at most two sentences, then clips those to two lines.
-/// The sheet shows the same source string in full.
+/// The stored description is at most two sentences. The row clips that text
+/// to two lines. The sheet shows the same two sentences with no line limit.
+/// Later sentences are never shown.
 ///
 /// Apple Maps place objects expose a name, address, category, phone, and URL.
-/// A card shows text only when `MKPlacemark.subtitle` is already a sentence,
-/// or when the place's own page published a description. Nothing is written
-/// to fill a gap.
+/// A card shows `MKPlacemark.subtitle` only when it is already a sentence and
+/// not an address, a phone number, or a bare category. Otherwise the place's
+/// own page is read. Nothing is written to fill a gap.
 enum PlaceDescriptionDisplay {
     static let collapsedLineLimit = 2
     static let rowSentenceLimit = 2
 
-    /// Blank input is "no description". Non-blank input is returned unchanged
-    /// aside from trimming and collapsing whitespace. This is the sheet text.
+    /// The description the row and the sheet share: normalized, then cut
+    /// after the second sentence. "St." and "Mt." are not endings. Blank
+    /// input and a shorter source stay nil or whole.
     static func text(for description: String?) -> String? {
-        PlaceDescriptionReader.normalize(description)
+        guard let text = PlaceDescriptionReader.normalize(description) else { return nil }
+        return PlaceDescriptionReader.firstSentences(in: text, limit: rowSentenceLimit)
     }
 
-    /// The row's copy of `text(for:)`, cut after the second sentence.
-    /// "St." and "Mt." are not endings. A shorter source is returned whole.
+    /// Same string as `text(for:)`. The row applies `collapsedLineLimit` on top.
     static func rowText(for description: String?) -> String? {
-        guard let text = text(for: description) else { return nil }
-        return PlaceDescriptionReader.firstSentences(in: text, limit: rowSentenceLimit)
+        text(for: description)
     }
 }
 
@@ -94,14 +95,17 @@ enum PlaceDescriptionReader {
     }
 
     /// Accepts a MapKit string only when it is already a sentence and it is
-    /// not the place name or an address. Never builds a sentence from a
-    /// category, a name, or a city.
+    /// not an address, a phone number, a bare category, or the place name.
+    /// Those subtitles return nil so the loader can read the place's page.
+    /// The result is capped at two sentences.
     static func acceptedAppleMapsText(
         _ raw: String?,
         name: String?,
         rejectIfEqual rejects: [String]
     ) -> String? {
+        if let raw, isOnlyPhoneNumber(raw) { return nil }
         guard let text = normalize(raw) else { return nil }
+        if isOnlyPhoneNumber(text) || isBareCategory(text) || isOnlyAddress(text) { return nil }
         if let name, same(text, name) { return nil }
         if rejects.contains(where: { candidate in
             guard let normalized = normalize(candidate) else { return false }
@@ -110,12 +114,13 @@ enum PlaceDescriptionReader {
             return nil
         }
         guard isAppleMapsProse(text) else { return nil }
-        return text
+        return firstSentences(in: text, limit: PlaceDescriptionDisplay.rowSentenceLimit)
     }
 
     /// The place's own description fields, in the order the page publishes
-    /// them: meta description, then Open Graph, then JSON-LD. Nil when the
-    /// document has none.
+    /// them: meta description, then Open Graph, then JSON-LD. Pure calls to
+    /// action are removed before the two-sentence cap. Nil when nothing
+    /// descriptive is left.
     static func placeText(from document: String, name: String?) -> String? {
         if let meta = metaContent(in: document, attribute: "name", equals: "description"),
            let text = acceptedPlaceText(meta, name: name) {
@@ -162,13 +167,21 @@ enum PlaceDescriptionReader {
         return collapsed
     }
 
-    /// A place-published description. At least three words, and not just the name.
+    /// A place-published description. Call-to-action sentences are dropped,
+    /// then at most two sentences remain. Nil when that leaves fewer than
+    /// three words or only the place name.
     static func acceptedPlaceText(_ raw: String?, name: String?) -> String? {
         guard let text = normalize(raw) else { return nil }
         if let name, same(text, name) { return nil }
-        let words = text.split(whereSeparator: \.isWhitespace)
+        let kept = sentences(in: text).filter { !isPureCallToAction($0) }
+        guard !kept.isEmpty else { return nil }
+        let capped = firstSentences(
+            in: kept.joined(separator: " "),
+            limit: PlaceDescriptionDisplay.rowSentenceLimit
+        )
+        let words = capped.split(whereSeparator: \.isWhitespace)
         guard words.count >= 3 else { return nil }
-        return text
+        return capped
     }
 
     /// MapKit subtitles need a sentence ending as well as three words, so a
@@ -179,21 +192,110 @@ enum PlaceDescriptionReader {
         return hasSentenceEnding(text)
     }
 
+    /// Sentences split on `.` `!` and `?`. Periods in "St." and "Mt." stay
+    /// inside the sentence they belong to.
+    static func sentences(in text: String) -> [String] {
+        let scalars = Array(text)
+        guard !scalars.isEmpty else { return [] }
+        var sentences: [String] = []
+        var start = 0
+
+        func append(from: Int, through: Int) {
+            guard through >= from, through < scalars.count else { return }
+            let startIndex = text.index(text.startIndex, offsetBy: from)
+            let endIndex = text.index(text.startIndex, offsetBy: through + 1)
+            let sentence = String(text[startIndex..<endIndex])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !sentence.isEmpty { sentences.append(sentence) }
+        }
+
+        for index in scalars.indices {
+            guard isSentenceEnding(scalars, at: index) else { continue }
+            append(from: start, through: index)
+            start = index + 1
+            while start < scalars.count, scalars[start].isWhitespace {
+                start += 1
+            }
+        }
+        if start < scalars.count {
+            append(from: start, through: scalars.count - 1)
+        }
+        return sentences
+    }
+
     /// Prefix through the `limit`th real sentence ending. Fewer endings
     /// returns `text` unchanged. Periods in "St." and "Mt." do not count.
     static func firstSentences(in text: String, limit: Int) -> String {
         guard limit > 0 else { return text }
-        let scalars = Array(text)
-        var found = 0
-        for index in scalars.indices {
-            guard isSentenceEnding(scalars, at: index) else { continue }
-            found += 1
-            if found == limit {
-                let end = text.index(text.startIndex, offsetBy: index + 1)
-                return String(text[..<end])
+        let parts = sentences(in: text)
+        guard parts.count > limit else { return text }
+        return parts.prefix(limit).joined(separator: " ")
+    }
+
+    /// A subtitle that is only a phone number, including a leading "Phone"
+    /// or "Tel" label and a trailing extension.
+    static func isOnlyPhoneNumber(_ text: String) -> Bool {
+        var working = text.lowercased()
+        let labels = ["telephone", "phone", "tel", "mobile", "fax"]
+        for label in labels {
+            guard working.hasPrefix(label) else { continue }
+            let after = working.index(working.startIndex, offsetBy: label.count)
+            if after == working.endIndex || !working[after].isLetter {
+                working = String(working[after...])
+                break
             }
         }
-        return text
+        let digits = working.filter(\.isNumber)
+        let letters = String(working.filter(\.isLetter))
+        guard (7...15).contains(digits.count) else { return false }
+        return letters.isEmpty || letters == "ext" || letters == "extension" || letters == "x"
+    }
+
+    /// A subtitle that is only a street, city, state, or ZIP. A sentence that
+    /// merely mentions a road is not an address.
+    static func isOnlyAddress(_ text: String) -> Bool {
+        let tokens = addressTokens(in: text)
+        guard !tokens.isEmpty else { return false }
+        if tokens.contains(where: { proseVerbs.contains($0) }) { return false }
+
+        let hasZip = tokens.contains(where: isZip)
+        let hasSuffix = tokens.contains(where: { streetSuffixes.contains($0) })
+        let hasState = containsState(tokens)
+        let startsWithNumber = tokens[0].allSatisfy(\.isNumber)
+        let hasComma = text.contains(",")
+        let leftovers = tokens.filter { token in
+            if token.allSatisfy(\.isNumber) || isZip(token) { return false }
+            if streetSuffixes.contains(token) || stateAbbreviations.contains(token) { return false }
+            if singleWordStates.contains(token) || addressFillers.contains(token) { return false }
+            if multiWordStateTokens.contains(token), hasState { return false }
+            return true
+        }
+        if startsWithNumber && hasSuffix && leftovers.count <= 2 { return true }
+        if hasZip && (hasSuffix || hasState) && leftovers.count <= 4 { return true }
+        if hasComma && hasState && leftovers.count <= 3 { return true }
+        return false
+    }
+
+    /// The whole subtitle is a point-of-interest category or a common
+    /// category label such as "Gas Station" or "Tourist Attraction".
+    static func isBareCategory(_ text: String) -> Bool {
+        let key = matchKey(text)
+        guard !key.isEmpty else { return false }
+        if categoryLabels.contains(key) { return true }
+        if key.hasSuffix("s"), categoryLabels.contains(String(key.dropLast())) { return true }
+        return false
+    }
+
+    /// A sentence whose words are only a call to action, such as "Book now"
+    /// or "Reserve your table". A sentence that continues past the pitch stays.
+    static func isPureCallToAction(_ sentence: String) -> Bool {
+        let key = matchKey(sentence)
+        if key.isEmpty { return false }
+        if callToActionPhrases.contains(key) { return true }
+        let words = key.split(separator: " ").map(String.init)
+        guard (1...6).contains(words.count) else { return false }
+        guard words.contains(where: { callToActionVerbs.contains($0) }) else { return false }
+        return words.allSatisfy { callToActionLexicon.contains($0) }
     }
 
     // MARK: - HTML
@@ -242,6 +344,188 @@ enum PlaceDescriptionReader {
         "st", "rd", "ave", "blvd", "dr", "mt", "jr", "sr", "mr", "mrs", "ms",
         "inc", "ltd", "co", "no", "ft", "hwy", "us",
     ]
+
+    /// iOS 17 `MKPointOfInterestCategory` values. Newer categories are listed
+    /// by the name MapKit shows, so this file does not reference symbols that
+    /// are unavailable at the deployment target.
+    private static let pointOfInterestCategories: [MKPointOfInterestCategory] = [
+        .airport, .amusementPark, .aquarium, .atm, .bakery, .bank, .beach,
+        .brewery, .cafe, .campground, .carRental, .evCharger, .fireStation,
+        .fitnessCenter, .foodMarket, .gasStation, .hospital, .hotel, .laundry,
+        .library, .marina, .movieTheater, .museum, .nationalPark, .nightlife,
+        .park, .parking, .pharmacy, .police, .postOffice, .publicTransport,
+        .restaurant, .restroom, .school, .stadium, .store, .theater,
+        .university, .winery, .zoo,
+    ]
+
+    private static let commonCategoryLabels: Set<String> = [
+        "tourist attraction", "point of interest", "scenic", "sights",
+        "attraction", "coffee", "coffee shop", "gas", "fuel", "lodging",
+        "motel", "inn", "bar", "fast food", "grocery", "convenience store",
+        "rest area", "shopping", "food", "shopping center", "historic site",
+        "historical landmark", "landmark", "viewpoint", "scenic view",
+        "visitor center", "music venue", "national monument", "distillery",
+        "automotive repair", "convention center", "rv park", "skate park",
+        "mini golf", "rock climbing", "go kart",
+    ]
+
+    private static let categoryLabels: Set<String> = {
+        var labels = commonCategoryLabels
+        for category in pointOfInterestCategories {
+            let spaced = spacedCategoryName(category.rawValue)
+            labels.insert(spaced)
+            labels.insert(category.rawValue.lowercased())
+        }
+        return labels
+    }()
+
+    private static let streetSuffixes: Set<String> = [
+        "st", "street", "rd", "road", "ave", "avenue", "blvd", "boulevard",
+        "dr", "drive", "ln", "lane", "ct", "court", "hwy", "highway",
+        "way", "pkwy", "parkway", "trl", "trail", "cir", "circle",
+        "pl", "place", "ter", "terrace", "loop", "rte", "route",
+        "aly", "alley", "sq", "square",
+    ]
+
+    private static let addressFillers: Set<String> = [
+        "n", "s", "e", "w", "ne", "nw", "se", "sw",
+        "north", "south", "east", "west",
+        "suite", "ste", "apt", "apartment", "unit", "floor", "fl",
+        "po", "box", "bldg", "building", "the", "a", "an", "of", "and", "at",
+    ]
+
+    private static let stateAbbreviations: Set<String> = [
+        "al", "ak", "az", "ar", "ca", "co", "ct", "de", "dc", "fl", "ga",
+        "hi", "id", "il", "in", "ia", "ks", "ky", "la", "me", "md", "ma",
+        "mi", "mn", "ms", "mo", "mt", "ne", "nv", "nh", "nj", "nm", "ny",
+        "nc", "nd", "oh", "ok", "or", "pa", "ri", "sc", "sd", "tn", "tx",
+        "ut", "vt", "va", "wa", "wv", "wi", "wy",
+    ]
+
+    private static let singleWordStates: Set<String> = [
+        "alabama", "alaska", "arizona", "arkansas", "california", "colorado",
+        "connecticut", "delaware", "florida", "georgia", "hawaii", "idaho",
+        "illinois", "indiana", "iowa", "kansas", "kentucky", "louisiana",
+        "maine", "maryland", "massachusetts", "michigan", "minnesota",
+        "mississippi", "missouri", "montana", "nebraska", "nevada", "ohio",
+        "oklahoma", "oregon", "pennsylvania", "tennessee", "texas", "utah",
+        "vermont", "virginia", "washington", "wisconsin", "wyoming",
+    ]
+
+    private static let multiWordStates: [String] = [
+        "new hampshire", "new jersey", "new mexico", "new york",
+        "north carolina", "north dakota", "south carolina", "south dakota",
+        "west virginia", "rhode island", "district of columbia",
+    ]
+
+    private static let multiWordStateTokens: Set<String> = [
+        "new", "hampshire", "jersey", "mexico", "york", "north", "south",
+        "carolina", "dakota", "west", "virginia", "rhode", "island",
+        "district", "columbia",
+    ]
+
+    private static let proseVerbs: Set<String> = [
+        "is", "are", "was", "were", "be", "been", "being",
+        "has", "have", "had", "sits", "sit", "overlooks", "offers", "offer",
+        "features", "feature", "built", "opens", "opened", "closed", "closes",
+        "crosses", "follows", "starts", "climbs", "faces", "includes",
+        "remains", "runs", "winds", "cuts", "spans", "stands", "lies",
+        "marks", "holds", "shows", "looks", "made", "makes", "serves",
+        "provides", "covers", "rises", "flows", "meets", "joins", "leads",
+        "turns", "continues", "welcomes", "houses", "contains", "forms",
+        "dates", "began", "begins", "named", "called", "known", "keeps",
+        "kept", "found", "finds", "sees", "saw",
+    ]
+
+    private static let callToActionVerbs: Set<String> = [
+        "book", "call", "order", "reserve", "shop", "buy", "click",
+        "subscribe", "follow", "download", "sign", "learn", "read",
+        "contact", "view",
+    ]
+
+    private static let callToActionPhrases: Set<String> = [
+        "book now", "book today", "book online", "book your stay",
+        "book your visit", "book a table", "book your table",
+        "call now", "call today", "call us", "call us today",
+        "order now", "order online", "order today", "order ahead",
+        "reserve now", "reserve today", "reserve your table", "reserve a table",
+        "shop now", "shop online", "shop today",
+        "buy now", "buy today", "buy tickets",
+        "learn more", "read more", "click here", "sign up", "subscribe",
+        "get tickets", "contact us", "contact us today",
+        "view menu", "see menu", "download the app", "join now",
+        "add to cart", "start now", "try now", "follow us",
+        "visit our website", "visit our site",
+    ]
+
+    private static let callToActionLexicon: Set<String> = [
+        "book", "call", "order", "reserve", "shop", "buy", "click",
+        "subscribe", "follow", "download", "sign", "learn", "read",
+        "contact", "view", "see", "get", "add", "join", "start", "try",
+        "visit", "now", "today", "online", "us", "your", "you", "a", "an",
+        "the", "table", "stay", "ticket", "tickets", "more", "here", "our",
+        "website", "site", "menu", "app", "ahead", "reservation",
+        "reservations", "to", "for", "up", "in", "please", "this", "free",
+        "cart",
+    ]
+
+    private static func spacedCategoryName(_ raw: String) -> String {
+        let prefix = "MKPOICategory"
+        let body = raw.hasPrefix(prefix) ? String(raw.dropFirst(prefix.count)) : raw
+        var words: [String] = []
+        var current = ""
+        let characters = Array(body)
+        for index in characters.indices {
+            let character = characters[index]
+            if !current.isEmpty, character.isUppercase {
+                let previous = characters[index - 1]
+                let nextIsLower = index + 1 < characters.count && characters[index + 1].isLowercase
+                if nextIsLower || !previous.isUppercase {
+                    words.append(current)
+                    current = ""
+                }
+            }
+            current.append(character)
+        }
+        if !current.isEmpty { words.append(current) }
+        return words.joined(separator: " ").lowercased()
+    }
+
+    private static func matchKey(_ text: String) -> String {
+        let filtered = text.lowercased().filter { $0.isLetter || $0.isNumber || $0.isWhitespace }
+        return filtered.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
+    private static func addressTokens(in text: String) -> [String] {
+        let edge = CharacterSet.punctuationCharacters.subtracting(CharacterSet(charactersIn: "-"))
+        return text.lowercased()
+            .split { $0.isWhitespace || $0 == "," }
+            .map { $0.trimmingCharacters(in: edge) }
+            .filter { !$0.isEmpty }
+    }
+
+    private static func isZip(_ token: String) -> Bool {
+        let parts = token.split(separator: "-", omittingEmptySubsequences: false)
+        if parts.count == 1 {
+            return parts[0].count == 5 && parts[0].allSatisfy(\.isNumber)
+        }
+        guard parts.count == 2 else { return false }
+        return parts[0].count == 5 && parts[1].count == 4
+            && parts[0].allSatisfy(\.isNumber) && parts[1].allSatisfy(\.isNumber)
+    }
+
+    private static func containsState(_ tokens: [String]) -> Bool {
+        if tokens.contains(where: { stateAbbreviations.contains($0) || singleWordStates.contains($0) }) {
+            return true
+        }
+        let joined = tokens.joined(separator: " ")
+        return multiWordStates.contains { phrase in
+            joined == phrase
+                || joined.hasPrefix(phrase + " ")
+                || joined.hasSuffix(" " + phrase)
+                || joined.contains(" " + phrase + " ")
+        }
+    }
 
     static func hasSentenceEnding(_ text: String) -> Bool {
         let scalars = Array(text)
@@ -477,7 +761,7 @@ extension SuggestedStop {
     /// The id stays put so the list row does not jump.
     func withPlaceDescription(_ text: String?) -> SuggestedStop {
         var copy = self
-        copy.placeDescription = PlaceDescriptionReader.normalize(text)
+        copy.placeDescription = PlaceDescriptionDisplay.text(for: text)
         return copy
     }
 

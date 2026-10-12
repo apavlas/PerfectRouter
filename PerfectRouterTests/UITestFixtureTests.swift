@@ -255,14 +255,12 @@ final class UITestFixtureTests: XCTestCase {
             [UITestFixture.describedHighlightName, UITestFixture.plainHighlightName]
         )
         let prose = try XCTUnwrap(picked[0].placeDescription)
-        XCTAssertTrue(prose.hasPrefix("UI test fixture"))
-        XCTAssertEqual(PlaceDescriptionDisplay.text(for: prose), prose)
-        XCTAssertEqual(
-            PlaceDescriptionDisplay.rowText(for: prose),
-            "UI test fixture sentence one describes the canned highlight and keeps going so the row cannot show it all. UI test fixture sentence two is also on the row and continues past two lines of subheadline."
-        )
-        XCTAssertFalse(PlaceDescriptionDisplay.rowText(for: prose)?.contains("sentence three") ?? true)
-        XCTAssertTrue(prose.contains(UITestFixture.highlightDescriptionTail))
+        let capped = "UI test fixture sentence one describes the canned highlight and keeps going so the row cannot show it all. UI test fixture sentence two is also on the row and continues past two lines of subheadline."
+        XCTAssertTrue(UITestFixture.publishedHighlightDescription.contains(UITestFixture.highlightDescriptionTail))
+        XCTAssertEqual(prose, capped)
+        XCTAssertEqual(PlaceDescriptionDisplay.text(for: prose), capped)
+        XCTAssertEqual(PlaceDescriptionDisplay.rowText(for: prose), capped)
+        XCTAssertFalse(prose.contains("sentence three"))
         XCTAssertNil(picked[1].placeDescription)
         XCTAssertNil(picked[0].mapItem.url)
         XCTAssertNil(picked[1].mapItem.url)
