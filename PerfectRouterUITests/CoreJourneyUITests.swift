@@ -178,11 +178,17 @@ final class CoreJourneyUITests: XCTestCase {
         }
 
         let names = waypointNames(in: app)
-        XCTAssertEqual(names, afterApply)
-        XCTAssertEqual(Set(names).count, names.count, "Duplicate waypoints: \(names)")
-        for name in ["Pilot Madison", "On Route Fuel", "Shell Knoxville"] {
-            XCTAssertEqual(names.filter { $0 == name }.count, 1, name)
-        }
+        XCTAssertEqual(names, afterApply, "Waypoint rows changed: \(names)")
+        XCTAssertEqual(
+            Set(names).count,
+            names.count,
+            "Duplicate waypoints: \(names)"
+        )
+        XCTAssertEqual(
+            names,
+            ["Test Origin", "Pilot Madison", "On Route Fuel", "Shell Knoxville", "Test Destination"],
+            "Waypoint rows: \(names)"
+        )
     }
 
     func testRouteStyleChangesShowReplanBannerAndFinish() {
@@ -739,6 +745,28 @@ final class CoreJourneyUITests: XCTestCase {
         return Int(suffix) ?? -1
     }
 
+    /// `waypoint.<name>` only. Highlight identifiers start with `highlight.`
+    /// and must not be read as another stop of the same name.
+    private func waypointName(from identifier: String) -> String? {
+        let prefix = "waypoint."
+        guard identifier.hasPrefix(prefix) else { return nil }
+        let name = String(identifier.dropFirst(prefix.count))
+        guard !name.isEmpty else { return nil }
+        return name
+    }
+
+    /// True when `names` can be found in `ordered` from left to right.
+    /// A repeated name has to occur again later in `ordered`; one earlier
+    /// copy does not hide a second stop.
+    private func namesAreOrderedSubset(_ names: [String], of ordered: [String]) -> Bool {
+        var cursor = ordered.startIndex
+        for name in names {
+            guard let found = ordered[cursor...].firstIndex(of: name) else { return false }
+            cursor = ordered.index(after: found)
+        }
+        return true
+    }
+
     private func waypointNames(in app: XCUIApplication) -> [String] {
         dismissKeyboard(app)
         expandPlanningSheet(app)
@@ -751,15 +779,22 @@ final class CoreJourneyUITests: XCTestCase {
                 .filter { $0.exists && $0.frame.height > 1 }
                 .sorted { $0.frame.minY < $1.frame.minY }
             var names: [String] = []
-            var lastY = -CGFloat.greatestFiniteMagnitude
+            var lastFrame: CGRect = .null
             for element in elements {
-                let name = String(element.identifier.dropFirst("waypoint.".count))
-                // One row can expose the identifier twice (symbol and title)
-                // a few points apart. A second stop with the same name sits
-                // further down the list.
-                if names.last == name, element.frame.minY - lastY < 36 { continue }
+                // Ride Highlight ids (`highlight.<name>.…`) are not stops on
+                // the ride. Only the waypoint prefix counts, even when a
+                // highlight row is on screen beside the route list.
+                guard let name = waypointName(from: element.identifier) else { continue }
+                // The row, its representation, and the title text share one
+                // id. Overlapping frames are that one stop. A second stop
+                // with the same name is the next row down and does not overlap.
+                let slop = lastFrame.insetBy(dx: 0, dy: -2)
+                if names.last == name, slop.intersects(element.frame) {
+                    lastFrame = lastFrame.union(element.frame)
+                    continue
+                }
                 names.append(name)
-                lastY = element.frame.minY
+                lastFrame = element.frame
             }
             return names
         }
@@ -769,6 +804,9 @@ final class CoreJourneyUITests: XCTestCase {
                 ordered = names
                 return
             }
+            // Scrolling past highlights brings the same route rows back.
+            // Appending that screen again is how one stop was counted twice.
+            if namesAreOrderedSubset(names, of: ordered) { return }
             let limit = min(ordered.count, names.count)
             for overlap in stride(from: limit, through: 0, by: -1) {
                 if Array(ordered.suffix(overlap)) == Array(names.prefix(overlap)) {

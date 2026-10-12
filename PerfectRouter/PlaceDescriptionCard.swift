@@ -31,39 +31,49 @@ struct PlaceDescriptionCard: View {
 
     var body: some View {
         HStack(alignment: alignment, spacing: spacing) {
-            Button {
-                openIfDescribed()
-            } label: {
-                HStack(alignment: alignment, spacing: spacing) {
-                    icon
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(name)
-                            .foregroundStyle(.primary)
-                            .multilineTextAlignment(.leading)
-                            .lineLimit(8)
-                            .modifier(IdentifierIfPresent(identifier: titleIdentifier))
-                        descriptionText
-                        Text(detail)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.leading)
-                            .lineLimit(6)
-                    }
-                    Spacer(minLength: 0)
+            icon
+            VStack(alignment: .leading, spacing: 2) {
+                cardButton(identifier: titleIdentifier, action: { openIfDescribed() }) {
+                    Text(name)
+                        .foregroundStyle(.primary)
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(8)
+                }
+                descriptionText
+                cardButton(identifier: "", action: { openIfDescribed() }) {
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(6)
                 }
             }
-            .buttonStyle(.plain)
-            .modifier(OpenDescriptionHint(isActive: placeDescription != nil))
-
-            Button {
-                onAdd()
-            } label: {
+            Spacer(minLength: 0)
+            Button(action: onAdd) {
                 Image(systemName: "plus.circle.fill")
                     .foregroundStyle(.blue)
+                    .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.borderless)
             .accessibilityLabel("Add \(name)")
         }
+    }
+
+    /// Borderless, with an explicit content shape. In a List, `.plain` turns
+    /// every button into the cell button, and the Add button's row-sized
+    /// target was the view that received the description tap.
+    private func cardButton<Label: View>(
+        identifier: String,
+        action: @escaping () -> Void,
+        @ViewBuilder label: () -> Label
+    ) -> some View {
+        Button(action: action) {
+            label()
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .modifier(IdentifierIfPresent(identifier: identifier))
+        .modifier(OpenDescriptionHint(isActive: placeDescription != nil))
     }
 
     private func openIfDescribed() {
@@ -83,15 +93,18 @@ struct PlaceDescriptionCard: View {
 
     /// Inserted under the name. Absent when the place published nothing, so
     /// the distance line stays directly under the name.
+    /// Its own button. The identifier the UI test taps has to be this control,
+    /// not a text nested in a different button that swallows the hit.
     @ViewBuilder
     private var descriptionText: some View {
         if let placeDescription {
-            Text(placeDescription)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.leading)
-                .lineLimit(PlaceDescriptionDisplay.collapsedLineLimit)
-                .modifier(IdentifierIfPresent(identifier: descriptionIdentifier))
+            cardButton(identifier: descriptionIdentifier, action: { onOpen() }) {
+                Text(placeDescription)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(PlaceDescriptionDisplay.collapsedLineLimit)
+            }
         }
     }
 }
