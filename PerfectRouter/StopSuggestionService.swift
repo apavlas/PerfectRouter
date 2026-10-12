@@ -137,25 +137,29 @@ struct StopSuggestionService {
         alongLegs legs: [MKRoute],
         sampleDistances: [CLLocationDistance]? = nil,
         corridorRadiusMeters: CLLocationDistance? = nil,
-        generation: Int = 0
+        generation: Int = 0,
+        routePolylines: [[CLLocationCoordinate2D]]? = nil
     ) async -> CorridorSearchResult {
         let corridor = corridorRadiusMeters ?? self.corridorRadiusMeters
+        // Prefer coordinates the caller already copied on the main actor.
+        // Reading `MKPolyline` again from this search can return an empty
+        // line, and every stop then projects to 0 m.
+        let supplied = routePolylines ?? []
+        let legPolylines = supplied.contains(where: { RouteGeometry.length(of: $0) > 1 })
+            ? supplied
+            : legs.map { RouteGeometry.coordinates(of: $0.polyline) }
         let samples: [RouteSample]
         if let sampleDistances {
             // Caller chose the grid (one set of points per tank along the
             // whole route). Searching all of them keeps later windows filled.
             let coords = RouteGeometry.coordinates(
-                alongPolylines: legs.map { RouteGeometry.coordinates(of: $0.polyline) },
+                alongPolylines: legPolylines,
                 atDistances: sampleDistances
             )
             samples = coords.map { RouteSample(coordinate: $0) }
         } else {
             samples = evenlySpaced(samplePoints(alongLegs: legs), max: maxSearches)
         }
-        // Extract each leg's polyline coordinates once and reuse them for every
-        // stop's distance-along-route projection (instead of rebuilding them per
-        // result), which matters on long routes with many results.
-        let legPolylines = legs.map { RouteGeometry.coordinates(of: $0.polyline) }
         var seen = Set<String>()          // de-dup by name + rounded coords
         var results: [SuggestedStop] = []
         var tally = GasSampleTally()

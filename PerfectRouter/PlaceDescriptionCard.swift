@@ -22,6 +22,8 @@ struct PlaceDescriptionCard: View {
     let placeDescription: String?
     /// Miles-from-start and miles-off-route, already formatted by the caller.
     let detail: String
+    /// Orange caption when this place sits past the tank that is left.
+    var showsPastRange: Bool = false
     let systemImage: String
     var iconColor: Color?
     var titleIdentifier: String = ""
@@ -48,6 +50,9 @@ struct PlaceDescriptionCard: View {
                     .multilineTextAlignment(.leading)
                     .lineLimit(6)
                     .modifier(OpenDescriptionTap(isActive: placeDescription != nil, action: onOpen))
+                if showsPastRange {
+                    PastYourRangeLabel()
+                }
             }
             Spacer(minLength: 0)
             Button(action: onAdd) {

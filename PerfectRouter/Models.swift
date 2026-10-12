@@ -128,10 +128,10 @@ struct SuggestedStop: Identifiable {
     let id = UUID()
     let mapItem: MKMapItem
     let category: StopCategory
-    /// Approximate distance from the route start, in meters, measured
-    /// along the route to the nearest sampled point. Used for sorting
-    /// and for fuel-range warnings.
-    let distanceAlongRoute: CLLocationDistance
+    /// Distance from the route start, in meters, measured by projecting
+    /// the stop onto the route polyline. Used for sorting and for
+    /// fuel-range warnings.
+    var distanceAlongRoute: CLLocationDistance
     /// How far off the route line the stop sits, in meters — the detour a
     /// rider takes to reach it. 0 when unknown (e.g. stops from a shared
     /// route link).
@@ -187,5 +187,13 @@ extension SuggestedStop {
                   category: category,
                   distanceAlongRoute: distanceAlongRoute,
                   detourMeters: detourMeters)
+    }
+
+    /// Same stop, with a new distance from the start. The id stays put so
+    /// the suggestion row does not jump when the mile mark is filled in.
+    func withDistanceAlongRoute(_ distance: CLLocationDistance) -> SuggestedStop {
+        var copy = self
+        copy.distanceAlongRoute = distance
+        return copy
     }
 }

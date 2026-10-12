@@ -35,6 +35,7 @@ final class StopSelectionTests: XCTestCase {
 
         XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "Diner", "End"])
         XCTAssertFalse(viewModel.waypoints[1].isGasFill)
+        XCTAssertEqual(viewModel.scrollToWaypointID, viewModel.waypoints[1].id)
     }
 
     func testAddStopBuffersFuelUntilApply() {
@@ -345,34 +346,29 @@ final class StopSelectionTests: XCTestCase {
         ]
         viewModel.gasStations = [late, early, past, other]
         viewModel.fuelFoodStops = [FuelFoodStop(fuelStop: early, nearbyFood: [diner])]
-        let plansBefore = viewModel.calculatingGeneration
-
-        XCTAssertEqual(viewModel.selectRecommendedButtonTitle, "Select recommended")
-        // One recommended row is already checked. The one tap must leave it
-        // checked and check the other, not toggle it off.
-        viewModel.toggleBufferedGasStop(early)
-        viewModel.toggleRecommendedFuelSelection()
-
-        XCTAssertEqual(Set(viewModel.bufferedGasStops.map(\.name)), ["Early", "Late"])
-        XCTAssertEqual(viewModel.selectRecommendedButtonTitle, "Clear selection")
-        XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "End"])
-        XCTAssertEqual(viewModel.calculatingGeneration, plansBefore)
-
-        // The rider can uncheck any recommended stop before Apply.
-        viewModel.toggleBufferedGasStop(late)
-        XCTAssertEqual(viewModel.bufferedGasStops.map(\.name), ["Early"])
-        XCTAssertEqual(viewModel.selectRecommendedButtonTitle, "Select recommended")
-
         viewModel.plannedCorridor = [[
             CLLocationCoordinate2D(latitude: 0, longitude: 0),
             CLLocationCoordinate2D(latitude: 0, longitude: 2),
         ]]
-        viewModel.applyBufferedGasStops()
+        let plansBefore = viewModel.calculatingGeneration
 
-        XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "Early", "End"])
-        XCTAssertEqual(viewModel.waypoints.map(\.isGasFill), [false, true, false])
-        XCTAssertTrue(viewModel.bufferedGasStops.isEmpty)
+        XCTAssertEqual(viewModel.selectRecommendedButtonTitle, "Select recommended")
+        // One recommended row is already checked. The tap still adds both.
+        viewModel.toggleBufferedGasStop(early)
+        viewModel.toggleBufferedGasStop(other)
+        viewModel.toggleRecommendedFuelSelection()
+
+        XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "Early", "Late", "End"])
+        XCTAssertEqual(viewModel.waypoints.map(\.isGasFill), [false, true, true, false])
+        XCTAssertEqual(viewModel.bufferedGasStops.map(\.name), ["Side Pump"])
+        XCTAssertFalse(viewModel.waypoints.contains { $0.name == "Too Far" || $0.name == "Diner" || $0.name == "Side Pump" })
+        XCTAssertTrue(viewModel.selectableRecommendedFuelStops.isEmpty)
         XCTAssertEqual(viewModel.calculatingGeneration, plansBefore + 1)
+        XCTAssertEqual(viewModel.scrollToWaypointID, viewModel.waypoints[1].id)
+
+        viewModel.toggleRecommendedFuelSelection()
+        XCTAssertEqual(viewModel.calculatingGeneration, plansBefore + 1)
+        XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "Early", "Late", "End"])
     }
 
     func testSelectRecommendedSkipsStopsAlreadyOnTheRoute() {
@@ -392,32 +388,29 @@ final class StopSelectionTests: XCTestCase {
             .recommended(fresh),
             .pastRange(past),
         ]
-        let plansBefore = viewModel.calculatingGeneration
-
-        viewModel.toggleRecommendedFuelSelection()
-
-        XCTAssertEqual(viewModel.bufferedGasStops.map(\.name), ["Pilot"])
-        XCTAssertFalse(viewModel.isGasBuffered(again))
-        XCTAssertFalse(viewModel.isGasBuffered(past))
-        XCTAssertEqual(viewModel.calculatingGeneration, plansBefore)
-
         viewModel.plannedCorridor = [[
             viewModel.waypoints[0].coordinate,
             viewModel.waypoints[1].coordinate,
             viewModel.waypoints[2].coordinate,
         ]]
-        viewModel.applyBufferedGasStops()
+        let plansBefore = viewModel.calculatingGeneration
 
+        viewModel.toggleRecommendedFuelSelection()
+
+        XCTAssertTrue(viewModel.bufferedGasStops.isEmpty)
+        XCTAssertFalse(viewModel.isGasBuffered(again))
+        XCTAssertFalse(viewModel.isGasBuffered(past))
         XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "Gas-N-Go", "Pilot", "End"])
         XCTAssertEqual(viewModel.waypoints.filter { $0.name == "Gas-N-Go" }.count, 1)
         XCTAssertEqual(viewModel.waypoints.filter(\.isGasFill).map(\.name), ["Pilot"])
+        XCTAssertTrue(viewModel.selectableRecommendedFuelStops.isEmpty)
         XCTAssertEqual(viewModel.calculatingGeneration, plansBefore + 1)
-        viewModel.applyBufferedGasStops()
+        viewModel.toggleRecommendedFuelSelection()
         XCTAssertEqual(viewModel.calculatingGeneration, plansBefore + 1)
         XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "Gas-N-Go", "Pilot", "End"])
     }
 
-    func testSelectRecommendedTogglesToClear() {
+    func testSelectRecommendedLeavesAManualCheckForApply() {
         let viewModel = RoutePlannerViewModel()
         viewModel.waypoints = [
             waypoint("Start", lat: 0, lon: 0),
@@ -428,20 +421,20 @@ final class StopSelectionTests: XCTestCase {
         let other = alongStop("Side Pump", lat: 0.2, lon: 0.8, distance: 90_000)
         viewModel.fuelStops = [early, late]
         viewModel.gasStations = [early, late, other]
+        viewModel.plannedCorridor = [[
+            CLLocationCoordinate2D(latitude: 0, longitude: 0),
+            CLLocationCoordinate2D(latitude: 0, longitude: 2),
+        ]]
         let plansBefore = viewModel.calculatingGeneration
 
-        viewModel.toggleRecommendedFuelSelection()
-        XCTAssertEqual(viewModel.selectRecommendedButtonTitle, "Clear selection")
-        XCTAssertEqual(Set(viewModel.bufferedGasStops.map(\.name)), ["Early", "Late"])
-
-        // A non-recommended check is the rider's, not part of this toggle.
         viewModel.toggleBufferedGasStop(other)
         viewModel.toggleRecommendedFuelSelection()
 
+        XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "Early", "Late", "End"])
         XCTAssertEqual(viewModel.bufferedGasStops.map(\.name), ["Side Pump"])
         XCTAssertEqual(viewModel.selectRecommendedButtonTitle, "Select recommended")
-        XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "End"])
-        XCTAssertEqual(viewModel.calculatingGeneration, plansBefore)
+        XCTAssertEqual(viewModel.calculatingGeneration, plansBefore + 1)
+        XCTAssertTrue(viewModel.selectableRecommendedFuelStops.isEmpty)
     }
 
     func testApplyRecommendedFuelStopsReplansOnceInRideOrder() {
@@ -465,18 +458,69 @@ final class StopSelectionTests: XCTestCase {
         let plansBefore = viewModel.calculatingGeneration
 
         viewModel.toggleRecommendedFuelSelection()
-        XCTAssertEqual(Set(viewModel.bufferedGasStops.map(\.name)), ["Early", "Late"])
-        XCTAssertEqual(viewModel.calculatingGeneration, plansBefore)
-
-        viewModel.applyBufferedGasStops()
 
         XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "Early", "Lunch", "Late", "End"])
         XCTAssertEqual(viewModel.waypoints.map(\.isGasFill), [false, true, false, true, false])
         XCTAssertEqual(viewModel.calculatingGeneration, plansBefore + 1)
         XCTAssertTrue(viewModel.bufferedGasStops.isEmpty)
+        XCTAssertTrue(viewModel.selectableRecommendedFuelStops.isEmpty)
 
-        viewModel.applyBufferedGasStops()
+        viewModel.toggleRecommendedFuelSelection()
         XCTAssertEqual(viewModel.calculatingGeneration, plansBefore + 1)
         XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "Early", "Lunch", "Late", "End"])
+    }
+
+    func testSelectRecommendedAddsEveryStopPastAFiveStopCap() {
+        let viewModel = RoutePlannerViewModel()
+        let start = CLLocationCoordinate2D(latitude: 0, longitude: 0)
+        let end = CLLocationCoordinate2D(latitude: 0, longitude: 4)
+        viewModel.waypoints = [
+            Waypoint(name: "Start", coordinate: start),
+            Waypoint(name: "End", coordinate: end),
+        ]
+        viewModel.plannedCorridor = [[start, end]]
+        let count = 12
+        let recommended = (1...count).map { index in
+            alongStop(
+                "Pump \(index)",
+                lat: 0.02 * Double(index),
+                lon: 0.2 * Double(index),
+                distance: CLLocationDistance(index) * 100_000
+            )
+        }
+        let past = alongStop("Too Far", lat: 0.4, lon: 3.6, distance: 5_000_000)
+        // Reverse the list so ride order is the planner's job, not the array's.
+        viewModel.fuelStops = recommended.reversed() + [past]
+        viewModel.fuelPlanEntries = recommended.map { .recommended($0) } + [.pastRange(past)]
+        let plansBefore = viewModel.calculatingGeneration
+
+        viewModel.toggleRecommendedFuelSelection()
+
+        XCTAssertEqual(
+            viewModel.waypoints.map(\.name),
+            ["Start"] + (1...count).map { "Pump \($0)" } + ["End"]
+        )
+        XCTAssertEqual(viewModel.calculatingGeneration, plansBefore + 1)
+        XCTAssertTrue(viewModel.bufferedGasStops.isEmpty)
+        XCTAssertTrue(viewModel.selectableRecommendedFuelStops.isEmpty)
+        XCTAssertFalse(viewModel.waypoints.contains { $0.name == "Too Far" })
+        XCTAssertEqual(viewModel.scrollToWaypointID, viewModel.waypoints[1].id)
+
+        viewModel.toggleRecommendedFuelSelection()
+        XCTAssertEqual(viewModel.calculatingGeneration, plansBefore + 1)
+    }
+
+    func testStopPastTheTankIsBeyondRemainingRange() {
+        let viewModel = RoutePlannerViewModel()
+        let mile = AppSettings.metersPerMile
+        viewModel.fuelRangeMeters = 200 * mile
+        let inRange = alongStop("In Range", lat: 0.1, lon: 0.2, distance: 150 * mile)
+        viewModel.fuelStops = [inRange]
+        XCTAssertFalse(viewModel.isBeyondRemainingRange(distanceAlongRoute: 150 * mile))
+        XCTAssertFalse(viewModel.isBeyondRemainingRange(distanceAlongRoute: 250 * mile))
+        XCTAssertTrue(viewModel.isBeyondRemainingRange(distanceAlongRoute: 400 * mile))
+        viewModel.fuelStops = []
+        XCTAssertFalse(viewModel.isBeyondRemainingRange(distanceAlongRoute: 180 * mile))
+        XCTAssertTrue(viewModel.isBeyondRemainingRange(distanceAlongRoute: 250 * mile))
     }
 }

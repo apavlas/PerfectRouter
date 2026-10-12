@@ -151,8 +151,9 @@ enum FuelStopRidingTime {
         }
     }
 
-    /// "212 mi · 6h 05m riding (1h 40m since last)". The first stop says
-    /// "since departure". Distance is always first.
+    /// Later stops: "212 mi · 6h 05m riding (1h 40m since last)".
+    /// The first stop, measured from departure, is only the riding time:
+    /// "4h 25m riding".
     static func caption(
         distanceMeters: CLLocationDistance,
         anchors: [CLLocationDistance],
@@ -160,11 +161,13 @@ enum FuelStopRidingTime {
         usesMetric: Bool = AppSettings.usesMetricUnits
     ) -> String {
         let reading = clock(at: distanceMeters, anchors: anchors, legs: legs)
-        let distance = formatDistance(distanceMeters, usesMetric: usesMetric)
         let riding = formatDuration(reading.cumulative)
+        if reading.sinceDeparture {
+            return "\(riding) riding"
+        }
+        let distance = formatDistance(distanceMeters, usesMetric: usesMetric)
         let since = formatDuration(reading.sincePrevious)
-        let relation = reading.sinceDeparture ? "since departure" : "since last"
-        return "\(distance) · \(riding) riding (\(since) \(relation))"
+        return "\(distance) · \(riding) riding (\(since) since last)"
     }
 
     private static func finite(_ value: Double) -> Double {

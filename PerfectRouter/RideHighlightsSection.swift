@@ -17,6 +17,9 @@ struct RideHighlightsSection: View {
                     name: stop.name,
                     placeDescription: PlaceDescriptionDisplay.rowText(for: stop.placeDescription),
                     detail: detailText(for: stop),
+                    showsPastRange: viewModel.isBeyondRemainingRange(
+                        distanceAlongRoute: stop.distanceAlongRoute
+                    ),
                     systemImage: "star.fill",
                     iconColor: .purple,
                     titleIdentifier: AccessibilityID.rideHighlightName(stop.name),

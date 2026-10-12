@@ -146,6 +146,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// Ordered ride: first = start, last = destination, middle = stops.
     var waypoints: [Waypoint] = []
 
+    /// Planning list scrolls to this stop after the rider adds one.
+    /// Nil until a stop is inserted.
+    var scrollToWaypointID: UUID?
+
     /// Intermediate stops only. Start and destination are not stops
     /// (Apple/Google Maps). A ride of start + 5 mids + end is 5 stops.
     var intermediateStopCount: Int {
@@ -202,7 +206,20 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     /// Polyline of the last successful plan. Fuel stops that sit on it are
     /// stitched with one directions request instead of a via cascade.
+    /// Suggestion distances project onto this copy, which was read on the
+    /// main actor. A later `MKPolyline` read can come back empty and would
+    /// otherwise label every stop "~0 ft from start".
     var plannedCorridor: [[CLLocationCoordinate2D]] = []
+
+    /// Route geometry for "miles from start". Prefer the corridor captured
+    /// when the route was published. Read the live legs only when that
+    /// cache has no segment.
+    private var suggestionRoutePolylines: [[CLLocationCoordinate2D]] {
+        if plannedCorridor.contains(where: { $0.count > 1 }) {
+            return plannedCorridor
+        }
+        return legs.map { RouteGeometry.coordinates(of: $0.polyline) }
+    }
 
     private var suggestionService = StopSuggestionService()
 
@@ -621,16 +638,17 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     /// Distance, then riding time, for one fuel-stop row.
     ///
-    /// "212 mi · 6h 05m riding (1h 40m since last)". The first stop says
-    /// "since departure". Time is each current leg's drive time spread
-    /// along that leg's polyline, so a style change, tank-range search,
-    /// applied stop, or leave-time replan updates it with the new line.
-    /// Applied gas fills count as the previous stop; time sitting at a
-    /// stop is not added.
+    /// "212 mi · 6h 05m riding (1h 40m since last)". The first stop is only
+    /// the riding time, "4h 25m riding". Time is each current leg's drive
+    /// time spread along that leg's polyline, so a style change, tank-range
+    /// search, applied stop, or leave-time replan updates it with the new
+    /// line. Applied gas fills count as the previous stop; time sitting at
+    /// a stop is not added.
     func fuelStopRidingCaption(for stop: SuggestedStop, pastRange: Bool = false) -> String {
+        let distance = distanceFromStart(of: stop)
         let caption = FuelStopRidingTime.caption(
-            distanceMeters: stop.distanceAlongRoute,
-            anchors: fuelRidingAnchorDistances(including: stop.distanceAlongRoute),
+            distanceMeters: distance,
+            anchors: fuelRidingAnchorDistances(including: distance),
             legs: driveLegTimings()
         )
         guard pastRange else { return caption }
@@ -964,6 +982,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         } else {
             waypoints.append(waypoint)
         }
+        scrollToWaypointID = waypoint.id
         scheduleRecalculation()
     }
 
@@ -977,6 +996,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         } else {
             waypoints[0] = waypoint
         }
+        scrollToWaypointID = waypoints.first?.id
         scheduleRecalculation()
     }
 
@@ -1025,25 +1045,28 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         }
     }
 
-    /// Label for the one-tap control above the buffered gas rows. Flips to
-    /// clear once every selectable recommended stop is already checked.
+    /// Label for the one-tap control above the buffered gas rows.
     var selectRecommendedButtonTitle: String {
-        let stops = selectableRecommendedFuelStops
-        let allSelected = !stops.isEmpty && stops.allSatisfy(isGasBuffered)
-        return allSelected ? "Clear selection" : "Select recommended"
+        "Select recommended"
     }
 
-    /// Checks every recommended fuel stop, the same as tapping each
-    /// recommended row that is not already checked. When those stops are
-    /// all already checked, clears just those checks. Rows stay tappable,
-    /// so the rider can uncheck one before Apply. Does not replan.
+    /// Checks every recommended fuel stop from the start to the destination,
+    /// in ride order, and adds that whole set in the same tap. There is no
+    /// cap. The route is recalculated once. Past-range stations, other
+    /// categories, and pumps already on the route stay out. Afterward none
+    /// of those recommendations are still selectable. A pump the rider
+    /// checked by hand, and that is not one of these recommendations, stays
+    /// checked for Apply and is not routed by this tap.
     func toggleRecommendedFuelSelection() {
         let recommended = selectableRecommendedFuelStops
+            .sorted { $0.distanceAlongRoute < $1.distanceAlongRoute }
         guard !recommended.isEmpty else { return }
-        let clear = recommended.allSatisfy(isGasBuffered)
-        for stop in recommended where clear || !isGasBuffered(stop) {
-            toggleBufferedGasStop(stop)
+        let kept = bufferedGasStops.filter { stop in
+            !recommended.contains { Self.sameCoordinate($0.coordinate, stop.coordinate) }
         }
+        bufferedGasStops = recommended
+        applyBufferedGasStops()
+        bufferedGasStops = kept.filter { !isStopOnRoute($0) }
     }
 
     /// True when a waypoint already sits on this place. Matching is the
@@ -1059,6 +1082,39 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         fuelPlanEntries.contains { entry in
             guard case .pastRange(let past) = entry else { return false }
             return past.id == stop.id || Self.sameCoordinate(past.coordinate, stop.coordinate)
+        }
+    }
+
+    /// True when `distance` is farther than the tank from the last fill the
+    /// rider can use: the start, an applied gas stop, or an in-range
+    /// recommendation. Recommended stops themselves are inside that window.
+    func isBeyondRemainingRange(distanceAlongRoute distance: CLLocationDistance) -> Bool {
+        guard distance.isFinite, distance > 0, fuelRangeMeters > 0 else { return false }
+        if isRecommendedFuelDistance(distance) { return false }
+        let previous = remainingRangeAnchors
+            .filter { $0 < distance - FuelStopRidingTime.sameStopToleranceMeters }
+            .max() ?? 0
+        return distance - previous > fuelRangeMeters
+    }
+
+    /// A waypoint past the tank from the previous fill. Nil legs, or a list
+    /// that does not match the published route, are not labeled.
+    func waypointIsBeyondRemainingRange(at index: Int) -> Bool {
+        guard index > 0, legs.count + 1 == waypoints.count else { return false }
+        let distance = legs.prefix(index).reduce(0) { $0 + $1.distance }
+        return isBeyondRemainingRange(distanceAlongRoute: distance)
+    }
+
+    private var remainingRangeAnchors: [CLLocationDistance] {
+        var anchors: [CLLocationDistance] = [0]
+        anchors.append(contentsOf: gasFillDistances)
+        anchors.append(contentsOf: fuelStops.map(\.distanceAlongRoute))
+        return anchors
+    }
+
+    private func isRecommendedFuelDistance(_ distance: CLLocationDistance) -> Bool {
+        fuelStops.contains {
+            abs($0.distanceAlongRoute - distance) <= FuelStopRidingTime.sameStopToleranceMeters
         }
     }
 
@@ -1080,6 +1136,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             }
         bufferedGasStops = []
         guard !stops.isEmpty else { return }
+        let existingIDs = Set(waypoints.map(\.id))
         let polylines = plannedCorridor
         if waypoints.count >= 2, !polylines.isEmpty {
             waypoints = Self.waypoints(
@@ -1092,6 +1149,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             for stop in stops {
                 insertStop(stop)
             }
+        }
+        if let added = waypoints.first(where: { !existingIDs.contains($0.id) }) {
+            scrollToWaypointID = added.id
         }
         scheduleRecalculation()
     }
@@ -1148,6 +1208,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         } else {
             waypoints.append(waypoint)
         }
+        scrollToWaypointID = waypoint.id
     }
 
     private nonisolated static func waypoint(from suggestion: SuggestedStop) -> Waypoint {
@@ -1715,6 +1776,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         generation: Int = 0,
         maxSearches: Int? = nil
     ) async -> CorridorSearchResult {
+        // Copy the polyline before the search hops off the main actor.
+        // `MKPolyline` reads from that hop can be empty, and every stop
+        // then stores 0 m ("~0 ft from start").
+        let routePolylines = suggestionRoutePolylines
         if let stopSearchOverride {
             return await stopSearchOverride.findStops(
                 category: category,
@@ -1733,7 +1798,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             alongLegs: legs,
             sampleDistances: sampleDistances,
             corridorRadiusMeters: corridorRadiusMeters,
-            generation: generation
+            generation: generation,
+            routePolylines: routePolylines
         )
     }
 
@@ -2275,7 +2341,11 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// is near breakfast / lunch / dinner *and* `preferringFoodAt` lists an
     /// in-window pump, that pump wins over gas-only in the same window.
     /// Off-meal or missing food never skips the stop. If the comfort window
-    /// is empty, fall back to the hard range.
+    /// is empty, fall back to the hard range. Planning continues until the
+    /// distance left to the destination fits in that reserve, so a later
+    /// leg does not spend the reserve when a station is available. A last
+    /// stretch inside the hard tank with no station in the reserve window
+    /// is not a gap.
     ///
     /// A hop shorter than `minimumSeparationFactor` of the tank is skipped
     /// when it does not unlock a station past the current reach. A segment
@@ -2388,8 +2458,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             entries.append(.gap(FuelGap(fromMeters: start, toMeters: end, rangeMeters: range)))
         }
 
-        // Keep refueling until the remaining distance fits within one tank.
-        while totalDistance - lastRefuel > range {
+        // Keep refueling until the remaining distance fits in the reserve.
+        // The hard tank is the fallback when that window has no station,
+        // including the stretch from the last stop to the destination.
+        while totalDistance - lastRefuel > comfortRange {
             steps += 1
             if steps > stepLimit { break }
 
@@ -2434,6 +2506,13 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 lastRefuel = stop.distanceAlongRoute
                 skippedNear.removeAll()
                 continue
+            }
+
+            // The destination is still inside the tank, and no station in
+            // the reserve window can shorten the last stretch. Arriving
+            // on the reserve is not a dry gap.
+            if totalDistance - lastRefuel <= range {
+                break
             }
 
             // Nothing within range of the last fill. Name the stretch and
@@ -2572,6 +2651,44 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     // MARK: - Suggestions
 
+    /// Meters from the ride start for one suggestion row. The stop is
+    /// projected onto the published route polyline, so a stored 0 still
+    /// shows the real mile mark. The stored distance is kept only when
+    /// the route has no measurable length.
+    func distanceFromStart(of stop: SuggestedStop) -> CLLocationDistance {
+        Self.distanceFromStart(of: stop, alongPolylines: suggestionRoutePolylines)
+    }
+
+    nonisolated static func distanceFromStart(
+        of stop: SuggestedStop,
+        alongPolylines polylines: [[CLLocationCoordinate2D]]
+    ) -> CLLocationDistance {
+        guard polylinesAreMeasurable(polylines) else { return stop.distanceAlongRoute }
+        return RouteGeometry.distanceAlongRoute(of: stop.coordinate, alongPolylines: polylines)
+    }
+
+    /// Copies each suggested stop with its projected distance from the
+    /// start and returns them in ride order. Ids stay put. An
+    /// unmeasurable route leaves the stored distances alone.
+    nonisolated static func projectingDistancesFromStart(
+        _ stops: [SuggestedStop],
+        alongPolylines polylines: [[CLLocationCoordinate2D]]
+    ) -> [SuggestedStop] {
+        guard polylinesAreMeasurable(polylines) else { return stops }
+        return stops.map { stop in
+            stop.withDistanceAlongRoute(
+                RouteGeometry.distanceAlongRoute(of: stop.coordinate, alongPolylines: polylines)
+            )
+        }
+        .sorted { $0.distanceAlongRoute < $1.distanceAlongRoute }
+    }
+
+    nonisolated private static func polylinesAreMeasurable(
+        _ polylines: [[CLLocationCoordinate2D]]
+    ) -> Bool {
+        polylines.contains { RouteGeometry.length(of: $0) > 1 }
+    }
+
     func refreshSuggestions() async {
         guard !legs.isEmpty else { return }
         suggestionGeneration += 1
@@ -2589,7 +2706,11 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         // A throttle or a cancel must not replace the list with [] and read
         // as "no stops". Only a completed search publishes.
         guard generation == suggestionGeneration, !Task.isCancelled, found.status == .completed else { return }
-        let published = applyingKnownPlaceDescriptions(found.stops)
+        let projected = Self.projectingDistancesFromStart(
+            found.stops,
+            alongPolylines: suggestionRoutePolylines
+        )
+        let published = applyingKnownPlaceDescriptions(projected)
         suggestedStops = published
         // The corridor search is done. Page descriptions fill in afterwards
         // and must not keep the "searching" row on screen.

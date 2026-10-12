@@ -377,6 +377,7 @@ struct ContentView: View {
 
     private var planningSheet: some View {
         NavigationStack {
+            ScrollViewReader { proxy in
             List {
                 // AC-S1: search → waypoints → summary (Navigate) → highlights
                 // → suggestions → gas → prefs (fuel / leave later / style) →
@@ -509,6 +510,11 @@ struct ContentView: View {
             .onChange(of: showingSettings) { _, isShowing in
                 // Re-apply preferences when the Settings sheet closes.
                 if !isShowing { viewModel.applySettings() }
+            }
+            .onChange(of: viewModel.scrollToWaypointID) { _, id in
+                guard let id else { return }
+                proxy.scrollTo(id, anchor: .center)
+            }
             }
         }
     }
