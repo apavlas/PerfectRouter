@@ -216,6 +216,86 @@ final class UITestFixtureTests: XCTestCase {
         XCTAssertFalse(scenic?.hasHighways ?? true)
     }
 
+    /// The stub attraction search has to survive highlight selection: one
+    /// sight keeps its published paragraph, and one stays blank. Gas and
+    /// food searches are unchanged.
+    @MainActor
+    func testStubRouteIncludesDescribedAndPlainHighlights() async throws {
+        let destination = UITestFixture.coordinate(
+            milesNorth: UITestFixture.routeMiles,
+            eastMeters: 0
+        )
+        let route = try XCTUnwrap(
+            StubRouteBuilder.routes(
+                from: UITestFixture.origin,
+                to: destination,
+                avoidsHighways: false,
+                alternates: false
+            ).first
+        )
+        let stubs = UITestStubServices()
+        let sights = await stubs.findStops(
+            category: .attraction,
+            alongLegs: [route],
+            sampleDistances: nil,
+            corridorRadiusMeters: nil,
+            generation: 1
+        )
+        XCTAssertEqual(sights.status, .completed)
+        XCTAssertEqual(sights.stops.map(\.name), [
+            UITestFixture.describedHighlightName,
+            UITestFixture.plainHighlightName,
+        ])
+        let picked = RoutePlannerViewModel.selectHighlights(
+            from: sights.stops,
+            totalDistance: route.distance
+        )
+        XCTAssertEqual(
+            picked.map(\.name),
+            [UITestFixture.describedHighlightName, UITestFixture.plainHighlightName]
+        )
+        let prose = try XCTUnwrap(picked[0].placeDescription)
+        let capped = "UI test fixture sentence one describes the canned highlight and keeps going so the row cannot show it all. UI test fixture sentence two is also on the row and continues past two lines of subheadline."
+        XCTAssertTrue(UITestFixture.publishedHighlightDescription.contains(UITestFixture.highlightDescriptionTail))
+        XCTAssertEqual(prose, capped)
+        XCTAssertEqual(PlaceDescriptionDisplay.text(for: prose), capped)
+        XCTAssertEqual(PlaceDescriptionDisplay.rowText(for: prose), capped)
+        XCTAssertFalse(prose.contains("sentence three"))
+        XCTAssertNil(picked[1].placeDescription)
+        XCTAssertNil(picked[0].mapItem.url)
+        XCTAssertNil(picked[1].mapItem.url)
+        XCTAssertNil(PlaceDescriptionReader.appleMapsText(from: picked[1].mapItem))
+        XCTAssertLessThanOrEqual(picked[0].detourMeters, 3_000)
+        XCTAssertLessThanOrEqual(picked[1].detourMeters, 3_000)
+        XCTAssertGreaterThan(
+            picked[1].distanceAlongRoute - picked[0].distanceAlongRoute,
+            15_000
+        )
+
+        let food = await stubs.findStops(
+            category: .food,
+            alongLegs: [route],
+            sampleDistances: nil,
+            corridorRadiusMeters: nil,
+            generation: 1
+        )
+        XCTAssertTrue(food.stops.isEmpty)
+
+        let gas = await stubs.findStops(
+            category: .gas,
+            alongLegs: [route],
+            sampleDistances: nil,
+            corridorRadiusMeters: nil,
+            generation: 1
+        )
+        let gasNames = Set(gas.stops.map(\.name))
+        for name in UITestFixture.recommendedFuelNames {
+            XCTAssertTrue(gasNames.contains(name), name)
+        }
+        XCTAssertFalse(gasNames.contains(UITestFixture.describedHighlightName))
+        XCTAssertFalse(gasNames.contains(UITestFixture.plainHighlightName))
+    }
+
     func testHomeFuelMatchesTheOriginSoSelectRecommendedSkipsIt() throws {
         let origin = try XCTUnwrap(UITestFixture.places.first { $0.name == "Test Origin" })
         let home = try XCTUnwrap(UITestFixture.places.first { $0.name == "Home Fuel" && $0.gasStation })

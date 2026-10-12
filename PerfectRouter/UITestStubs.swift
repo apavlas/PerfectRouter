@@ -56,6 +56,70 @@ enum UITestFixture {
         Place(name: "Test Destination", milesNorth: routeMiles, eastMeters: 0, searchable: true, gasStation: false),
     ]
 
+    /// Sights the stub returns for an attraction search. Far enough from the
+    /// start and end to survive highlight selection, and far enough apart to
+    /// both be kept. One publishes a paragraph; the other publishes nothing.
+    struct Highlight {
+        var name: String
+        var milesNorth: Double
+        var eastMeters: CLLocationDistance
+        var publishedDescription: String?
+    }
+
+    static let describedHighlightName = "Tallulah Gorge"
+    static let plainHighlightName = "Bare Overlook"
+    /// Canned UI-test copy only. A normal launch never builds these stops.
+    /// Four sentences go in. The model keeps the first two, the row clips
+    /// those to two lines, and the sheet shows the same two. Sentence three
+    /// must not appear.
+    static let publishedHighlightDescription = "UI test fixture sentence one describes the canned highlight and keeps going so the row cannot show it all. UI test fixture sentence two is also on the row and continues past two lines of subheadline. UI test fixture sentence three appears only in the full sheet. UI test fixture sentence four is stub data and not a real place description."
+    static let highlightDescriptionOpening = "UI test fixture sentence one"
+    static let highlightDescriptionTail = "UI test fixture sentence three appears only in the full sheet."
+
+    static let highlights: [Highlight] = [
+        Highlight(
+            name: describedHighlightName,
+            milesNorth: 60,
+            eastMeters: 200,
+            publishedDescription: publishedHighlightDescription
+        ),
+        Highlight(
+            name: plainHighlightName,
+            milesNorth: 180,
+            eastMeters: 200,
+            publishedDescription: nil
+        ),
+    ]
+
+    /// Projects canned sights onto the stub polyline. The paragraph is fixture
+    /// text for the UI test, not a MapKit field. The plain sight has none.
+    static func attractionStops(
+        alongPolylines polylines: [[CLLocationCoordinate2D]],
+        corridorRadiusMeters: CLLocationDistance
+    ) -> [SuggestedStop] {
+        var stops: [SuggestedStop] = []
+        for highlight in highlights {
+            let coordinate = coordinate(milesNorth: highlight.milesNorth, eastMeters: highlight.eastMeters)
+            let detour = RouteGeometry.distanceFromRoute(of: coordinate, alongPolylines: polylines)
+            guard detour <= corridorRadiusMeters else { continue }
+            let projected = RouteGeometry.distanceAlongRoute(of: coordinate, alongPolylines: polylines)
+            let canned = highlight.milesNorth * metersPerMile
+            let distance = projected > 50 ? projected : canned
+            var stop = SuggestedStop(
+                name: highlight.name,
+                coordinate: coordinate,
+                category: .attraction,
+                distanceAlongRoute: distance,
+                detourMeters: detour
+            )
+            if let published = highlight.publishedDescription {
+                stop = stop.withPlaceDescription(published)
+            }
+            stops.append(stop)
+        }
+        return stops.sorted { $0.distanceAlongRoute < $1.distanceAlongRoute }
+    }
+
     static func coordinate(milesNorth: Double, eastMeters: CLLocationDistance) -> CLLocationCoordinate2D {
         let northMeters = milesNorth * metersPerMile
         let latitude = origin.latitude + northMeters / 111_320
@@ -258,12 +322,26 @@ final class UITestStubServices: DirectionsProviding, StopSearching, PlaceSearchi
     ) async -> CorridorSearchResult {
         _ = sampleDistances
         _ = generation
-        // Highlights and non-gas chips are not part of the ride journey.
+        let radius = corridorRadiusMeters ?? RoutePlannerViewModel.fuelSearchCorridorMeters
+        if category == .attraction {
+            let polylines = legs.map { RouteGeometry.coordinates(of: $0.polyline) }
+            let sights = UITestFixture.attractionStops(
+                alongPolylines: polylines,
+                corridorRadiusMeters: radius
+            )
+            return CorridorSearchResult(
+                stops: sights,
+                status: .completed,
+                succeeded: max(sights.count, 1),
+                failed: 0,
+                throttled: 0
+            )
+        }
+        // Food, coffee, and scenic chips are not part of the ride journey.
         // A completed empty result must not look like a throttled gas search.
         guard category == .gas else {
             return CorridorSearchResult(stops: [], status: .completed, succeeded: 1, failed: 0, throttled: 0)
         }
-        let radius = corridorRadiusMeters ?? RoutePlannerViewModel.fuelSearchCorridorMeters
         let polylines = legs.map { RouteGeometry.coordinates(of: $0.polyline) }
         var stops: [SuggestedStop] = []
         for place in UITestFixture.places where place.gasStation {

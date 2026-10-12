@@ -743,6 +743,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// each route change by `refreshHighlights()`.
     var rideHighlights: [SuggestedStop] = []
 
+    /// Bumped when highlights are cleared or refreshed. A description fetch
+    /// from an older pass must not write over the newer list.
+    private var highlightGeneration = 0
+
     /// When the rider plans to leave, or `nil` to assume leaving now. Drives
     /// the weather check so a ride planned for tomorrow morning is checked
     /// against tomorrow morning's forecast, not right now's.
@@ -1820,6 +1824,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         hasFuelGap = false
         fuelFoodStops = []
         pairedFuelStopIDs = []
+        highlightGeneration += 1
         rideHighlights = []
         isShowingAllGasOnRoute = false
         // A cleared route did not finish a gas search. Leaving `.empty` would
@@ -2460,6 +2465,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// stopping at — low-detour sights spread across the ride. Mirrors the
     /// fuel-stop pipeline: search wide, then select with pure logic.
     func refreshHighlights() async {
+        highlightGeneration += 1
+        let generation = highlightGeneration
         guard !legs.isEmpty else {
             rideHighlights = []
             return
@@ -2482,10 +2489,42 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             candidates = found.stops
         }
 
-        rideHighlights = Self.selectHighlights(
+        let picked = applyingKnownPlaceDescriptions(Self.selectHighlights(
             from: candidates,
             totalDistance: totalDistanceMeters
-        )
+        ))
+        rideHighlights = picked
+        let enriched = await attachingPlaceDescriptions(picked)
+        guard generation == highlightGeneration, !Task.isCancelled else { return }
+        rideHighlights = enriched
+    }
+
+    /// Copies Apple Maps prose onto scenic and sights stops before the row
+    /// is shown. Places with no prose stay nil — the card then shows nothing.
+    private func applyingKnownPlaceDescriptions(_ stops: [SuggestedStop]) -> [SuggestedStop] {
+        stops.map { stop in
+            guard stop.category.showsPlaceDescription, stop.placeDescription == nil else { return stop }
+            guard let text = PlaceDescriptionReader.appleMapsText(from: stop.mapItem) else { return stop }
+            return stop.withPlaceDescription(text)
+        }
+    }
+
+    /// Fills in a place's own page description when Apple Maps had no prose.
+    /// Queries are sendable copies; the map item stays on the main actor.
+    private func attachingPlaceDescriptions(_ stops: [SuggestedStop]) async -> [SuggestedStop] {
+        let queries = stops.compactMap { stop -> PlaceDescriptionQuery? in
+            guard stop.category.showsPlaceDescription, stop.placeDescription == nil else { return nil }
+            let query = stop.placeDescriptionQuery()
+            guard let url = query.websiteURL, PlaceDescriptionReader.isPlaceWebsite(url) else { return nil }
+            return query
+        }
+        guard !queries.isEmpty else { return stops }
+        let found = await PlaceDescriptionLoader.resolve(queries)
+        guard !found.isEmpty else { return stops }
+        return stops.map { stop in
+            guard let text = found[stop.id] else { return stop }
+            return stop.withPlaceDescription(text)
+        }
     }
 
     /// Whether a stop is one of the auto-recommended ride highlights.
@@ -2550,7 +2589,16 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         // A throttle or a cancel must not replace the list with [] and read
         // as "no stops". Only a completed search publishes.
         guard generation == suggestionGeneration, !Task.isCancelled, found.status == .completed else { return }
-        suggestedStops = found.stops
+        let published = applyingKnownPlaceDescriptions(found.stops)
+        suggestedStops = published
+        // The corridor search is done. Page descriptions fill in afterwards
+        // and must not keep the "searching" row on screen.
+        if generation == suggestionGeneration {
+            isLoadingSuggestions = false
+        }
+        let enriched = await attachingPlaceDescriptions(published)
+        guard generation == suggestionGeneration, !Task.isCancelled else { return }
+        suggestedStops = enriched
         // Gas-chip hits (often the only pumps MapKit returns on a long
         // interstate) feed the same tank-interval planner as the fuel search.
         if selectedCategory == .gas {

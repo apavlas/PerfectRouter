@@ -39,6 +39,77 @@ final class CoreJourneyUITests: XCTestCase {
         assertNoEmptyGasMessage(in: app)
     }
 
+    func testRideHighlightDescriptionIsClippedUnderTheNameAndExpands() {
+        let app = launch()
+        planFixedRoute(in: app)
+
+        let header = reveal("rideHighlights", in: app)
+        XCTAssertTrue(header.exists, diagnosticTree(app))
+
+        let name = reveal("highlight.Tallulah Gorge.name", in: app)
+        let description = reveal("highlight.Tallulah Gorge.description", in: app)
+        XCTAssertTrue(name.exists, diagnosticTree(app))
+        XCTAssertTrue(description.exists, diagnosticTree(app))
+        scrollUntilHittable(description, in: app)
+
+        XCTAssertGreaterThanOrEqual(
+            description.frame.minY,
+            name.frame.maxY - 4,
+            "Description was not under the name. name=\(name.frame) description=\(description.frame)\n\(diagnosticTree(app))"
+        )
+        let clippedLabel = description.label
+        XCTAssertTrue(
+            clippedLabel.hasPrefix("UI test fixture sentence one"),
+            clippedLabel
+        )
+        XCTAssertFalse(
+            clippedLabel.contains("UI test fixture sentence three"),
+            "The row showed more than the first two sentences: \(clippedLabel)"
+        )
+        // The label is the first two sentences. The frame is those sentences
+        // clipped to two lines of subheadline.
+        XCTAssertGreaterThan(description.frame.height, 12, "Description had no height")
+        XCTAssertLessThan(
+            description.frame.height,
+            110,
+            "Description was not clipped to two lines. height=\(description.frame.height) labelCount=\(description.label.count)"
+        )
+        attachScreenshot("Ride highlight description clipped", of: app)
+
+        let plainName = reveal("highlight.Bare Overlook.name", in: app)
+        XCTAssertTrue(plainName.exists, diagnosticTree(app))
+        XCTAssertFalse(
+            identified("highlight.Bare Overlook.description", in: app).exists,
+            "A highlight with no published text showed a description.\n\(diagnosticTree(app))"
+        )
+
+        let clipped = reveal("highlight.Tallulah Gorge.description", in: app)
+        scrollUntilHittable(clipped, in: app)
+        let rowHeight = clipped.frame.height
+        clipped.tap()
+
+        let full = identified("highlight.Tallulah Gorge.description.full", in: app)
+        XCTAssertTrue(
+            full.waitForExistence(timeout: 5),
+            "Tapping the clipped description did not open the full text.\n\(diagnosticTree(app))"
+        )
+        XCTAssertTrue(full.label.hasPrefix("UI test fixture sentence one"), full.label)
+        XCTAssertTrue(
+            full.label.contains("UI test fixture sentence two is also on the row"),
+            full.label
+        )
+        XCTAssertFalse(
+            full.label.contains("UI test fixture sentence three"),
+            "The sheet showed a sentence past the two-sentence cap: \(full.label)"
+        )
+        XCTAssertGreaterThan(
+            full.frame.height,
+            rowHeight,
+            "The sheet clipped the two sentences instead of showing them in full. sheet=\(full.frame) rowHeight=\(rowHeight)"
+        )
+        attachScreenshot("Ride highlight description expanded", of: app)
+    }
+
     func testSelectRecommendedChecksInRangeStopsAndSkipsOnRoute() {
         let app = launch()
         planFixedRoute(in: app)
@@ -115,8 +186,17 @@ final class CoreJourneyUITests: XCTestCase {
         }
 
         let names = waypointNames(in: app)
-        XCTAssertEqual(names, afterApply)
-        XCTAssertEqual(Set(names).count, names.count, "Duplicate waypoints: \(names)")
+        XCTAssertEqual(names, afterApply, "Waypoint rows changed: \(names)")
+        XCTAssertEqual(
+            Set(names).count,
+            names.count,
+            "Duplicate waypoints: \(names)"
+        )
+        XCTAssertEqual(
+            names,
+            ["Test Origin", "Pilot Madison", "On Route Fuel", "Shell Knoxville", "Test Destination"],
+            "Waypoint rows: \(names)"
+        )
         for name in ["Pilot Madison", "On Route Fuel", "Shell Knoxville"] {
             XCTAssertEqual(names.filter { $0 == name }.count, 1, name)
         }
@@ -402,28 +482,57 @@ final class CoreJourneyUITests: XCTestCase {
             return
         }
         scrollUntilHittable(picker, in: app)
+        // Highlights lengthen the list, so this picker is found at the bottom
+        // edge. An iPad menu opened from there sits off the sheet and Twisty
+        // exists but is not hittable. Lift the anchor into the upper half.
+        var lifts = 0
+        while picker.exists, picker.frame.midY > app.frame.height * 0.45, lifts < 8 {
+            nudgePlanningList(in: app, up: true)
+            lifts += 1
+        }
+        if !picker.isHittable {
+            scrollUntilHittable(picker, in: app)
+        }
         picker.tap()
 
-        let byID = identified("routeStyleOption.\(style)", in: app)
-        if byID.waitForExistence(timeout: 2), byID.isHittable {
-            byID.tap()
-            return
-        }
-        // iPhone shows a menu of buttons. iPad can show the same choices in a popover
-        // whose rows are cells or static texts, so match the label on any hittable element.
-        let byLabel = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", style))
-        let optionDeadline = Date().addingTimeInterval(3)
+        let started = Date()
+        let optionDeadline = started.addingTimeInterval(5)
         while Date() < optionDeadline {
-            for index in 0..<byLabel.count {
-                let option = byLabel.element(boundBy: index)
-                if option.isHittable {
-                    option.tap()
-                    return
-                }
-            }
+            // Give the menu a moment to become hittable. A coordinate tap
+            // before that can hit the closed picker instead of Twisty.
+            let allowCoordinate = Date().timeIntervalSince(started) > 1.5
+            if tapRouteStyleOption(style, in: app, allowCoordinate: allowCoordinate) { return }
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         }
         XCTFail("Route style \(style) was not hittable")
+    }
+
+    /// Menu row for `style`. Prefer a hittable control. A visible iPad popover
+    /// row can report not hittable while its center is still on screen; a
+    /// coordinate tap hits that point.
+    private func tapRouteStyleOption(
+        _ style: String,
+        in app: XCUIApplication,
+        allowCoordinate: Bool
+    ) -> Bool {
+        var candidates = [identified("routeStyleOption.\(style)", in: app)]
+        let labeled = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", style))
+        for index in 0..<labeled.count {
+            candidates.append(labeled.element(boundBy: index))
+        }
+        let visible = candidates.filter { option in
+            guard option.exists, option.frame.width > 8, option.frame.height > 8 else { return false }
+            return app.frame.contains(CGPoint(x: option.frame.midX, y: option.frame.midY))
+        }
+        if let hittable = visible.first(where: \.isHittable) {
+            hittable.tap()
+            return true
+        }
+        if allowCoordinate, let option = visible.first {
+            option.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            return true
+        }
+        return false
     }
 
     // MARK: - Assertions
@@ -443,7 +552,22 @@ final class CoreJourneyUITests: XCTestCase {
         var nudges = 0
         while Date() < deadline {
             if bannerShows(style, in: app, lastLabel: &lastLabel) { return }
-            if nudges >= 4, routeRequestHasFinished(style: style, in: app) { return }
+            // A cached style (Fastest, after the other three) finishes before
+            // the banner can be read. The summary that proves it landed sits
+            // above the highlight rows and is unloaded while the style picker
+            // is on screen.
+            if !replanBannerIsUp(in: app) {
+                if !identified("activeRouteStyle", in: app).exists {
+                    scrollToTop(app)
+                    if !identified("activeRouteStyle", in: app).exists {
+                        nudgePlanningList(in: app, up: true)
+                    }
+                }
+                // A few passes first, so a banner that is about to appear is
+                // not treated as already finished. The scroll above is what
+                // puts the summary back after the highlight rows unload it.
+                if nudges >= 4, routeRequestHasFinished(style: style, in: app) { return }
+            }
             // iPad can park the in-list copy under the fold. Alternate
             // toward the top and just past it; the nav-bar copy needs no scroll.
             if nudges % 3 == 2 {
@@ -472,14 +596,18 @@ final class CoreJourneyUITests: XCTestCase {
             || app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'No route found'")).firstMatch.exists
         if failed { return false }
         let active = identified("activeRouteStyle", in: app)
-        if active.exists, active.label != style { return false }
+        // Off-screen does not count. A fuel plan left over from the previous
+        // style is still in the tree until the summary is visited, and the
+        // highlight rows are what push that summary out of the lazy list.
+        guard active.exists else { return false }
+        guard active.label == style || active.label.hasPrefix(style) else { return false }
         // "Searching along your route…" is also the in-list copy while the
         // line is still calculating, so it is not proof the request finished.
-        // The gas-search sentence and a republished plan both start after
-        // `isCalculating` drops.
+        // The gas-search sentence, a republished plan, and Navigate all start
+        // after `isCalculating` drops.
         let gasFollowUp = app.staticTexts["Searching for gas along the route…"].exists
             || !publishedFuelNames(in: app).isEmpty
-        return gasFollowUp
+        return gasFollowUp || navigateButton(in: app).exists
     }
 
     private func waitForBannerToFinish(in app: XCUIApplication) {
@@ -676,6 +804,28 @@ final class CoreJourneyUITests: XCTestCase {
         return Int(suffix) ?? -1
     }
 
+    /// `waypoint.<name>` only. Highlight identifiers start with `highlight.`
+    /// and must not be read as another stop of the same name.
+    private func waypointName(from identifier: String) -> String? {
+        let prefix = "waypoint."
+        guard identifier.hasPrefix(prefix) else { return nil }
+        let name = String(identifier.dropFirst(prefix.count))
+        guard !name.isEmpty else { return nil }
+        return name
+    }
+
+    /// True when `names` can be found in `ordered` from left to right.
+    /// A repeated name has to occur again later in `ordered`; one earlier
+    /// copy does not hide a second stop.
+    private func namesAreOrderedSubset(_ names: [String], of ordered: [String]) -> Bool {
+        var cursor = ordered.startIndex
+        for name in names {
+            guard let found = ordered[cursor...].firstIndex(of: name) else { return false }
+            cursor = ordered.index(after: found)
+        }
+        return true
+    }
+
     private func waypointNames(in app: XCUIApplication) -> [String] {
         dismissKeyboard(app)
         expandPlanningSheet(app)
@@ -688,15 +838,22 @@ final class CoreJourneyUITests: XCTestCase {
                 .filter { $0.exists && $0.frame.height > 1 }
                 .sorted { $0.frame.minY < $1.frame.minY }
             var names: [String] = []
-            var lastY = -CGFloat.greatestFiniteMagnitude
+            var lastFrame: CGRect = .null
             for element in elements {
-                let name = String(element.identifier.dropFirst("waypoint.".count))
-                // One row can expose the identifier twice (symbol and title)
-                // a few points apart. A second stop with the same name sits
-                // further down the list.
-                if names.last == name, element.frame.minY - lastY < 36 { continue }
+                // Ride Highlight ids (`highlight.<name>.…`) are not stops on
+                // the ride. Only the waypoint prefix counts, even when a
+                // highlight row is on screen beside the route list.
+                guard let name = waypointName(from: element.identifier) else { continue }
+                // The row, its representation, and the title text share one
+                // id. Overlapping frames are that one stop. A second stop
+                // with the same name is the next row down and does not overlap.
+                let slop = lastFrame.insetBy(dx: 0, dy: -2)
+                if names.last == name, slop.intersects(element.frame) {
+                    lastFrame = lastFrame.union(element.frame)
+                    continue
+                }
                 names.append(name)
-                lastY = element.frame.minY
+                lastFrame = element.frame
             }
             return names
         }
@@ -706,6 +863,9 @@ final class CoreJourneyUITests: XCTestCase {
                 ordered = names
                 return
             }
+            // Scrolling past highlights brings the same route rows back.
+            // Appending that screen again is how one stop was counted twice.
+            if namesAreOrderedSubset(names, of: ordered) { return }
             let limit = min(ordered.count, names.count)
             for overlap in stride(from: limit, through: 0, by: -1) {
                 if Array(ordered.suffix(overlap)) == Array(names.prefix(overlap)) {
@@ -877,7 +1037,8 @@ final class CoreJourneyUITests: XCTestCase {
             "fuelStop", "Fuel stop", "recommendedFuelPlan", "Pilot", "Madison", "Shell", "On Route",
             "Quick Stop", "Home Fuel", "selectRecommended", "tankRange",
             "leaveLater", "routeStyle", "waypoint.", "noGas", "replan",
-            "Plan Ride", "gas station", "Navigate", "Apply", "placeSearch"
+            "Plan Ride", "gas station", "Navigate", "Apply", "placeSearch",
+            "rideHighlights", "Ride Highlights", "highlight.", "Tallulah", "Bare Overlook"
         ]
         let highlights = full.split(separator: "\n").filter { line in
             keywords.contains { line.localizedCaseInsensitiveContains($0) }
@@ -919,6 +1080,13 @@ final class CoreJourneyUITests: XCTestCase {
             start.press(forDuration: 0.05, thenDragTo: top)
             RunLoop.current.run(until: Date().addingTimeInterval(0.35))
         }
+    }
+
+    private func attachScreenshot(_ name: String, of app: XCUIApplication) {
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     private func dismissKeyboard(_ app: XCUIApplication) {

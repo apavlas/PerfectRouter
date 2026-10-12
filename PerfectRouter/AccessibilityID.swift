@@ -13,6 +13,7 @@ enum AccessibilityID {
     static let leaveLaterToggle = "leaveLaterToggle"
     static let noGasStations = "noGasStations"
     static let navigate = "navigate"
+    static let rideHighlights = "rideHighlights"
 
     static func searchResult(_ name: String) -> String { "searchResult.\(name)" }
     static func waypoint(_ name: String) -> String { "waypoint.\(name)" }
@@ -23,4 +24,10 @@ enum AccessibilityID {
     static func fuelStop(_ name: String, checked: Bool) -> String {
         "fuelStop.\(name).\(checked ? "checked" : "unchecked")"
     }
+
+    static func rideHighlightName(_ name: String) -> String { "highlight.\(name).name" }
+    /// Two-line clip under the place name.
+    static func rideHighlightDescription(_ name: String) -> String { "highlight.\(name).description" }
+    /// The same published text, unclipped, in the sheet.
+    static func rideHighlightDescriptionFull(_ name: String) -> String { "highlight.\(name).description.full" }
 }
