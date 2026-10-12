@@ -17,6 +17,8 @@ struct RideHighlightsSection: View {
                     detail: detailText(for: stop),
                     systemImage: "star.fill",
                     iconColor: .purple,
+                    titleIdentifier: AccessibilityID.rideHighlightName(stop.name),
+                    descriptionIdentifier: AccessibilityID.rideHighlightDescription(stop.name),
                     alignment: .center,
                     onOpen: { present(stop) },
                     onAdd: { viewModel.addStop(from: stop) }
@@ -24,11 +26,16 @@ struct RideHighlightsSection: View {
             }
         } header: {
             Text("Ride Highlights")
+                .accessibilityIdentifier(AccessibilityID.rideHighlights)
         } footer: {
             Text("Places of interest right along your route, spread across the ride.")
         }
         .sheet(item: $openDescription) { item in
-            PlaceDescriptionSheet(name: item.name, text: item.text)
+            PlaceDescriptionSheet(
+                name: item.name,
+                text: item.text,
+                textIdentifier: AccessibilityID.rideHighlightDescriptionFull(item.name)
+            )
         }
     }
 

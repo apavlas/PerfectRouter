@@ -39,6 +39,69 @@ final class CoreJourneyUITests: XCTestCase {
         assertNoEmptyGasMessage(in: app)
     }
 
+    func testRideHighlightDescriptionIsClippedUnderTheNameAndExpands() {
+        let app = launch()
+        planFixedRoute(in: app)
+
+        let header = reveal("rideHighlights", in: app)
+        XCTAssertTrue(header.exists, diagnosticTree(app))
+
+        let name = reveal("highlight.Tallulah Gorge.name", in: app)
+        let description = reveal("highlight.Tallulah Gorge.description", in: app)
+        XCTAssertTrue(name.exists, diagnosticTree(app))
+        XCTAssertTrue(description.exists, diagnosticTree(app))
+        scrollUntilHittable(description, in: app)
+
+        XCTAssertGreaterThanOrEqual(
+            description.frame.minY,
+            name.frame.maxY - 4,
+            "Description was not under the name. name=\(name.frame) description=\(description.frame)\n\(diagnosticTree(app))"
+        )
+        let clippedLabel = description.label
+        XCTAssertTrue(
+            clippedLabel.hasPrefix("Granite walls drop from the rim"),
+            clippedLabel
+        )
+        if clippedLabel.contains("The last overlook faces the river bend.") {
+            XCTAssertGreaterThan(clippedLabel.count, 280, clippedLabel)
+        }
+        // Two lines of subheadline. The label may still be the full paragraph.
+        XCTAssertGreaterThan(description.frame.height, 12, "Description had no height")
+        XCTAssertLessThan(
+            description.frame.height,
+            110,
+            "Description was not clipped to two lines. height=\(description.frame.height) labelCount=\(description.label.count)"
+        )
+        attachScreenshot("Ride highlight description clipped", of: app)
+
+        let plainName = reveal("highlight.Bare Overlook.name", in: app)
+        XCTAssertTrue(plainName.exists, diagnosticTree(app))
+        XCTAssertFalse(
+            identified("highlight.Bare Overlook.description", in: app).exists,
+            "A highlight with no published text showed a description.\n\(diagnosticTree(app))"
+        )
+
+        let clipped = reveal("highlight.Tallulah Gorge.description", in: app)
+        scrollUntilHittable(clipped, in: app)
+        clipped.tap()
+
+        let full = identified("highlight.Tallulah Gorge.description.full", in: app)
+        XCTAssertTrue(
+            full.waitForExistence(timeout: 5),
+            "Tapping the clipped description did not open the full text.\n\(diagnosticTree(app))"
+        )
+        XCTAssertTrue(full.label.hasPrefix("Granite walls drop from the rim"), full.label)
+        XCTAssertTrue(
+            full.label.contains("The last overlook faces the river bend."),
+            full.label
+        )
+        XCTAssertGreaterThanOrEqual(full.label.count, clippedLabel.count)
+        if !clippedLabel.contains("The last overlook faces the river bend.") {
+            XCTAssertGreaterThan(full.label.count, clippedLabel.count)
+        }
+        attachScreenshot("Ride highlight description expanded", of: app)
+    }
+
     func testSelectRecommendedChecksInRangeStopsAndSkipsOnRoute() {
         let app = launch()
         planFixedRoute(in: app)
@@ -806,7 +869,8 @@ final class CoreJourneyUITests: XCTestCase {
             "fuelStop", "Fuel stop", "recommendedFuelPlan", "Pilot", "Madison", "Shell", "On Route",
             "Quick Stop", "Home Fuel", "selectRecommended", "tankRange",
             "leaveLater", "routeStyle", "waypoint.", "noGas", "replan",
-            "Plan Ride", "gas station", "Navigate", "Apply", "placeSearch"
+            "Plan Ride", "gas station", "Navigate", "Apply", "placeSearch",
+            "rideHighlights", "Ride Highlights", "highlight.", "Tallulah", "Bare Overlook"
         ]
         let highlights = full.split(separator: "\n").filter { line in
             keywords.contains { line.localizedCaseInsensitiveContains($0) }
@@ -843,6 +907,13 @@ final class CoreJourneyUITests: XCTestCase {
             start.press(forDuration: 0.05, thenDragTo: top)
             RunLoop.current.run(until: Date().addingTimeInterval(0.35))
         }
+    }
+
+    private func attachScreenshot(_ name: String, of app: XCUIApplication) {
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     private func dismissKeyboard(_ app: XCUIApplication) {

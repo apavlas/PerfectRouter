@@ -23,6 +23,7 @@ struct PlaceDescriptionCard: View {
     let systemImage: String
     var iconColor: Color?
     var titleIdentifier: String = ""
+    var descriptionIdentifier: String = ""
     var alignment: VerticalAlignment = .top
     var spacing: CGFloat = 8
     let onOpen: () -> Void
@@ -90,6 +91,7 @@ struct PlaceDescriptionCard: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.leading)
                 .lineLimit(PlaceDescriptionDisplay.collapsedLineLimit)
+                .modifier(IdentifierIfPresent(identifier: descriptionIdentifier))
         }
     }
 }
@@ -98,6 +100,7 @@ struct PlaceDescriptionCard: View {
 struct PlaceDescriptionSheet: View {
     let name: String
     let text: String
+    var textIdentifier: String = ""
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -107,6 +110,7 @@ struct PlaceDescriptionSheet: View {
                     Text(text)
                         .multilineTextAlignment(.leading)
                         .focusable()
+                        .modifier(IdentifierIfPresent(identifier: textIdentifier))
                     Button("Done") { dismiss() }
                         .buttonStyle(.bordered)
                 }
