@@ -680,10 +680,11 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         return anchors
     }
 
-    /// Subtitle for a row in "Route (N stops)". The origin has none.
-    /// Every later row, including the destination, uses the current legs,
-    /// so a replan replaces the line. The destination's cumulative time is
-    /// the whole trip. Nil while the published legs do not match the list.
+    /// Subtitle for a row in "Route (N stops)". This is the formatter
+    /// `WaypointsSection` reads. The origin has none. The first stop drops
+    /// "(since last)". Every later row, including the destination, keeps
+    /// it. A replan replaces the line. Nil while the published legs do not
+    /// match the list.
     func waypointRidingCaption(at index: Int) -> String? {
         guard legs.count + 1 == waypoints.count else { return nil }
         return FuelStopRidingTime.waypointCaption(index: index, legs: driveLegTimings())
@@ -707,6 +708,16 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         suggestedStops.filter { stop in
             !isStopOnRoute(stop) && !isShownAsFuelPlanRow(stop)
         }
+    }
+
+    /// Rows under "Suggested … Stops". Gas is the fuel-corridor pool, which
+    /// already spans the ride, so the list is not the first 15 stations
+    /// nearest the origin. Other categories stay capped.
+    var suggestionListStops: [SuggestedStop] {
+        if selectedCategory == .gas {
+            return addableSuggestions
+        }
+        return Array(addableSuggestions.prefix(15))
     }
 
     /// True when the summary already renders this place as a fuel row.
@@ -1052,15 +1063,26 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     }
 
     /// Checks every recommended fuel stop from the start to the destination,
-    /// in ride order, and adds that whole set in the same tap. There is no
-    /// cap. The route is recalculated once. Past-range stations, other
-    /// categories, and pumps already on the route stay out. Afterward none
-    /// of those recommendations are still selectable. A pump the rider
-    /// checked by hand, and that is not one of these recommendations, stays
-    /// checked for Apply and is not routed by this tap.
+    /// in ride order, and adds that whole set in the same tap. The route is
+    /// recalculated once. When the current line already has stations, the
+    /// tap replans through `replanFuelStops` first so the inserted hops are
+    /// the reserve cap (0.85 × tank), or the farthest station still inside
+    /// the tank when that window is empty. A pump already on the route is a
+    /// fill for that check, including one search added without `isGasFill`,
+    /// so the next station is measured from that pump rather than the
+    /// origin. A stop on the far side of a dry gap stays on the list and is
+    /// not inserted. Past-range stations, other categories, and pumps
+    /// already on the route stay out. Afterward none of those
+    /// recommendations are still selectable. A pump the rider checked by
+    /// hand, and that is not one of these recommendations, stays checked
+    /// for Apply and is not routed by this tap.
     func toggleRecommendedFuelSelection() {
-        let recommended = selectableRecommendedFuelStops
+        let replanned = replanFuelSelectionForRecommendedTap()
+        var recommended = selectableRecommendedFuelStops
             .sorted { $0.distanceAlongRoute < $1.distanceAlongRoute }
+        if replanned {
+            recommended = fuelStopsWithinTank(from: recommended)
+        }
         guard !recommended.isEmpty else { return }
         let kept = bufferedGasStops.filter { stop in
             !recommended.contains { Self.sameCoordinate($0.coordinate, stop.coordinate) }
@@ -2100,10 +2122,91 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         travelSide.isEmpty ? stations : travelSide
     }
 
+    /// Same planner `toggleRecommendedFuelSelection` runs before it inserts
+    /// stops. Uses the stations already on the line. No food pairing: the
+    /// route replan that follows owns the next search.
+    private func replanFuelSelectionForRecommendedTap() -> Bool {
+        guard totalDistanceMeters > fuelRangeMeters, !gasStations.isEmpty else { return false }
+        let travelSide = gasStations.filter {
+            RouteGeometry.isOnTravelSide($0.coordinate, along: legs)
+        }
+        travelSideGasStations = Self.preferredFuelPool(from: gasStations, travelSide: travelSide)
+        replanFuelStops(pairingFood: false)
+        return true
+    }
+
+    /// Recommended stops the button may insert. Each hop is measured from
+    /// the latest fuel the rider can already reach: the start, a pump
+    /// already on the route, or a stop this tap is inserting. A search
+    /// result is not flagged `isGasFill`, so the pump the rider already
+    /// added still has to count — otherwise the next station is measured
+    /// from the origin and dropped even when the leg after that pump fits
+    /// in the tank. A station past the tank from every reachable fill stays
+    /// off the route, including one planned on the far side of a dry gap.
+    private func fuelStopsWithinTank(from stops: [SuggestedStop]) -> [SuggestedStop] {
+        let onRoute = onRouteGasDistances().filter(\.isFinite)
+        let tolerance = FuelStopRidingTime.sameStopToleranceMeters
+        var reachable: [CLLocationDistance] = [0]
+
+        func alreadyReached(_ distance: CLLocationDistance) -> Bool {
+            reachable.contains { abs($0 - distance) <= tolerance }
+        }
+
+        func withinTank(_ distance: CLLocationDistance) -> Bool {
+            let prior = reachable.filter { $0 <= distance + tolerance }
+            guard let anchor = prior.max() else { return false }
+            let hop = distance - anchor
+            guard hop.isFinite else { return false }
+            if hop < 0 { return -hop <= tolerance }
+            return hop <= fuelRangeMeters
+        }
+
+        // A fill already on the route counts only once the rider can get
+        // there. An unreachable pump must not unlock stations beyond it.
+        func absorbOnRouteFuel() {
+            var added = true
+            while added {
+                added = false
+                for distance in onRoute where !alreadyReached(distance) {
+                    guard withinTank(distance) else { continue }
+                    reachable.append(distance)
+                    added = true
+                }
+            }
+        }
+
+        absorbOnRouteFuel()
+        var chosen: [SuggestedStop] = []
+        for stop in stops {
+            let distance = stop.distanceAlongRoute
+            guard distance.isFinite, withinTank(distance) else { break }
+            chosen.append(stop)
+            if !alreadyReached(distance) {
+                reachable.append(distance)
+            }
+            absorbOnRouteFuel()
+        }
+        return chosen
+    }
+
+    /// Mile marks of gas already on the route. `gasFillDistances` only sees
+    /// waypoints flagged `isGasFill`. Search inserts a pump as a plain
+    /// waypoint, and that pump is still a fill for the next hop.
+    private func onRouteGasDistances() -> [CLLocationDistance] {
+        var distances = gasFillDistances
+        for station in gasStations where isStopOnRoute(station) {
+            distances.append(station.distanceAlongRoute)
+        }
+        for stop in fuelStops where isStopOnRoute(stop) {
+            distances.append(stop.distanceAlongRoute)
+        }
+        return distances
+    }
+
     /// Re-selects the recommended fuel stops from the already-computed
     /// travel-side gas stations, e.g. after a fill is added. Cheap when the
     /// tank-interval search has already run — no network.
-    func replanFuelStops() {
+    func replanFuelStops(pairingFood: Bool = true) {
         guard totalDistanceMeters > fuelRangeMeters else {
             fuelStops = []
             fuelPlanEntries = []
@@ -2131,7 +2234,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         // Re-pair food when the range slider changes the chosen stops. The
         // identity guard inside makes this a no-op (no network) when the set
         // of stops is unchanged.
-        Task { await refreshFoodNearFuelStops() }
+        if pairingFood {
+            Task { await refreshFoodNearFuelStops() }
+        }
     }
 
     /// Pairs nearby food to each recommended fuel stop with one bounded search
@@ -2337,16 +2442,20 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     /// Greedy fuel-stop selection. From the last fill-up (ride start, or a
     /// rider-added gas waypoint in `filledAt`), pick the gas station as far
-    /// along as possible but still within `safetyFactor` of the tank range
-    /// (so there's a reserve). Food is optional: when the tank-interval ETA
-    /// is near breakfast / lunch / dinner *and* `preferringFoodAt` lists an
-    /// in-window pump, that pump wins over gas-only in the same window.
-    /// Off-meal or missing food never skips the stop. A recommended hop,
-    /// including the leg into the destination, stays inside the reserve
-    /// (tank × 0.85). A station farther than that is not the next fuel
-    /// stop, even when it is still inside the hard tank. Planning continues
-    /// until the distance left fits in the reserve. A last stretch inside
-    /// the hard tank with no station is not a gap.
+    /// along as possible whose ridden hop stays within `safetyFactor` of the
+    /// tank (so there's a reserve). The ridden hop is the along-route
+    /// distance plus the detour back from the previous pump and out to this
+    /// one — the leg Select recommended's replan actually rides. Food is
+    /// optional: when the tank-interval ETA is near breakfast / lunch /
+    /// dinner *and* `preferringFoodAt` lists an in-window pump, that pump
+    /// wins over gas-only in the same window. Off-meal or missing food never
+    /// skips the stop. That hop, including the leg into the destination,
+    /// stays inside the reserve (tank × 0.85) when any station fits there.
+    /// When the reserve window is empty, the farthest station still inside
+    /// the full tank is the next stop. A station beyond the tank is not a
+    /// fuel stop. Planning continues until the distance left fits in the
+    /// reserve. A last stretch inside the hard tank with no station is not
+    /// a gap.
     ///
     /// A hop shorter than `minimumSeparationFactor` of the tank is skipped
     /// when it does not unlock a station past the current reach. A segment
@@ -2412,13 +2521,28 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         var skippedNear = Set<UUID>()
         // Rider-added gas stops count as fills; later pumps plan from the last one.
         var lastRefuel: CLLocationDistance = max(0, filledAt.max() ?? 0)
+        // Detour of the pump we just left. The next leg starts there, off the
+        // line, so the replan rides this distance again on the way out.
+        var lastDetour: CLLocationDistance = 0
         var steps = 0
         let stepLimit = max(sorted.count * 3, 1) + 4
+
+        func finiteDetour(_ stop: SuggestedStop) -> CLLocationDistance {
+            let detour = stop.detourMeters
+            guard detour.isFinite else { return 0 }
+            return max(0, detour)
+        }
+
+        /// Along-route progress plus both detours. This is the leg length
+        /// after Select recommended inserts the stop and the route replans.
+        func riddenHop(to stop: SuggestedStop) -> CLLocationDistance {
+            (stop.distanceAlongRoute - lastRefuel) + lastDetour + finiteDetour(stop)
+        }
 
         func inWindow(_ limit: CLLocationDistance) -> [SuggestedStop] {
             sorted.filter {
                 $0.distanceAlongRoute > lastRefuel
-                    && $0.distanceAlongRoute <= lastRefuel + limit
+                    && riddenHop(to: $0) <= limit
                     && !skippedNear.contains($0.id)
             }
         }
@@ -2480,9 +2604,11 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 preferFoodForMeal = false
             }
 
-            // Only the reserve window. The full tank would allow a 175–183
-            // mile hop on a 200-mile tank and spend the 15% reserve.
-            if let stop = farthest(comfortRange, preferFood: preferFoodForMeal) {
+            // Reserve first. The full tank is only the fallback when that
+            // window is empty: a hop past 0.85 × tank is allowed when no
+            // station sits inside the reserve, and never when one does.
+            if let stop = farthest(comfortRange, preferFood: preferFoodForMeal)
+                ?? farthest(range, preferFood: false) {
                 let hop = stop.distanceAlongRoute - lastRefuel
                 if hop < minimumSeparation, !extendsReach(stop) {
                     skippedNear.insert(stop.id)
@@ -2496,6 +2622,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                         if let next {
                             entries.append(.pastRange(next))
                             lastRefuel = next.distanceAlongRoute
+                            lastDetour = finiteDetour(next)
                             skippedNear.removeAll()
                             continue
                         }
@@ -2506,6 +2633,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 recommended.append(stop)
                 entries.append(.recommended(stop))
                 lastRefuel = stop.distanceAlongRoute
+                lastDetour = finiteDetour(stop)
                 skippedNear.removeAll()
                 continue
             }
@@ -2527,6 +2655,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             if let next {
                 entries.append(.pastRange(next))
                 lastRefuel = next.distanceAlongRoute
+                lastDetour = finiteDetour(next)
                 skippedNear.removeAll()
                 continue
             }
@@ -2709,6 +2838,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         guard !legs.isEmpty else { return }
         suggestionGeneration += 1
         let generation = suggestionGeneration
+        if selectedCategory == .gas {
+            await refreshGasCategorySuggestions(generation: generation)
+            return
+        }
         isLoadingSuggestions = true
         defer {
             if generation == suggestionGeneration {
@@ -2736,11 +2869,50 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         let enriched = await attachingPlaceDescriptions(published)
         guard generation == suggestionGeneration, !Task.isCancelled else { return }
         suggestedStops = enriched
-        // Gas-chip hits (often the only pumps MapKit returns on a long
-        // interstate) feed the same tank-interval planner as the fuel search.
-        if selectedCategory == .gas {
+    }
+
+    /// Suggested Gas rows come from the same tank-interval corridor as the
+    /// fuel recommendations (`fuelSearchDistances` + `fuelSearchCorridorMeters`),
+    /// not a second search that MapKit throttles down to the origin. Mile
+    /// marks are the projection onto the published line.
+    private func refreshGasCategorySuggestions(generation: Int) async {
+        var stations = gasStations.filter { $0.category == .gas }
+        if stations.isEmpty {
+            isLoadingSuggestions = true
+            defer {
+                if generation == suggestionGeneration {
+                    isLoadingSuggestions = false
+                }
+            }
+            let found = await searchStops(
+                category: .gas,
+                alongLegs: legs,
+                sampleDistances: Self.fuelSearchDistances(
+                    totalDistance: totalDistanceMeters,
+                    range: fuelRangeMeters
+                ),
+                corridorRadiusMeters: Self.fuelSearchCorridorMeters,
+                generation: generation
+            )
+            guard generation == suggestionGeneration, !Task.isCancelled, found.status == .completed else { return }
+            gasStations = found.stops
+            stations = found.stops
+            showFuelCorridorInSuggestedGasList(stations)
             applyFuelCandidatePool()
+            return
         }
+        guard generation == suggestionGeneration, !Task.isCancelled else { return }
+        showFuelCorridorInSuggestedGasList(stations)
+    }
+
+    /// Copies the fuel-corridor stations onto the suggestion list with mile
+    /// marks measured along the route. A stored 0 does not stay "~0 mi".
+    func showFuelCorridorInSuggestedGasList(_ stations: [SuggestedStop]? = nil) {
+        let pool = stations ?? gasStations.filter { $0.category == .gas }
+        suggestedStops = Self.projectingDistancesFromStart(
+            pool,
+            alongPolylines: suggestionRoutePolylines
+        )
     }
 
     func selectCategory(_ category: StopCategory) {

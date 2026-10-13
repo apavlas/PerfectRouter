@@ -124,9 +124,11 @@ enum FuelStopRidingTime {
         return usesMetric ? "\(value) km" : "\(value) mi"
     }
 
-    /// Riding line for a route waypoint. The origin (`index` 0) has none.
-    /// Every later row, including the final destination, uses the same
-    /// distance and drive-time text as a fuel row, always "since last".
+    /// Riding line for a route-list row (`WaypointsSection` via
+    /// `waypointRidingCaption`). The origin (`index` 0) has none. The first
+    /// stop drops the since-last clause, which only repeats the time since
+    /// departure: "170 mi · 2h 38m riding". Later rows, including the
+    /// destination, keep it: "344 mi · 5h 04m riding (2h 29m since last)".
     /// The destination's cumulative time is the whole trip: the sum of leg
     /// `expectedTravelTime` values, so time spent stopped is not included.
     static func waypointCaption(
@@ -137,10 +139,16 @@ enum FuelStopRidingTime {
         guard index > 0, index <= legs.count else { return nil }
         let distance = distanceThroughWaypoint(index, legs: legs)
         let cumulative = ridingTime(atDistance: distance, legs: legs)
+        let miles = formatDistance(distance, usesMetric: usesMetric)
+        let riding = formatDuration(cumulative)
+        // Index 1 is the first stop on the route list. "Since last" is the
+        // same duration as the cumulative time, so the cell leaves it off.
+        if index == 1 {
+            return "\(miles) · \(riding) riding"
+        }
         let previousDistance = distanceThroughWaypoint(index - 1, legs: legs)
         let since = max(0, cumulative - ridingTime(atDistance: previousDistance, legs: legs))
-        let miles = formatDistance(distance, usesMetric: usesMetric)
-        return "\(miles) · \(formatDuration(cumulative)) riding (\(formatDuration(since)) since last)"
+        return "\(miles) · \(riding) riding (\(formatDuration(since)) since last)"
     }
 
     /// Polyline length from the origin through `index` legs. Index 0 is the origin.

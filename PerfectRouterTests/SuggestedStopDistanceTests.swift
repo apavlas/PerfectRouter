@@ -85,6 +85,48 @@ final class SuggestedStopDistanceTests: XCTestCase {
         }
     }
 
+    /// The Suggested Gas list used to keep the first handful of stations and
+    /// label them "~0 mi from start". It now shows the fuel-corridor pool,
+    /// including a station at the far end of the ride, with real mile marks.
+    func testSuggestedGasListShowsCorridorStationsWithMileMarks() {
+        let line = northboundPolyline(stepMiles: 10, steps: 200)
+        let indexes = Array(1...16) + [200]
+        let stops = indexes.map { index in
+            let onRoute = line[index]
+            return SuggestedStop(
+                name: "Gas \(index)",
+                coordinate: CLLocationCoordinate2D(
+                    latitude: onRoute.latitude,
+                    longitude: onRoute.longitude + 0.002
+                ),
+                category: .gas,
+                distanceAlongRoute: 0
+            )
+        }
+        XCTAssertTrue(stops.allSatisfy { $0.distanceAlongRoute == 0 })
+        XCTAssertGreaterThan(stops.count, 15)
+
+        let viewModel = RoutePlannerViewModel()
+        viewModel.selectedCategory = .gas
+        viewModel.plannedCorridor = [line]
+        viewModel.gasStations = stops
+        viewModel.showFuelCorridorInSuggestedGasList()
+
+        let listed = viewModel.suggestionListStops
+        XCTAssertEqual(listed.count, stops.count)
+        let miles = listed.map { viewModel.distanceFromStart(of: $0) / AppSettings.metersPerMile }
+        XCTAssertGreaterThan(miles[0], 5)
+        XCTAssertLessThan(miles[0], 20)
+        XCTAssertGreaterThan(miles.last ?? 0, 1_900)
+        for pair in zip(miles, miles.dropFirst()) {
+            XCTAssertGreaterThan(pair.1, pair.0)
+        }
+        let farCaption = milesFromStartCaption(viewModel.distanceFromStart(of: listed[listed.count - 1]))
+        XCTAssertTrue(farCaption.hasPrefix("~"))
+        XCTAssertTrue(farCaption.hasSuffix(" from start"))
+        XCTAssertFalse(farCaption.hasPrefix("~0"))
+    }
+
     /// Northbound line. Vertices are about `stepMiles` apart; the test
     /// compares against the polyline's own length, not the approximation.
     private func northboundPolyline(stepMiles: Double, steps: Int) -> [CLLocationCoordinate2D] {
