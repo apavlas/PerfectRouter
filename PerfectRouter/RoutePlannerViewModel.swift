@@ -2294,22 +2294,35 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     /// Corridor for tank-interval gas/food search. Wider than the chip
     /// suggestion default (~5 mi) so a pump a town off the sample still counts.
+    /// Each lookup keeps stations inside this radius of its sample, about 15 miles.
     nonisolated static let fuelSearchCorridorMeters: CLLocationDistance = 24_000
 
-    /// How many lookups to keep inside each tank window after every tank
-    /// edge along the route has a sample.
-    nonisolated static let fuelSearchSamplesPerTank = 3
+    /// Overlap between neighboring search bubbles, as a fraction of the
+    /// diameter. The step stays under two radii so a bend in the highway
+    /// still falls inside a lookup.
+    nonisolated static let fuelSearchCoverOverlap = 0.15
+
+    /// Along-route spacing of fuel searches. Bubbles of `fuelSearchCorridorMeters`
+    /// overlap by `fuelSearchCoverOverlap`.
+    nonisolated static let fuelSearchCoverStepMeters: CLLocationDistance =
+        fuelSearchCorridorMeters * 2 * (1 - fuelSearchCoverOverlap)
+
+    /// Lookups for a ride of about 3,500 miles at `fuelSearchCoverStepMeters`,
+    /// plus the comfort-edge samples. A lower cap spends the budget on the
+    /// first tanks and leaves Arizona I-10 with one search every 170 miles.
+    nonisolated static let fuelSearchMaxSamples = 160
 
     /// Distances along the route at which to search for gas and food.
-    /// Every tank interval on the ride gets at least one sample (the comfort
-    /// edge). Remaining budget fills intra-window points. Later tanks are
-    /// never dropped to make room for extra samples on earlier tanks.
+    /// Every comfort edge (0.85 × tank) is included. The rest of the ride is
+    /// sampled on `fuelSearchCoverStepMeters`, including the later tanks.
+    /// One search per tank is not enough: the lookup only returns stations
+    /// within `fuelSearchCorridorMeters` of that point, so the 140 miles
+    /// between those points never enter the pool.
     nonisolated static func fuelSearchDistances(
         totalDistance: CLLocationDistance,
         range: CLLocationDistance,
         safetyFactor: Double = fuelSafetyFactor,
-        maxCount: Int = 32,
-        samplesPerTank: Int = fuelSearchSamplesPerTank
+        maxCount: Int = fuelSearchMaxSamples
     ) -> [CLLocationDistance] {
         guard range > 0, totalDistance > 0, maxCount > 0 else { return [] }
 
@@ -2332,34 +2345,80 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             if k > 10_000 { break }
         }
 
-        // One sample per tank along the whole route first. Only if that
-        // already exceeds the cap do we thin — still keeping first and last.
+        // More comfort edges than the budget. Thin them, keeping both ends.
         if edges.count >= maxCount {
             return spacedDistances(edges, max: maxCount)
         }
 
-        var extras: [CLLocationDistance] = []
-        let divisions = max(samplesPerTank, 1)
-        for edge in edges {
-            let start = edge - interval
-            if divisions > 1 {
-                for i in 1..<divisions {
-                    let d = start + interval * Double(i) / Double(divisions)
-                    if d > 0, d < totalDistance {
-                        extras.append(d)
-                    }
-                }
-            }
-        }
-        if let last = edges.last, last < totalDistance {
-            let tail = (last + totalDistance) / 2
-            extras.append(tail)
+        let coverStep = fuelSearchCoverStepMeters
+        guard coverStep > 0 else { return edges }
+
+        var points: [CLLocationDistance] = []
+        var cursor = coverStep
+        while cursor < totalDistance {
+            points.append(cursor)
+            cursor += coverStep
+            if points.count > 10_000 { break }
         }
 
-        var picked = edges
-        for extra in extras {
-            guard picked.count < maxCount else { break }
-            picked.append(extra)
+        // Comfort edges stay on their exact mile. A grid point within 500 m
+        // is the same lookup, so it moves onto the edge instead of doubling.
+        for edge in edges {
+            if let index = points.firstIndex(where: { abs($0 - edge) <= 500 }) {
+                points[index] = edge
+            } else {
+                points.append(edge)
+            }
+        }
+
+        if let last = points.max(), totalDistance - last > fuelSearchCorridorMeters {
+            let tail = totalDistance - fuelSearchCorridorMeters * 0.5
+            if tail > 0, tail < totalDistance, !points.contains(where: { abs($0 - tail) < 1 }) {
+                points.append(tail)
+            }
+        }
+
+        let covered = points.sorted()
+        guard covered.count > maxCount else { return covered }
+        return coverageWithinCap(
+            anchors: edges,
+            candidates: covered,
+            totalDistance: totalDistance,
+            maxCount: maxCount
+        )
+    }
+
+    /// Keeps every comfort edge, then fills the widest holes until `maxCount`.
+    private nonisolated static func coverageWithinCap(
+        anchors: [CLLocationDistance],
+        candidates: [CLLocationDistance],
+        totalDistance: CLLocationDistance,
+        maxCount: Int
+    ) -> [CLLocationDistance] {
+        var picked = anchors
+        var remaining = candidates.filter { candidate in
+            !picked.contains { abs($0 - candidate) < 1 }
+        }
+        while picked.count < maxCount, !remaining.isEmpty {
+            let bounds = ([0] + picked + [totalDistance]).sorted()
+            var bestStart: CLLocationDistance = 0
+            var bestEnd: CLLocationDistance = totalDistance
+            var bestGap: CLLocationDistance = -1
+            for index in 1..<bounds.count {
+                let gap = bounds[index] - bounds[index - 1]
+                if gap > bestGap {
+                    bestGap = gap
+                    bestStart = bounds[index - 1]
+                    bestEnd = bounds[index]
+                }
+            }
+            let midpoint = (bestStart + bestEnd) / 2
+            guard let choice = remaining
+                .filter({ $0 > bestStart && $0 < bestEnd })
+                .min(by: { abs($0 - midpoint) < abs($1 - midpoint) })
+            else { break }
+            picked.append(choice)
+            remaining.removeAll { abs($0 - choice) < 1 }
         }
         return picked.sorted()
     }

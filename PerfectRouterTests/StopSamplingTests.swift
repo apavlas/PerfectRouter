@@ -43,4 +43,12 @@ final class StopSamplingTests: XCTestCase {
     func testEmptyInputYieldsNothing() {
         XCTAssertEqual(service.evenlySpaced([Int](), max: 5), [])
     }
+
+    func testEndsFirstSearchesBothEndsBeforeTheMiddle() {
+        XCTAssertEqual(StopSuggestionService.endsFirst([1, 2]), [1, 2])
+        XCTAssertEqual(
+            StopSuggestionService.endsFirst([1, 2, 3, 4, 5, 6]),
+            [1, 6, 2, 5, 3, 4]
+        )
+    }
 }
