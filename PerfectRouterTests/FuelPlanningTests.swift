@@ -438,55 +438,142 @@ final class FuelPlanningTests: XCTestCase {
         XCTAssertTrue(distances.contains { abs($0 - tankMeters * RoutePlannerViewModel.fuelSafetyFactor) < 1 })
     }
 
-    /// Charlotte → LA, 2,471 mi, 200 mi tank. Pride Travel Center at Eloy
-    /// (mile 2,046) to a Mobil near Quartzsite (mile 2,229) is 183 miles:
-    /// over the 170-mile reserve and inside the tank, so the planner takes
-    /// it when the pool has nothing closer. That stretch of I-10 has fuel
-    /// the whole way. Samples have to land within the 15-mile search radius
-    /// of every mile there, not once per 170-mile tank.
+    /// Charlotte → LA, 2,471 mi, 200 mi tank. The first pass is one lookup
+    /// per 170-mile reserve so it stays inside MapKit's rate window. Pride
+    /// Travel Center (mile 2,046) to Mobil (mile 2,229) is 183 miles, so
+    /// the densify pass has to cover every mile of that stretch.
     func testCoastToCoastFuelSearchCoversArizonaI10() {
         let mile = AppSettings.metersPerMile
-        let totalMiles = 2_471.0
-        let total = totalMiles * mile
+        let total = 2_471.0 * mile
         let range = 200 * mile
-        let distances = RoutePlannerViewModel.fuelSearchDistances(
+        let coarse = RoutePlannerViewModel.fuelSearchDistances(
             totalDistance: total,
             range: range
         )
         let radius = RoutePlannerViewModel.fuelSearchCorridorMeters
         let interval = range * RoutePlannerViewModel.fuelSafetyFactor
 
-        XCTAssertFalse(distances.isEmpty)
-        XCTAssertEqual(distances, distances.sorted())
-        XCTAssertLessThanOrEqual(distances.count, RoutePlannerViewModel.fuelSearchMaxSamples)
+        XCTAssertFalse(coarse.isEmpty)
+        XCTAssertEqual(coarse, coarse.sorted())
+        XCTAssertLessThanOrEqual(coarse.count, MapSearchPace.maxRequestsPerWindow)
         var edge = interval
         while edge < total {
             XCTAssertTrue(
-                distances.contains { abs($0 - edge) < 1 },
+                coarse.contains { abs($0 - edge) < 1 },
                 "missing comfort edge at \(edge / mile) mi"
             )
             edge += interval
         }
+        XCTAssertFalse(
+            coarse.contains { abs($0 - 2_100 * mile) <= radius },
+            "the coarse pass should leave the middle of Arizona for densify"
+        )
 
-        var previous = distances[0]
-        XCTAssertLessThanOrEqual(previous, RoutePlannerViewModel.fuelSearchCoverStepMeters + 1)
-        for distance in distances.dropFirst() {
-            XCTAssertLessThanOrEqual(
-                distance - previous,
-                radius * 2,
-                "search gap of \((distance - previous) / mile) mi leaves a hole"
-            )
-            previous = distance
+        // A station near every comfort edge, except Eloy and Quartzsite,
+        // which sit 183 miles apart.
+        var stations = coarse.filter { sample in
+            abs(sample - 2_040 * mile) > mile && abs(sample - 2_210 * mile) > mile
         }
-        XCTAssertLessThanOrEqual(total - previous, radius)
-
+        stations.append(contentsOf: [2_046 * mile, 2_229 * mile])
+        let dense = RoutePlannerViewModel.fuelDensifySearchDistances(
+            totalDistance: total,
+            limit: interval,
+            stationDistances: stations,
+            alreadySearched: coarse
+        )
+        let samples = (coarse + dense).sorted()
         for marker in stride(from: 2_046, through: 2_229, by: 1) {
             let along = Double(marker) * mile
             XCTAssertTrue(
-                distances.contains { abs($0 - along) <= radius },
+                samples.contains { abs($0 - along) <= radius },
                 "mile \(marker) on Arizona I-10 is outside every fuel search"
             )
         }
+    }
+
+    func testDensifySkipsAReserveGapAndAnUnsearchedHole() {
+        let mile = AppSettings.metersPerMile
+        let insideReserve = RoutePlannerViewModel.fuelDensifySearchDistances(
+            totalDistance: 1_000 * mile,
+            limit: 170 * mile,
+            stationDistances: [100 * mile, 260 * mile]
+        )
+        XCTAssertTrue(insideReserve.isEmpty)
+
+        let unknown = RoutePlannerViewModel.fuelDensifySearchDistances(
+            totalDistance: 850 * mile,
+            limit: 170 * mile,
+            stationDistances: [100 * mile, 800 * mile],
+            unsearched: [400 * mile]
+        )
+        XCTAssertTrue(unknown.isEmpty, "a failed lookup is not a hole to fill with more guesses")
+    }
+
+    /// The live miss: stops through mile 567, then a throttled stretch, then
+    /// stations again near 1,904. Those later stations must not become the
+    /// next fuel stop. The unsearched miles are not an empty road.
+    func testThrottledStretchIsNotPlannedAsEmptyRoad() {
+        let mile = AppSettings.metersPerMile
+        let stations = [165, 332, 500, 567, 1_904, 2_039, 2_209].map {
+            gas(at: Double($0) * mile)
+        }
+        let open = RoutePlannerViewModel.fuelPlan(
+            from: stations,
+            totalDistance: 2_471 * mile,
+            range: 200 * mile
+        )
+        XCTAssertTrue(open.stops.contains { $0.distanceAlongRoute > 1_900 * mile })
+
+        let blocked = RoutePlannerViewModel.fuelPlan(
+            from: stations,
+            totalDistance: 2_471 * mile,
+            range: 200 * mile,
+            unsearched: [800 * mile, 1_400 * mile]
+        )
+        XCTAssertTrue(blocked.stops.contains { abs($0.distanceAlongRoute - 567 * mile) < mile })
+        XCTAssertFalse(blocked.stops.contains { $0.distanceAlongRoute > 600 * mile })
+        XCTAssertFalse(blocked.hasGap)
+    }
+
+    func testMapSearchPaceWaitsWhenTheWindowIsFull() {
+        let now = Date()
+        let full = Array(repeating: now, count: MapSearchPace.maxRequestsPerWindow)
+        XCTAssertGreaterThan(MapSearchPace.delay(recent: full, now: now), 50)
+        let room = (0..<(MapSearchPace.maxRequestsPerWindow - 1)).map { _ in
+            now.addingTimeInterval(-1)
+        }
+        XCTAssertEqual(MapSearchPace.delay(recent: room, now: now), 0, accuracy: 0.001)
+    }
+
+    func testThrottleBackoffGrowsPastTheOldRetryPause() {
+        XCTAssertEqual(MapSearchPace.throttleBackoff(attempt: 1), .seconds(2))
+        XCTAssertEqual(MapSearchPace.throttleBackoff(attempt: 2), .seconds(4))
+        XCTAssertEqual(MapSearchPace.throttleBackoff(attempt: 3), .seconds(8))
+        XCTAssertEqual(MapSearchPace.throttleBackoff(attempt: 6), .seconds(8))
+    }
+
+    func testRetriedThrottleDropsOutOfTheUnsearchedMiles() {
+        let kept = CorridorSearchResult(
+            stops: [gas(at: 100)],
+            status: .completed,
+            succeeded: 4,
+            failed: 0,
+            throttled: 2,
+            failedSampleDistances: [500, 900]
+        )
+        let retry = CorridorSearchResult(
+            stops: [gas(at: 500)],
+            status: .completed,
+            succeeded: 1,
+            failed: 0,
+            throttled: 1,
+            failedSampleDistances: [900]
+        )
+        let merged = RoutePlannerViewModel.mergedCorridorSearch(kept, with: retry, retried: [500, 900])
+        XCTAssertEqual(merged.failedSampleDistances, [900])
+        XCTAssertEqual(merged.throttled, 1)
+        XCTAssertEqual(merged.stops.map(\.distanceAlongRoute), [100, 500])
+        XCTAssertEqual(merged.status, .completed)
     }
 
     func testFuelSearchDistancesCapAtMax() {

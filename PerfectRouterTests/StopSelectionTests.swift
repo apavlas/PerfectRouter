@@ -597,6 +597,14 @@ final class StopSelectionTests: XCTestCase {
         XCTAssertFalse(viewModel.waypoints.contains {
             ["Bypass", "Barstow", "Needles"].contains($0.name)
         })
+        let summaryNames = viewModel.visibleFuelPlanEntries.compactMap { entry -> String? in
+            if case .recommended(let stop) = entry { return stop.name }
+            return nil
+        }
+        let onRoute = Set(viewModel.waypoints.map(\.name))
+        XCTAssertTrue(summaryNames.allSatisfy { onRoute.contains($0) })
+        XCTAssertFalse(summaryNames.contains("Needles"))
+        XCTAssertFalse(summaryNames.contains("Barstow"))
     }
 
     /// The UI fixture's 100-mile tank. Search adds On Route Fuel at mile 150

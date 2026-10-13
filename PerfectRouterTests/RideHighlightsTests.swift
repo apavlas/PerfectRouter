@@ -24,6 +24,17 @@ final class RideHighlightsTests: XCTestCase {
         )
     }
 
+    func testHighlightSamplesSpanACoastToCoastRide() {
+        let mile = AppSettings.metersPerMile
+        let total = 2_471 * mile
+        let distances = RoutePlannerViewModel.highlightSearchDistances(totalDistance: total)
+        XCTAssertLessThanOrEqual(distances.count, 12)
+        XCTAssertGreaterThanOrEqual(distances.count, 8)
+        XCTAssertLessThan(distances.first ?? total, total * 0.15)
+        XCTAssertGreaterThan(distances.last ?? 0, total * 0.85)
+        XCTAssertEqual(distances, distances.sorted())
+    }
+
     func testNoCandidatesYieldsNoHighlights() {
         let picked = RoutePlannerViewModel.selectHighlights(from: [], totalDistance: totalDistance)
         XCTAssertTrue(picked.isEmpty)

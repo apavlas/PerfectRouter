@@ -593,10 +593,19 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// keeps in-range recommendations and hides the named gap. A stop
     /// already on the route is omitted so Apply cannot add it twice.
     var visibleFuelPlanEntries: [FuelPlanEntry] {
-        fuelPlanEntries.compactMap { entry in
+        let reachable = fuelStopsWithinTank(
+            from: fuelStops.sorted { $0.distanceAlongRoute < $1.distanceAlongRoute }
+        )
+        return fuelPlanEntries.compactMap { entry in
             switch entry {
             case .recommended(let stop):
-                return isStopOnRoute(stop) ? nil : entry
+                // The route list only inserts stops the tank can reach.
+                // A later recommendation across a dry or unsearched stretch
+                // stays off both surfaces, so the summary cannot list a
+                // stop the route then skips on the way to the destination.
+                let onPlan = reachable.contains { Self.sameFuelPlace($0, stop) }
+                guard onPlan, !isStopOnRoute(stop) else { return nil }
+                return entry
             case .pastRange(let stop):
                 guard showsFuelGapWarning, !isStopOnRoute(stop) else { return nil }
                 return entry
@@ -860,6 +869,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// throttled pool cannot say the tank does not reach.
     private var gasCoverageTrusted = false
 
+    /// Mile marks whose lookup throttled or failed. The planner must not
+    /// treat the road between them as empty.
+    private var unsearchedFuelDistances: [CLLocationDistance] = []
+
     var showsFuelGapWarning: Bool {
         Self.shouldShowFuelGapWarning(
             hasFuelGap: hasFuelGap,
@@ -945,6 +958,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     private func invalidateFuelCoverage() {
         gasCoverageTrusted = false
         hasFuelGap = false
+        unsearchedFuelDistances = []
     }
 
     /// Rain risk along the route at the rider's expected time of passing, or
@@ -1964,18 +1978,11 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             }
         }
 
-        let sampleDistances = Self.fuelSearchDistances(
-            totalDistance: totalDistanceMeters,
-            range: fuelRangeMeters
-        )
         let legsAtSearch = legs
-        // One extra full pass after a throttle storm. The per-sample retry
-        // already waited once; this covers the case where every sample failed.
-        let result = await runGasCorridorSearch(
-            generation: generation,
-            sampleDistances: sampleDistances,
-            legs: legsAtSearch
-        )
+        // Coarse comfort edges first, then densify only a gap still wider
+        // than the reserve. A full 25-mile grid is ~110 lookups and MapKit
+        // throttles the middle of the ride.
+        let result = await searchFuelAdaptively(generation: generation, legs: legsAtSearch)
         guard let result else {
             // A superseded run already lost ownership inside the search and
             // must not write. Still owning with no result means the retry
@@ -2011,6 +2018,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 failed: result.failed,
                 throttled: result.throttled
             )
+            unsearchedFuelDistances = result.failedSampleDistances
             gasStations = []
             gasStopsWithFood = []
             applyFuelCandidatePool()
@@ -2022,12 +2030,108 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 failed: result.failed,
                 throttled: result.throttled
             )
+            unsearchedFuelDistances = result.failedSampleDistances
             gasStations = result.stops
             gasStopsWithFood = []
             applyFuelCandidatePool()
             gasLoadState = gasStations.isEmpty ? .empty : .loaded
             await refreshFoodNearFuelStops()
         }
+    }
+
+    /// Comfort-edge search, a retry of any sample that never returned, then
+    /// at most two densify passes where known stations are still farther
+    /// apart than the reserve. A failed sample is left unsearched so the
+    /// planner does not hop across it.
+    private func searchFuelAdaptively(
+        generation: Int,
+        legs: [MKRoute]
+    ) async -> CorridorSearchResult? {
+        let coarse = Self.fuelSearchDistances(
+            totalDistance: totalDistanceMeters,
+            range: fuelRangeMeters
+        )
+        guard var result = await runGasCorridorSearch(
+            generation: generation,
+            sampleDistances: coarse,
+            legs: legs
+        ) else { return nil }
+
+        if !result.failedSampleDistances.isEmpty {
+            let missed = result.failedSampleDistances
+            guard let retry = await runGasCorridorSearch(
+                generation: generation,
+                sampleDistances: missed,
+                legs: legs
+            ) else { return nil }
+            result = Self.mergedCorridorSearch(result, with: retry, retried: missed)
+        }
+
+        let limit = fuelRangeMeters * Self.fuelSafetyFactor
+        var searched = coarse
+        for _ in 0..<2 {
+            let dense = Self.fuelDensifySearchDistances(
+                totalDistance: totalDistanceMeters,
+                limit: limit,
+                stationDistances: result.stops.map(\.distanceAlongRoute),
+                alreadySearched: searched,
+                unsearched: result.failedSampleDistances
+            )
+            if dense.isEmpty { break }
+            guard let more = await runGasCorridorSearch(
+                generation: generation,
+                sampleDistances: dense,
+                legs: legs
+            ) else { return nil }
+            result = Self.mergedCorridorSearch(result, with: more, retried: [])
+            searched.append(contentsOf: dense)
+            if !more.failedSampleDistances.isEmpty { break }
+        }
+        return result
+    }
+
+    /// Unions two corridor passes. A retried sample that comes back is no
+    /// longer an unsearched mile. Stations from either pass stay.
+    nonisolated static func mergedCorridorSearch(
+        _ base: CorridorSearchResult,
+        with next: CorridorSearchResult,
+        retried: [CLLocationDistance]
+    ) -> CorridorSearchResult {
+        if base.status == .cancelled || next.status == .cancelled {
+            return CorridorSearchResult(
+                stops: [],
+                status: .cancelled,
+                succeeded: base.succeeded + next.succeeded,
+                failed: base.failed + next.failed,
+                throttled: base.throttled + next.throttled,
+                failedSampleDistances: []
+            )
+        }
+        let stops = mergedGasCandidates([base.stops, next.stops])
+        var unresolved = base.failedSampleDistances.filter { sample in
+            let wasRetried = retried.contains { abs($0 - sample) < 1 }
+            if !wasRetried { return true }
+            return next.failedSampleDistances.contains { abs($0 - sample) < 1 }
+        }
+        for sample in next.failedSampleDistances where !unresolved.contains(where: { abs($0 - sample) < 1 }) {
+            unresolved.append(sample)
+        }
+        let succeeded = base.succeeded + next.succeeded
+        var tally = GasSampleTally(succeeded: succeeded, throttled: unresolved.count)
+        // A pass that returned stations is a result even if the counter was
+        // zero. A fully searched corridor with no stations is empty, not failed.
+        if tally.succeeded == 0, !stops.isEmpty || unresolved.isEmpty {
+            tally.succeeded = 1
+        }
+        let status = GasSearchStatus.resolve(tally, stopCount: stops.count)
+        return CorridorSearchResult(
+            stops: status == .completed ? stops : [],
+            status: status,
+            succeeded: succeeded,
+            failed: 0,
+            throttled: unresolved.count,
+            failedSampleDistances: unresolved
+        )
     }
 
     /// Runs the corridor search, and if every sample failed, waits and tries
@@ -2222,7 +2326,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             filledAt: gasFillDistances,
             preferringFoodAt: gasStopsWithFood,
             departure: effectiveDeparture,
-            totalTravelTime: totalExpectedTravelTime
+            totalTravelTime: totalExpectedTravelTime,
+            unsearched: unsearchedFuelDistances
         )
         fuelStops = plan.stops
         fuelPlanEntries = plan.entries
@@ -2307,17 +2412,16 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     nonisolated static let fuelSearchCoverStepMeters: CLLocationDistance =
         fuelSearchCorridorMeters * 2 * (1 - fuelSearchCoverOverlap)
 
-    /// Lookups for a ride of about 3,500 miles at `fuelSearchCoverStepMeters`,
-    /// plus the comfort-edge samples. A lower cap spends the budget on the
-    /// first tanks and leaves Arizona I-10 with one search every 170 miles.
-    nonisolated static let fuelSearchMaxSamples = 160
+    /// First-pass lookups. One per comfort edge, capped at the MapKit
+    /// rate window. The dense 25-mile grid was about 110 requests and the
+    /// later ones were throttled, which the planner read as no gas from
+    /// mile 560 to 1,904.
+    nonisolated static let fuelSearchMaxSamples = MapSearchPace.maxRequestsPerWindow
 
-    /// Distances along the route at which to search for gas and food.
-    /// Every comfort edge (0.85 × tank) is included. The rest of the ride is
-    /// sampled on `fuelSearchCoverStepMeters`, including the later tanks.
-    /// One search per tank is not enough: the lookup only returns stations
-    /// within `fuelSearchCorridorMeters` of that point, so the 140 miles
-    /// between those points never enter the pool.
+    /// Distances for the first fuel search: the comfort edge of every tank.
+    /// About 14 lookups on a 2,471-mile ride with a 200-mile tank, inside
+    /// one rate window. Gaps wider than the reserve are filled afterwards
+    /// by `fuelDensifySearchDistances`.
     nonisolated static func fuelSearchDistances(
         totalDistance: CLLocationDistance,
         range: CLLocationDistance,
@@ -2349,78 +2453,88 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         if edges.count >= maxCount {
             return spacedDistances(edges, max: maxCount)
         }
-
-        let coverStep = fuelSearchCoverStepMeters
-        guard coverStep > 0 else { return edges }
-
-        var points: [CLLocationDistance] = []
-        var cursor = coverStep
-        while cursor < totalDistance {
-            points.append(cursor)
-            cursor += coverStep
-            if points.count > 10_000 { break }
-        }
-
-        // Comfort edges stay on their exact mile. A grid point within 500 m
-        // is the same lookup, so it moves onto the edge instead of doubling.
-        for edge in edges {
-            if let index = points.firstIndex(where: { abs($0 - edge) <= 500 }) {
-                points[index] = edge
-            } else {
-                points.append(edge)
-            }
-        }
-
-        if let last = points.max(), totalDistance - last > fuelSearchCorridorMeters {
-            let tail = totalDistance - fuelSearchCorridorMeters * 0.5
-            if tail > 0, tail < totalDistance, !points.contains(where: { abs($0 - tail) < 1 }) {
-                points.append(tail)
-            }
-        }
-
-        let covered = points.sorted()
-        guard covered.count > maxCount else { return covered }
-        return coverageWithinCap(
-            anchors: edges,
-            candidates: covered,
-            totalDistance: totalDistance,
-            maxCount: maxCount
-        )
+        return edges
     }
 
-    /// Keeps every comfort edge, then fills the widest holes until `maxCount`.
-    private nonisolated static func coverageWithinCap(
-        anchors: [CLLocationDistance],
-        candidates: [CLLocationDistance],
+    /// Extra lookups for stretches where the nearest known stations are
+    /// farther apart than `limit` (the reserve). A failed sample inside the
+    /// stretch is not a gap: that mile was not searched. Samples stay about
+    /// `fuelSearchCoverStepMeters` apart so the 15-mile corridor still
+    /// overlaps, which is what keeps Arizona I-10 (Eloy to Quartzsite)
+    /// inside the reserve once the coarse pass only saw the two ends.
+    nonisolated static func fuelDensifySearchDistances(
         totalDistance: CLLocationDistance,
-        maxCount: Int
+        limit: CLLocationDistance,
+        stationDistances: [CLLocationDistance],
+        alreadySearched: [CLLocationDistance] = [],
+        unsearched: [CLLocationDistance] = [],
+        coverStep: CLLocationDistance = fuelSearchCoverStepMeters,
+        radius: CLLocationDistance = fuelSearchCorridorMeters,
+        maxCount: Int = MapSearchPace.maxRequestsPerWindow
     ) -> [CLLocationDistance] {
-        var picked = anchors
-        var remaining = candidates.filter { candidate in
-            !picked.contains { abs($0 - candidate) < 1 }
+        guard limit > 0, coverStep > 0, radius > 0, totalDistance > limit, maxCount > 0 else {
+            return []
         }
-        while picked.count < maxCount, !remaining.isEmpty {
-            let bounds = ([0] + picked + [totalDistance]).sorted()
-            var bestStart: CLLocationDistance = 0
-            var bestEnd: CLLocationDistance = totalDistance
-            var bestGap: CLLocationDistance = -1
-            for index in 1..<bounds.count {
-                let gap = bounds[index] - bounds[index - 1]
-                if gap > bestGap {
-                    bestGap = gap
-                    bestStart = bounds[index - 1]
-                    bestEnd = bounds[index]
+        let stations = stationDistances.filter { $0 > 0 && $0 < totalDistance }.sorted()
+        var anchors: [CLLocationDistance] = [0]
+        anchors.append(contentsOf: stations)
+        anchors.append(totalDistance)
+
+        func covered(_ distance: CLLocationDistance, by points: [CLLocationDistance]) -> Bool {
+            points.contains { abs($0 - distance) <= radius }
+        }
+
+        var gaps: [(start: CLLocationDistance, end: CLLocationDistance)] = []
+        for index in 1..<anchors.count {
+            let start = anchors[index - 1]
+            let end = anchors[index]
+            guard end - start > limit else { continue }
+            if unsearched.contains(where: { $0 > start && $0 < end }) { continue }
+            gaps.append((start, end))
+        }
+        // Widest hole first, so one desert does not lose its lookups to
+        // a long prefix that already has a station near every tank.
+        gaps.sort { ($0.end - $0.start) > ($1.end - $1.start) }
+
+        var samples: [CLLocationDistance] = []
+        for gap in gaps {
+            if samples.count >= maxCount { break }
+            var cursor = gap.start
+            while cursor < gap.end, samples.count < maxCount {
+                let known = alreadySearched + samples
+                if covered(cursor, by: known) {
+                    cursor += radius * 0.5
+                    continue
                 }
+                samples.append(cursor)
+                cursor += coverStep
             }
-            let midpoint = (bestStart + bestEnd) / 2
-            guard let choice = remaining
-                .filter({ $0 > bestStart && $0 < bestEnd })
-                .min(by: { abs($0 - midpoint) < abs($1 - midpoint) })
-            else { break }
-            picked.append(choice)
-            remaining.removeAll { abs($0 - choice) < 1 }
+            let known = alreadySearched + samples
+            if samples.count < maxCount,
+               !covered(gap.end, by: known),
+               gap.end < totalDistance,
+               gap.end > gap.start,
+               !samples.contains(where: { abs($0 - gap.end) < 1 }) {
+                samples.append(gap.end)
+            }
         }
-        return picked.sorted()
+        return samples.sorted()
+    }
+
+    /// Highlight lookups spread across the whole ride. A handful, paced
+    /// with the fuel search, so a long interstate still gets sights instead
+    /// of an empty section after the gas queries have used the rate window.
+    nonisolated static func highlightSearchDistances(
+        totalDistance: CLLocationDistance,
+        maxCount: Int = 12
+    ) -> [CLLocationDistance] {
+        guard totalDistance > 0, maxCount > 0 else { return [] }
+        if maxCount == 1 { return [totalDistance * 0.5] }
+        let step = totalDistance / Double(maxCount + 1)
+        return (1...maxCount).compactMap { index in
+            let distance = step * Double(index)
+            return distance < totalDistance ? distance : nil
+        }
     }
 
     /// Spreads `samples` down to `limit` items, keeping the first and last.
@@ -2566,7 +2680,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         departure: Date? = nil,
         totalTravelTime: TimeInterval = 0,
         mealWindows: [MealWindow] = MealWindow.typical,
-        calendar: Calendar = .current
+        calendar: Calendar = .current,
+        unsearched: [CLLocationDistance] = []
     ) -> FuelPlan {
         guard range > 0, totalDistance > range else {
             return FuelPlan(stops: [], entries: [], hasGap: false)
@@ -2598,11 +2713,18 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             (stop.distanceAlongRoute - lastRefuel) + lastDetour + finiteDetour(stop)
         }
 
+        func crossesUnsearched(_ distance: CLLocationDistance) -> Bool {
+            unsearched.contains { sample in
+                sample > lastRefuel + 1 && sample < distance - 1
+            }
+        }
+
         func inWindow(_ limit: CLLocationDistance) -> [SuggestedStop] {
             sorted.filter {
                 $0.distanceAlongRoute > lastRefuel
                     && riddenHop(to: $0) <= limit
                     && !skippedNear.contains($0.id)
+                    && !crossesUnsearched($0.distanceAlongRoute)
             }
         }
 
@@ -2676,6 +2798,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                     // previous fill that made the hop look short.
                     if farthest(range, preferFood: false) == nil {
                         let next = nextStation(after: stop.distanceAlongRoute)
+                        if let next, crossesUnsearched(next.distanceAlongRoute) {
+                            break
+                        }
                         let end = next?.distanceAlongRoute ?? totalDistance
                         appendGap(from: stop.distanceAlongRoute, to: end)
                         if let next {
@@ -2704,11 +2829,16 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 break
             }
 
-            // Nothing within range of the last fill. Name the stretch and
+            // Nothing within range of the last fill. A sample that never
+            // returned is not that stretch: don't resume on the far side
+            // and call the hop a fuel stop. Name a real dry stretch and
             // keep the far station on the list as past range, then plan
             // the tanks after it. Recommending it as "Fuel stop N" is how
             // a 100-mile tank showed its first stop at mile 801.
             let next = nextStation(after: lastRefuel)
+            if let next, crossesUnsearched(next.distanceAlongRoute) {
+                break
+            }
             let end = next?.distanceAlongRoute ?? totalDistance
             appendGap(from: lastRefuel, to: end)
             if let next {
@@ -2742,9 +2872,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         }
 
         // Reuse already-loaded sights when the rider is browsing that
-        // category; otherwise run a dedicated (smaller) search — highlights
-        // are a bonus, so they get half the usual search budget to keep the
-        // per-route MKLocalSearch load down.
+        // category. Otherwise sample the whole ride, paced with the fuel
+        // search. Half of the old 25-mile walk ran after a throttled gas
+        // grid and came back empty, so the section never mounted.
         let candidates: [SuggestedStop]
         if selectedCategory == .attraction, !suggestedStops.isEmpty {
             candidates = suggestedStops
@@ -2752,7 +2882,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             let found = await searchStops(
                 category: .attraction,
                 alongLegs: legs,
-                maxSearches: suggestionService.maxSearches / 2
+                sampleDistances: Self.highlightSearchDistances(totalDistance: totalDistanceMeters),
+                corridorRadiusMeters: 8_000,
+                generation: generation
             )
             guard !Task.isCancelled, found.status == .completed else { return }
             candidates = found.stops
@@ -2802,17 +2934,18 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     }
 
     /// Pure selection of ride highlights from the places of interest found
-    /// near the route. A good stop is one that barely interrupts the ride:
-    /// candidates more than `maxDetourMeters` off the route are dropped, as
-    /// are ones essentially at the start or destination (the rider is already
-    /// there). The rest are taken smallest-detour-first, keeping stops at
-    /// least `minSeparationMeters` apart so the picks spread across the ride
-    /// instead of clustering in one town. Returned in ride order.
+    /// near the route. A sight farther than the search corridor is dropped,
+    /// as are ones essentially at the start or destination. The rest are
+    /// taken smallest-detour-first, keeping stops at least
+    /// `minSeparationMeters` apart so the picks spread across the ride.
+    /// Returned in ride order. The section header is the highlight list;
+    /// an empty pick (a throttled search, or nothing inside the corridor)
+    /// leaves the section off the sheet.
     nonisolated static func selectHighlights(
         from candidates: [SuggestedStop],
         totalDistance: CLLocationDistance,
         maxCount: Int = 4,
-        maxDetourMeters: CLLocationDistance = 3_000,
+        maxDetourMeters: CLLocationDistance = 8_000,
         minSeparationMeters: CLLocationDistance = 15_000
     ) -> [SuggestedStop] {
         guard maxCount > 0, totalDistance > 0 else { return [] }
