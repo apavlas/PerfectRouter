@@ -1067,12 +1067,15 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// recalculated once. When the current line already has stations, the
     /// tap replans through `replanFuelStops` first so the inserted hops are
     /// the reserve cap (0.85 × tank), or the farthest station still inside
-    /// the tank when that window is empty. A stop on the far side of a dry
-    /// gap stays on the list and is not inserted. Past-range stations, other
-    /// categories, and pumps already on the route stay out. Afterward none
-    /// of those recommendations are still selectable. A pump the rider
-    /// checked by hand, and that is not one of these recommendations, stays
-    /// checked for Apply and is not routed by this tap.
+    /// the tank when that window is empty. A pump already on the route is a
+    /// fill for that check, including one search added without `isGasFill`,
+    /// so the next station is measured from that pump rather than the
+    /// origin. A stop on the far side of a dry gap stays on the list and is
+    /// not inserted. Past-range stations, other categories, and pumps
+    /// already on the route stay out. Afterward none of those
+    /// recommendations are still selectable. A pump the rider checked by
+    /// hand, and that is not one of these recommendations, stays checked
+    /// for Apply and is not routed by this tap.
     func toggleRecommendedFuelSelection() {
         let replanned = replanFuelSelectionForRecommendedTap()
         var recommended = selectableRecommendedFuelStops
@@ -2132,19 +2135,72 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         return true
     }
 
-    /// Recommended stops the button may insert. Consecutive picks stay
-    /// inside the tank. A recommendation planned after a past-range station
-    /// is farther than that and would route across the dry gap.
+    /// Recommended stops the button may insert. Each hop is measured from
+    /// the latest fuel the rider can already reach: the start, a pump
+    /// already on the route, or a stop this tap is inserting. A search
+    /// result is not flagged `isGasFill`, so the pump the rider already
+    /// added still has to count — otherwise the next station is measured
+    /// from the origin and dropped even when the leg after that pump fits
+    /// in the tank. A station past the tank from every reachable fill stays
+    /// off the route, including one planned on the far side of a dry gap.
     private func fuelStopsWithinTank(from stops: [SuggestedStop]) -> [SuggestedStop] {
+        let onRoute = onRouteGasDistances().filter(\.isFinite)
+        let tolerance = FuelStopRidingTime.sameStopToleranceMeters
+        var reachable: [CLLocationDistance] = [0]
+
+        func alreadyReached(_ distance: CLLocationDistance) -> Bool {
+            reachable.contains { abs($0 - distance) <= tolerance }
+        }
+
+        func withinTank(_ distance: CLLocationDistance) -> Bool {
+            let prior = reachable.filter { $0 <= distance + tolerance }
+            guard let anchor = prior.max() else { return false }
+            let hop = distance - anchor
+            guard hop.isFinite else { return false }
+            if hop < 0 { return -hop <= tolerance }
+            return hop <= fuelRangeMeters
+        }
+
+        // A fill already on the route counts only once the rider can get
+        // there. An unreachable pump must not unlock stations beyond it.
+        func absorbOnRouteFuel() {
+            var added = true
+            while added {
+                added = false
+                for distance in onRoute where !alreadyReached(distance) {
+                    guard withinTank(distance) else { continue }
+                    reachable.append(distance)
+                    added = true
+                }
+            }
+        }
+
+        absorbOnRouteFuel()
         var chosen: [SuggestedStop] = []
-        var last: CLLocationDistance = 0
         for stop in stops {
-            let hop = stop.distanceAlongRoute - last
-            guard hop.isFinite, hop <= fuelRangeMeters else { break }
+            let distance = stop.distanceAlongRoute
+            guard distance.isFinite, withinTank(distance) else { break }
             chosen.append(stop)
-            last = stop.distanceAlongRoute
+            if !alreadyReached(distance) {
+                reachable.append(distance)
+            }
+            absorbOnRouteFuel()
         }
         return chosen
+    }
+
+    /// Mile marks of gas already on the route. `gasFillDistances` only sees
+    /// waypoints flagged `isGasFill`. Search inserts a pump as a plain
+    /// waypoint, and that pump is still a fill for the next hop.
+    private func onRouteGasDistances() -> [CLLocationDistance] {
+        var distances = gasFillDistances
+        for station in gasStations where isStopOnRoute(station) {
+            distances.append(station.distanceAlongRoute)
+        }
+        for stop in fuelStops where isStopOnRoute(stop) {
+            distances.append(stop.distanceAlongRoute)
+        }
+        return distances
     }
 
     /// Re-selects the recommended fuel stops from the already-computed

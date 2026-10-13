@@ -598,4 +598,104 @@ final class StopSelectionTests: XCTestCase {
             ["Bypass", "Barstow", "Needles"].contains($0.name)
         })
     }
+
+    /// The UI fixture's 100-mile tank. Search adds On Route Fuel at mile 150
+    /// as a plain waypoint (`isGasFill` stays false). The destination is 130
+    /// miles past that fill, so Shell Knoxville at mile 230 (80 miles after
+    /// the fill, 50 miles before the destination, detour 800 m) is inside
+    /// both the tank and the 0.85 reserve and has to be inserted. Pilot at
+    /// mile 80 is what makes the fill reachable. Measuring Shell from the
+    /// origin, or from Pilot, is a 150-mile hop and drops a stop the ride
+    /// needs.
+    func testSelectRecommendedKeepsShellAfterTheOnRouteFillSearchAdded() {
+        let mile = UITestFixture.metersPerMile
+        let line = [0, 40, 80, 150, 230, UITestFixture.routeMiles].map {
+            UITestFixture.coordinate(milesNorth: $0, eastMeters: 0)
+        }
+        func station(_ place: UITestFixture.Place) -> SuggestedStop {
+            SuggestedStop(
+                name: place.name,
+                coordinate: UITestFixture.coordinate(milesNorth: place.milesNorth, eastMeters: 0),
+                category: .gas,
+                distanceAlongRoute: place.milesNorth * mile,
+                detourMeters: place.eastMeters
+            )
+        }
+        let onRoute = UITestFixture.places.first { $0.name == "On Route Fuel" }!
+        let viewModel = RoutePlannerViewModel()
+        viewModel.fuelRangeMeters = 100 * mile
+        viewModel.waypoints = [
+            Waypoint(name: "Test Origin", coordinate: line[0]),
+            Waypoint(
+                name: "On Route Fuel",
+                coordinate: UITestFixture.coordinate(milesNorth: onRoute.milesNorth, eastMeters: 0)
+            ),
+            Waypoint(name: "Test Destination", coordinate: line[line.count - 1]),
+        ]
+        XCTAssertFalse(viewModel.waypoints[1].isGasFill)
+        viewModel.plannedCorridor = [line]
+        viewModel.legs = [
+            StubMKRoute(
+                name: "Stub Fastest",
+                coordinates: line,
+                distance: UITestFixture.totalMeters,
+                expectedTravelTime: (UITestFixture.routeMiles / 55) * 3_600,
+                hasHighways: true
+            )
+        ]
+        viewModel.gasStations = UITestFixture.places.filter(\.gasStation).map(station)
+
+        viewModel.toggleRecommendedFuelSelection()
+
+        XCTAssertEqual(
+            viewModel.waypoints.map(\.name),
+            ["Test Origin", "Pilot Madison", "On Route Fuel", "Shell Knoxville", "Test Destination"]
+        )
+    }
+
+    /// A pump already on the route that is itself past the tank does not
+    /// unlock a recommendation beyond it. The rider cannot reach that fill,
+    /// so the dry gap is still a gap.
+    func testSelectRecommendedDoesNotUseAnUnreachableOnRoutePumpAsAFill() {
+        let mile = AppSettings.metersPerMile
+        func coordinate(atMiles miles: Double) -> CLLocationCoordinate2D {
+            CLLocationCoordinate2D(
+                latitude: 33.4735 + miles * mile / 111_320,
+                longitude: -82.0105
+            )
+        }
+        func station(_ name: String, miles: Double) -> SuggestedStop {
+            SuggestedStop(
+                name: name,
+                coordinate: coordinate(atMiles: miles),
+                category: .gas,
+                distanceAlongRoute: miles * mile,
+                detourMeters: 0
+            )
+        }
+        let line = [0, 250, 320, 400].map { coordinate(atMiles: $0) }
+        let viewModel = RoutePlannerViewModel()
+        viewModel.fuelRangeMeters = 100 * mile
+        viewModel.waypoints = [
+            Waypoint(name: "Start", coordinate: line[0]),
+            Waypoint(name: "Stranded", coordinate: coordinate(atMiles: 250)),
+            Waypoint(name: "End", coordinate: line[line.count - 1]),
+        ]
+        XCTAssertFalse(viewModel.waypoints[1].isGasFill)
+        viewModel.plannedCorridor = [line]
+        viewModel.legs = [
+            StubMKRoute(
+                name: "Stub Fastest",
+                coordinates: line,
+                distance: 400 * mile,
+                expectedTravelTime: (400 / 55) * 3_600,
+                hasHighways: true
+            )
+        ]
+        viewModel.gasStations = [station("Stranded", miles: 250), station("After", miles: 320)]
+
+        viewModel.toggleRecommendedFuelSelection()
+
+        XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "Stranded", "End"])
+    }
 }
