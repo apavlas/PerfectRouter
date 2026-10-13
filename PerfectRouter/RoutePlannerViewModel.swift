@@ -593,8 +593,16 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// keeps in-range recommendations and hides the named gap. A stop
     /// already on the route is omitted so Apply cannot add it twice.
     var visibleFuelPlanEntries: [FuelPlanEntry] {
+        // Reachability is decided from the plan's own recommended rows.
+        // `fuelStops` is the same set after a replan, but the summary,
+        // the accessibility id, and "already shown in the fuel plan" are
+        // read off `fuelPlanEntries` directly.
+        let recommended = fuelPlanEntries.compactMap { entry -> SuggestedStop? in
+            if case .recommended(let stop) = entry { return stop }
+            return nil
+        }
         let reachable = fuelStopsWithinTank(
-            from: fuelStops.sorted { $0.distanceAlongRoute < $1.distanceAlongRoute }
+            from: recommended.sorted { $0.distanceAlongRoute < $1.distanceAlongRoute }
         )
         return fuelPlanEntries.compactMap { entry in
             switch entry {
@@ -2456,12 +2464,13 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         return edges
     }
 
-    /// Extra lookups for stretches where the nearest known stations are
-    /// farther apart than `limit` (the reserve). A failed sample inside the
-    /// stretch is not a gap: that mile was not searched. Samples stay about
-    /// `fuelSearchCoverStepMeters` apart so the 15-mile corridor still
-    /// overlaps, which is what keeps Arizona I-10 (Eloy to Quartzsite)
-    /// inside the reserve once the coarse pass only saw the two ends.
+    /// Extra lookups between two found stations that are farther apart than
+    /// `limit` (the reserve). The open road before the first station and
+    /// after the last one stays on the coarse pass. A hop inside the
+    /// reserve adds nothing, and a failed sample inside a stretch is not
+    /// a hole to fill. Samples stay about `fuelSearchCoverStepMeters`
+    /// apart so the 15-mile corridor still overlaps, which is what keeps
+    /// Arizona I-10 (Eloy to Quartzsite) inside the reserve.
     nonisolated static func fuelDensifySearchDistances(
         totalDistance: CLLocationDistance,
         limit: CLLocationDistance,
@@ -2475,19 +2484,20 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         guard limit > 0, coverStep > 0, radius > 0, totalDistance > limit, maxCount > 0 else {
             return []
         }
+        // Only the stretch between two found stations. The ride before the
+        // first pump and after the last one is the coarse pass. A hop inside
+        // the reserve, and a hop that crosses a failed lookup, adds nothing.
         let stations = stationDistances.filter { $0 > 0 && $0 < totalDistance }.sorted()
-        var anchors: [CLLocationDistance] = [0]
-        anchors.append(contentsOf: stations)
-        anchors.append(totalDistance)
+        guard stations.count >= 2 else { return [] }
 
         func covered(_ distance: CLLocationDistance, by points: [CLLocationDistance]) -> Bool {
             points.contains { abs($0 - distance) <= radius }
         }
 
         var gaps: [(start: CLLocationDistance, end: CLLocationDistance)] = []
-        for index in 1..<anchors.count {
-            let start = anchors[index - 1]
-            let end = anchors[index]
+        for index in 1..<stations.count {
+            let start = stations[index - 1]
+            let end = stations[index]
             guard end - start > limit else { continue }
             if unsearched.contains(where: { $0 > start && $0 < end }) { continue }
             gaps.append((start, end))
