@@ -152,11 +152,15 @@ struct StopSuggestionService {
         if let sampleDistances {
             // Caller chose the grid (one set of points per tank along the
             // whole route). Searching all of them keeps later windows filled.
+            let targets = sampleDistances.filter { $0 >= 0 }.sorted()
             let coords = RouteGeometry.coordinates(
                 alongPolylines: legPolylines,
-                atDistances: sampleDistances
+                atDistances: targets
             )
-            samples = coords.map { RouteSample(coordinate: $0) }
+            let count = min(coords.count, targets.count)
+            samples = (0..<count).map {
+                RouteSample(coordinate: coords[$0], distanceAlongRoute: targets[$0])
+            }
         } else {
             samples = evenlySpaced(samplePoints(alongLegs: legs), max: maxSearches)
         }
@@ -227,10 +231,14 @@ struct StopSuggestionService {
                     // coarse sample distance, so fuel-stop spacing and "X mi from
                     // start" labels are accurate. The detour (distance off the
                     // route line) feeds the ride-highlight ranking.
+                    let projected = RouteGeometry.distanceAlongRoute(of: coord, alongPolylines: legPolylines)
                     results.append(SuggestedStop(
                         mapItem: item,
                         category: category,
-                        distanceAlongRoute: RouteGeometry.distanceAlongRoute(of: coord, alongPolylines: legPolylines),
+                        distanceAlongRoute: RouteGeometry.preferredDistanceAlongRoute(
+                            projected: projected,
+                            known: sample.distanceAlongRoute
+                        ),
                         detourMeters: RouteGeometry.distanceFromRoute(of: coord, alongPolylines: legPolylines)
                     ))
                 }
@@ -390,6 +398,9 @@ struct StopSuggestionService {
 
     private struct RouteSample {
         let coordinate: CLLocationCoordinate2D
+        /// Meters from the ride start to this sample, measured while walking
+        /// the polyline. Used when a later projection collapses to a few feet.
+        let distanceAlongRoute: CLLocationDistance
     }
 
     /// Picks at most `max` items spread evenly across `samples` (always
@@ -413,6 +424,7 @@ struct StopSuggestionService {
     private func samplePoints(alongLegs legs: [MKRoute]) -> [RouteSample] {
         var samples: [RouteSample] = []
         var distanceSinceLastSample: CLLocationDistance = sampleIntervalMeters // emit first point
+        var traveled: CLLocationDistance = 0
 
         for route in legs {
             let polyline = route.polyline
@@ -425,10 +437,12 @@ struct StopSuggestionService {
             for i in 1..<count {
                 let prev = CLLocation(latitude: coords[i - 1].latitude, longitude: coords[i - 1].longitude)
                 let curr = CLLocation(latitude: coords[i].latitude, longitude: coords[i].longitude)
-                distanceSinceLastSample += curr.distance(from: prev)
+                let segment = curr.distance(from: prev)
+                distanceSinceLastSample += segment
+                traveled += segment
 
                 if distanceSinceLastSample >= sampleIntervalMeters {
-                    samples.append(RouteSample(coordinate: coords[i]))
+                    samples.append(RouteSample(coordinate: coords[i], distanceAlongRoute: traveled))
                     distanceSinceLastSample = 0
                 }
             }

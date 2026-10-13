@@ -237,6 +237,25 @@ final class PlaceDescriptionTests: XCTestCase {
         )
     }
 
+    func testSocialEngagementCountsAreNotADescription() {
+        let boilerplate = "Cadillac Ranch, Amarillo. 38,816 followers · 367 talking about this · 77,990 were here."
+        XCTAssertNil(PlaceDescriptionReader.acceptedAppleMapsText(
+            boilerplate,
+            name: "Cadillac Ranch",
+            rejectIfEqual: []
+        ))
+        XCTAssertNil(PlaceDescriptionReader.acceptedPlaceText(boilerplate, name: "Cadillac Ranch"))
+        XCTAssertNil(PlaceDescriptionDisplay.text(for: boilerplate))
+        XCTAssertEqual(
+            PlaceDescriptionReader.acceptedAppleMapsText(
+                "Ten vintage Cadillacs stand buried nose-down in a wheat field.",
+                name: "Cadillac Ranch",
+                rejectIfEqual: []
+            ),
+            "Ten vintage Cadillacs stand buried nose-down in a wheat field."
+        )
+    }
+
     func testPlacePageDescriptionIsUsedWhenAppleMapsHasNone() async {
         let query = placeQuery(url: "https://tallulahgorge.example/visit")
         let html = """

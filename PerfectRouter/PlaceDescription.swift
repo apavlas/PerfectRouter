@@ -18,6 +18,7 @@ enum PlaceDescriptionDisplay {
     /// input and a shorter source stay nil or whole.
     static func text(for description: String?) -> String? {
         guard let text = PlaceDescriptionReader.normalize(description) else { return nil }
+        if PlaceDescriptionReader.isSocialEngagementBoilerplate(text) { return nil }
         return PlaceDescriptionReader.firstSentences(in: text, limit: rowSentenceLimit)
     }
 
@@ -106,6 +107,7 @@ enum PlaceDescriptionReader {
         if let raw, isOnlyPhoneNumber(raw) { return nil }
         guard let text = normalize(raw) else { return nil }
         if isOnlyPhoneNumber(text) || isBareCategory(text) || isOnlyAddress(text) { return nil }
+        if isSocialEngagementBoilerplate(text) { return nil }
         if let name, same(text, name) { return nil }
         if rejects.contains(where: { candidate in
             guard let normalized = normalize(candidate) else { return false }
@@ -172,6 +174,7 @@ enum PlaceDescriptionReader {
     /// three words or only the place name.
     static func acceptedPlaceText(_ raw: String?, name: String?) -> String? {
         guard let text = normalize(raw) else { return nil }
+        if isSocialEngagementBoilerplate(text) { return nil }
         if let name, same(text, name) { return nil }
         let kept = sentences(in: text).filter { !isPureCallToAction($0) }
         guard !kept.isEmpty else { return nil }
@@ -182,6 +185,17 @@ enum PlaceDescriptionReader {
         let words = capped.split(whereSeparator: \.isWhitespace)
         guard words.count >= 3 else { return nil }
         return capped
+    }
+
+    /// Facebook-style place stats are not a description. "38,816 followers ·
+    /// 367 talking about this · 77,990 were here" is engagement boilerplate.
+    static func isSocialEngagementBoilerplate(_ text: String) -> Bool {
+        let key = matchKey(text)
+        guard !key.isEmpty else { return false }
+        if key.contains("talking about this") { return true }
+        if key.contains("were here") { return true }
+        if key.contains("followers") { return true }
+        return false
     }
 
     /// MapKit subtitles need a sentence ending as well as three words, so a

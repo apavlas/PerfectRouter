@@ -46,6 +46,36 @@ final class SuggestedStopDistanceTests: XCTestCase {
             XCTAssertEqual(actual, expected, accuracy: 1)
         }
 
+        let mile = AppSettings.metersPerMile
+        XCTAssertEqual(
+            RouteGeometry.preferredDistanceAlongRoute(projected: 0, known: 80 * mile),
+            80 * mile,
+            accuracy: 1
+        )
+        XCTAssertEqual(
+            RouteGeometry.preferredDistanceAlongRoute(projected: 18, known: 40 * mile),
+            40 * mile,
+            accuracy: 1,
+            "about 60 ft must not replace the mile mark"
+        )
+        XCTAssertEqual(
+            RouteGeometry.preferredDistanceAlongRoute(projected: 122, known: 150 * mile),
+            150 * mile,
+            accuracy: 1,
+            "about 400 ft must not replace the mile mark"
+        )
+        XCTAssertEqual(
+            RouteGeometry.preferredDistanceAlongRoute(projected: 80.4 * mile, known: 80 * mile),
+            80.4 * mile,
+            accuracy: 1
+        )
+        let caption = milesFromStartCaption(80 * mile)
+        XCTAssertTrue(caption.hasPrefix("~"))
+        XCTAssertTrue(caption.hasSuffix(" from start"))
+        XCTAssertFalse(caption.contains("ft"))
+        XCTAssertFalse(milesFromStartCaption(18).contains("ft"))
+        XCTAssertFalse(milesFromStartCaption(122).contains("ft"))
+
         let viewModel = RoutePlannerViewModel()
         viewModel.plannedCorridor = [line]
         for stop in projected {

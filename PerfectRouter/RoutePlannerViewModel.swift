@@ -638,8 +638,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     /// Distance, then riding time, for one fuel-stop row.
     ///
-    /// "212 mi · 6h 05m riding (1h 40m since last)". The first stop is only
-    /// the riding time, "4h 25m riding". Time is each current leg's drive
+    /// "344 mi · 5h 04m riding (2h 29m since last)". The first stop keeps the
+    /// miles and the total riding time and drops the since-last part:
+    /// "170 mi · 2h 35m riding". Time is each current leg's drive
     /// time spread along that leg's polyline, so a style change, tank-range
     /// search, applied stop, or leave-time replan updates it with the new
     /// line. Applied gas fills count as the previous stop; time sitting at
@@ -2340,12 +2341,12 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// (so there's a reserve). Food is optional: when the tank-interval ETA
     /// is near breakfast / lunch / dinner *and* `preferringFoodAt` lists an
     /// in-window pump, that pump wins over gas-only in the same window.
-    /// Off-meal or missing food never skips the stop. If the comfort window
-    /// is empty, fall back to the hard range. Planning continues until the
-    /// distance left to the destination fits in that reserve, so a later
-    /// leg does not spend the reserve when a station is available. A last
-    /// stretch inside the hard tank with no station in the reserve window
-    /// is not a gap.
+    /// Off-meal or missing food never skips the stop. A recommended hop,
+    /// including the leg into the destination, stays inside the reserve
+    /// (tank × 0.85). A station farther than that is not the next fuel
+    /// stop, even when it is still inside the hard tank. Planning continues
+    /// until the distance left fits in the reserve. A last stretch inside
+    /// the hard tank with no station is not a gap.
     ///
     /// A hop shorter than `minimumSeparationFactor` of the tank is skipped
     /// when it does not unlock a station past the current reach. A segment
@@ -2479,8 +2480,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 preferFoodForMeal = false
             }
 
-            if let stop = farthest(comfortRange, preferFood: preferFoodForMeal)
-                ?? farthest(range, preferFood: preferFoodForMeal) {
+            // Only the reserve window. The full tank would allow a 175–183
+            // mile hop on a 200-mile tank and spend the 15% reserve.
+            if let stop = farthest(comfortRange, preferFood: preferFoodForMeal) {
                 let hop = stop.distanceAlongRoute - lastRefuel
                 if hop < minimumSeparation, !extendsReach(stop) {
                     skippedNear.insert(stop.id)
@@ -2664,7 +2666,14 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         alongPolylines polylines: [[CLLocationCoordinate2D]]
     ) -> CLLocationDistance {
         guard polylinesAreMeasurable(polylines) else { return stop.distanceAlongRoute }
-        return RouteGeometry.distanceAlongRoute(of: stop.coordinate, alongPolylines: polylines)
+        let projected = RouteGeometry.distanceAlongRoute(
+            of: stop.coordinate,
+            alongPolylines: polylines
+        )
+        return RouteGeometry.preferredDistanceAlongRoute(
+            projected: projected,
+            known: stop.distanceAlongRoute
+        )
     }
 
     /// Copies each suggested stop with its projected distance from the
@@ -2676,8 +2685,15 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     ) -> [SuggestedStop] {
         guard polylinesAreMeasurable(polylines) else { return stops }
         return stops.map { stop in
-            stop.withDistanceAlongRoute(
-                RouteGeometry.distanceAlongRoute(of: stop.coordinate, alongPolylines: polylines)
+            let projected = RouteGeometry.distanceAlongRoute(
+                of: stop.coordinate,
+                alongPolylines: polylines
+            )
+            return stop.withDistanceAlongRoute(
+                RouteGeometry.preferredDistanceAlongRoute(
+                    projected: projected,
+                    known: stop.distanceAlongRoute
+                )
             )
         }
         .sorted { $0.distanceAlongRoute < $1.distanceAlongRoute }

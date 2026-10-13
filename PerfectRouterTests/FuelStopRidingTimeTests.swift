@@ -198,7 +198,7 @@ final class FuelStopRidingTimeTests: XCTestCase {
             legs: legs,
             usesMetric: false
         )
-        XCTAssertEqual(first, "4h 25m riding")
+        XCTAssertEqual(first, "162 mi · 4h 25m riding")
         XCTAssertEqual(second, "212 mi · 6h 05m riding (1h 40m since last)")
     }
 
@@ -210,7 +210,7 @@ final class FuelStopRidingTimeTests: XCTestCase {
             legs: [leg(distance, seconds: 45 * 60)],
             usesMetric: false
         )
-        XCTAssertEqual(caption, "45m riding")
+        XCTAssertEqual(caption, "40 mi · 45m riding")
     }
 
     func testCaptionOverTwentyFourHoursStaysInHours() {
@@ -244,7 +244,7 @@ final class FuelStopRidingTimeTests: XCTestCase {
             ],
             usesMetric: true
         )
-        XCTAssertEqual(first, "20m riding")
+        XCTAssertEqual(first, "100 km · 20m riding")
         XCTAssertEqual(later, "212 km · 45m riding (25m since last)")
     }
 

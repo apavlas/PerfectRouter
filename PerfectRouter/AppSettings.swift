@@ -91,3 +91,13 @@ func formattedRideDistance(_ meters: CLLocationDistance) -> String {
     formatter.units = AppSettings.usesMetricUnits ? .metric : .imperial
     return formatter.string(fromDistance: meters)
 }
+
+/// "From start" on a suggested stop. Whole miles or kilometers, so a station
+/// a short way down the road is "~1 mi from start" and never "~400 ft".
+func milesFromStartCaption(_ meters: CLLocationDistance) -> String {
+    let distance = FuelStopRidingTime.formatDistance(
+        meters,
+        usesMetric: AppSettings.usesMetricUnits
+    )
+    return "~\(distance) from start"
+}
