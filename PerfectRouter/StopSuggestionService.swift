@@ -158,9 +158,12 @@ struct StopSuggestionService {
                 atDistances: targets
             )
             let count = min(coords.count, targets.count)
-            samples = (0..<count).map {
+            let routeOrder = (0..<count).map {
                 RouteSample(coordinate: coords[$0], distanceAlongRoute: targets[$0])
             }
+            // Start and end before the middle. A throttle storm then drops
+            // the center of the ride, not the last tanks on a coast-to-coast run.
+            samples = Self.endsFirst(routeOrder)
         } else {
             // Walk the polyline copied on the main actor. Reading `MKPolyline`
             // again from this search can come back empty, and every sample
@@ -406,6 +409,26 @@ struct StopSuggestionService {
         /// Meters from the ride start to this sample, measured while walking
         /// the polyline. Used when a later projection collapses to a few feet.
         let distanceAlongRoute: CLLocationDistance
+    }
+
+    /// Query order for a caller-supplied fuel grid: index 0, then the last,
+    /// then 1, then the second to last, and so on. Generic so the order can
+    /// be unit-tested without a route.
+    static func endsFirst<T>(_ samples: [T]) -> [T] {
+        guard samples.count > 2 else { return samples }
+        var ordered: [T] = []
+        ordered.reserveCapacity(samples.count)
+        var low = 0
+        var high = samples.count - 1
+        while low <= high {
+            ordered.append(samples[low])
+            low += 1
+            if low <= high {
+                ordered.append(samples[high])
+                high -= 1
+            }
+        }
+        return ordered
     }
 
     /// Picks at most `max` items spread evenly across `samples` (always

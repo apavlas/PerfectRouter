@@ -438,6 +438,57 @@ final class FuelPlanningTests: XCTestCase {
         XCTAssertTrue(distances.contains { abs($0 - tankMeters * RoutePlannerViewModel.fuelSafetyFactor) < 1 })
     }
 
+    /// Charlotte → LA, 2,471 mi, 200 mi tank. Pride Travel Center at Eloy
+    /// (mile 2,046) to a Mobil near Quartzsite (mile 2,229) is 183 miles:
+    /// over the 170-mile reserve and inside the tank, so the planner takes
+    /// it when the pool has nothing closer. That stretch of I-10 has fuel
+    /// the whole way. Samples have to land within the 15-mile search radius
+    /// of every mile there, not once per 170-mile tank.
+    func testCoastToCoastFuelSearchCoversArizonaI10() {
+        let mile = AppSettings.metersPerMile
+        let totalMiles = 2_471.0
+        let total = totalMiles * mile
+        let range = 200 * mile
+        let distances = RoutePlannerViewModel.fuelSearchDistances(
+            totalDistance: total,
+            range: range
+        )
+        let radius = RoutePlannerViewModel.fuelSearchCorridorMeters
+        let interval = range * RoutePlannerViewModel.fuelSafetyFactor
+
+        XCTAssertFalse(distances.isEmpty)
+        XCTAssertEqual(distances, distances.sorted())
+        XCTAssertLessThanOrEqual(distances.count, RoutePlannerViewModel.fuelSearchMaxSamples)
+        var edge = interval
+        while edge < total {
+            XCTAssertTrue(
+                distances.contains { abs($0 - edge) < 1 },
+                "missing comfort edge at \(edge / mile) mi"
+            )
+            edge += interval
+        }
+
+        var previous = distances[0]
+        XCTAssertLessThanOrEqual(previous, RoutePlannerViewModel.fuelSearchCoverStepMeters + 1)
+        for distance in distances.dropFirst() {
+            XCTAssertLessThanOrEqual(
+                distance - previous,
+                radius * 2,
+                "search gap of \((distance - previous) / mile) mi leaves a hole"
+            )
+            previous = distance
+        }
+        XCTAssertLessThanOrEqual(total - previous, radius)
+
+        for marker in stride(from: 2_046, through: 2_229, by: 1) {
+            let along = Double(marker) * mile
+            XCTAssertTrue(
+                distances.contains { abs($0 - along) <= radius },
+                "mile \(marker) on Arizona I-10 is outside every fuel search"
+            )
+        }
+    }
+
     func testFuelSearchDistancesCapAtMax() {
         let distances = RoutePlannerViewModel.fuelSearchDistances(
             totalDistance: 5_000_000,
