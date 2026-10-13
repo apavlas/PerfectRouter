@@ -68,17 +68,27 @@ final class FuelPlanningTests: XCTestCase {
         XCTAssertEqual(stops.map { Int($0.distanceAlongRoute) }, [80_000, 160_000, 240_000])
     }
 
-    func testStationBeyondTheReserveIsNotRecommended() {
+    func testStationBeyondTheReserveIsTheFallbackInsideTheTank() {
         // 95 km is inside the 100 km tank and outside the 85 km reserve.
-        // Recommending it would spend the reserve on the first leg.
+        // Nothing sits inside the reserve, so the farthest in-tank station
+        // is the stop. A station past the tank still is not.
+        let inTank = gas(at: 95_000)
         let (stops, hasGap) = RoutePlannerViewModel.planFuelStops(
-            from: [gas(at: 95_000)],
+            from: [inTank],
             totalDistance: 150_000,
             range: 100_000
         )
-        XCTAssertTrue(stops.isEmpty)
-        XCTAssertFalse(stops.contains { $0.distanceAlongRoute > 85_000 })
+        XCTAssertEqual(stops.map(\.id), [inTank.id])
         XCTAssertFalse(hasGap)
+
+        let beyond = gas(at: 140_000)
+        let (skipped, gap) = RoutePlannerViewModel.planFuelStops(
+            from: [beyond],
+            totalDistance: 300_000,
+            range: 100_000
+        )
+        XCTAssertTrue(skipped.isEmpty)
+        XCTAssertTrue(gap)
     }
 
     func testFlagsFuelGapWhenNoReachableStation() {
@@ -282,17 +292,18 @@ final class FuelPlanningTests: XCTestCase {
         XCTAssertEqual(stops.map { Int($0.distanceAlongRoute) }, [80_000, 160_000, 240_000])
     }
 
-    func testComfortWindowUnchangedWithFill() {
+    func testEmptyReserveFallsBackToTheFarthestStationInsideTheTank() {
         XCTAssertEqual(RoutePlannerViewModel.fuelSafetyFactor, 0.85, accuracy: 0.0001)
-        // 90 km from the fill is past the 85 km reserve, so it is not a hop
-        // even though it is inside the hard tank measured from that fill.
+        // 90 km from the fill is past the 85 km reserve and inside the tank.
+        // The reserve window is empty, so that station is the stop.
+        let station = gas(at: 140_000)
         let (stops, hasGap) = RoutePlannerViewModel.planFuelStops(
-            from: [gas(at: 140_000)],
+            from: [station],
             totalDistance: 200_000,
             range: 100_000,
             filledAt: [50_000]
         )
-        XCTAssertTrue(stops.isEmpty)
+        XCTAssertEqual(stops.map(\.id), [station.id])
         XCTAssertFalse(hasGap)
     }
 
@@ -345,12 +356,13 @@ final class FuelPlanningTests: XCTestCase {
         XCTAssertEqual(stops.map { Int($0.distanceAlongRoute) }, [80_000])
     }
 
-    func testFoodStopBeyondTheReserveIsNotRecommended() {
-        // Both pumps sit past the 85 km reserve. Meal time does not spend it.
+    func testFoodStopBeyondTheReserveFallsBackToTheFarthestInTheTank() {
+        // Both pumps sit past the 85 km reserve and inside the tank. Meal
+        // time does not pull the stop back; the fallback is the farthest.
         let withFood = gas(at: 95_000)
         let gasOnly = gas(at: 99_000)
         let (stops, hasGap) = lunchPlan(from: [withFood, gasOnly], preferringFoodAt: [withFood.id])
-        XCTAssertTrue(stops.isEmpty)
+        XCTAssertEqual(stops.map(\.id), [gasOnly.id])
         XCTAssertFalse(hasGap)
     }
 
@@ -558,15 +570,16 @@ final class FuelPlanningTests: XCTestCase {
 
     func testShortHopIsKeptWhenItReachesAFartherStation() {
         // 10 km is inside the 20 km separation, and it is the only way to
-        // reach the station at 105 km. That farther station is itself past
-        // the 85 km reserve, so it is not a second recommended hop.
+        // reach the station at 105 km. That station is past the 85 km
+        // reserve measured from the short hop and inside the tank, so the
+        // empty reserve window takes it.
         let plan = RoutePlannerViewModel.fuelPlan(
             from: [gas(at: 10_000), gas(at: 105_000)],
             totalDistance: 180_000,
             range: 100_000
         )
         XCTAssertFalse(plan.hasGap)
-        XCTAssertEqual(plan.stops.map { Int($0.distanceAlongRoute) }, [10_000])
+        XCTAssertEqual(plan.stops.map { Int($0.distanceAlongRoute) }, [10_000, 105_000])
     }
 
     func testPlanningResumesAfterAPastRangeStation() {

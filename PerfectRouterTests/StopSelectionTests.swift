@@ -523,4 +523,79 @@ final class StopSelectionTests: XCTestCase {
         XCTAssertFalse(viewModel.isBeyondRemainingRange(distanceAlongRoute: 180 * mile))
         XCTAssertTrue(viewModel.isBeyondRemainingRange(distanceAlongRoute: 250 * mile))
     }
+
+    /// Charlotte → LA, 200 mi tank. Select recommended is the button's entry
+    /// point: it replans, then inserts. A station whose along-route mile is
+    /// inside 170 but whose detour pushes the ridden leg past the reserve is
+    /// not the pick. A window with nothing inside 170 takes the farthest
+    /// station still inside the tank. The station 348 mi later, and the
+    /// recommendation after that gap, are not inserted.
+    func testSelectRecommendedCapsSparseLegsAndDoesNotCrossTheGap() {
+        let mile = AppSettings.metersPerMile
+        let totalMiles = 2_497.0
+        // North from Charlotte. Stations sit on polyline vertices so the
+        // travel-side check keeps every one of them.
+        func coordinate(atMiles miles: Double) -> CLLocationCoordinate2D {
+            CLLocationCoordinate2D(
+                latitude: 35.2271 + miles * mile / 111_320,
+                longitude: -80.8431
+            )
+        }
+        let start = coordinate(atMiles: 0)
+        let end = coordinate(atMiles: totalMiles)
+        let line = [0, 150, 168, 310, 488, 836, 926, totalMiles].map { coordinate(atMiles: $0) }
+        func station(_ name: String, miles: Double, detourMiles: Double) -> SuggestedStop {
+            SuggestedStop(
+                name: name,
+                coordinate: coordinate(atMiles: miles),
+                category: .gas,
+                distanceAlongRoute: miles * mile,
+                detourMeters: detourMiles * mile
+            )
+        }
+
+        let shelby = station("Shelby", miles: 150, detourMiles: 1)
+        let bypass = station("Bypass", miles: 168, detourMiles: 10)
+        let memphis = station("Memphis", miles: 310, detourMiles: 1)
+        let amarillo = station("Amarillo", miles: 488, detourMiles: 0)
+        let barstow = station("Barstow", miles: 836, detourMiles: 0)
+        let needles = station("Needles", miles: 926, detourMiles: 0)
+        let stations = [shelby, bypass, memphis, amarillo, barstow, needles]
+
+        XCTAssertLessThanOrEqual(shelby.distanceAlongRoute + shelby.detourMeters, 170 * mile)
+        XCTAssertLessThanOrEqual(bypass.distanceAlongRoute, 170 * mile)
+        XCTAssertGreaterThan(bypass.distanceAlongRoute + bypass.detourMeters, 170 * mile)
+        XCTAssertGreaterThan(amarillo.distanceAlongRoute - memphis.distanceAlongRoute, 170 * mile)
+        XCTAssertLessThanOrEqual(amarillo.distanceAlongRoute - memphis.distanceAlongRoute, 200 * mile)
+        XCTAssertGreaterThan(barstow.distanceAlongRoute - amarillo.distanceAlongRoute, 200 * mile)
+
+        let viewModel = RoutePlannerViewModel()
+        viewModel.fuelRangeMeters = 200 * mile
+        viewModel.waypoints = [
+            Waypoint(name: "Charlotte", coordinate: start),
+            Waypoint(name: "Los Angeles", coordinate: end),
+        ]
+        viewModel.plannedCorridor = [line]
+        viewModel.legs = [
+            StubMKRoute(
+                name: "Charlotte to LA",
+                coordinates: line,
+                distance: totalMiles * mile,
+                expectedTravelTime: (totalMiles / 55) * 3_600,
+                hasHighways: true
+            )
+        ]
+        viewModel.gasStations = stations
+
+        viewModel.toggleRecommendedFuelSelection()
+
+        XCTAssertEqual(
+            viewModel.waypoints.map(\.name),
+            ["Charlotte", "Shelby", "Memphis", "Amarillo", "Los Angeles"]
+        )
+        XCTAssertEqual(viewModel.waypoints.map(\.isGasFill), [false, true, true, true, false])
+        XCTAssertFalse(viewModel.waypoints.contains {
+            ["Bypass", "Barstow", "Needles"].contains($0.name)
+        })
+    }
 }

@@ -313,7 +313,7 @@ final class FuelStopRidingTimeTests: XCTestCase {
         XCTAssertNil(FuelStopRidingTime.waypointCaption(index: 0, legs: legs, usesMetric: false))
         XCTAssertEqual(
             FuelStopRidingTime.waypointCaption(index: 1, legs: legs, usesMetric: false),
-            "100 mi · 2h 00m riding (2h 00m since last)"
+            "100 mi · 2h 00m riding"
         )
         XCTAssertEqual(
             FuelStopRidingTime.waypointCaption(index: 2, legs: legs, usesMetric: false),
@@ -334,7 +334,7 @@ final class FuelStopRidingTimeTests: XCTestCase {
         ]
         XCTAssertEqual(
             FuelStopRidingTime.waypointCaption(index: 1, legs: legs, usesMetric: false),
-            "100 mi · 2h 00m riding (2h 00m since last)"
+            "100 mi · 2h 00m riding"
         )
         XCTAssertEqual(
             FuelStopRidingTime.waypointCaption(index: 2, legs: legs, usesMetric: false),
@@ -349,7 +349,7 @@ final class FuelStopRidingTimeTests: XCTestCase {
                 legs: [leg(40 * mile, seconds: 45 * 60)],
                 usesMetric: false
             ),
-            "40 mi · 45m riding (45m since last)"
+            "40 mi · 45m riding"
         )
     }
 
@@ -360,7 +360,7 @@ final class FuelStopRidingTimeTests: XCTestCase {
                 legs: [leg(100 * mile, seconds: 25 * 3_600 + 5 * 60)],
                 usesMetric: false
             ),
-            "100 mi · 25h 05m riding (25h 05m since last)"
+            "100 mi · 25h 05m riding"
         )
     }
 
@@ -371,7 +371,7 @@ final class FuelStopRidingTimeTests: XCTestCase {
                 legs: [leg(80_000, seconds: 50 * 60)],
                 usesMetric: true
             ),
-            "80 km · 50m riding (50m since last)"
+            "80 km · 50m riding"
         )
     }
 
@@ -385,7 +385,7 @@ final class FuelStopRidingTimeTests: XCTestCase {
         ]
         XCTAssertEqual(
             FuelStopRidingTime.waypointCaption(index: 1, legs: legs, usesMetric: false),
-            "100 mi · 2h 00m riding (2h 00m since last)"
+            "100 mi · 2h 00m riding"
         )
         XCTAssertEqual(
             FuelStopRidingTime.waypointCaption(index: 2, legs: legs, usesMetric: false),

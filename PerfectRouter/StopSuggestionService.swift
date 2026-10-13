@@ -162,7 +162,12 @@ struct StopSuggestionService {
                 RouteSample(coordinate: coords[$0], distanceAlongRoute: targets[$0])
             }
         } else {
-            samples = evenlySpaced(samplePoints(alongLegs: legs), max: maxSearches)
+            // Walk the polyline copied on the main actor. Reading `MKPolyline`
+            // again from this search can come back empty, and every sample
+            // then sits on the origin ("~0 mi from start").
+            let alongRoute = samplePoints(alongPolylines: legPolylines)
+            let walked = alongRoute.isEmpty ? samplePoints(alongLegs: legs) : alongRoute
+            samples = evenlySpaced(walked, max: maxSearches)
         }
         var seen = Set<String>()          // de-dup by name + rounded coords
         var results: [SuggestedStop] = []
@@ -418,6 +423,29 @@ struct StopSuggestionService {
             picked.append(samples[Int((Double(i) * step).rounded())])
         }
         return picked
+    }
+
+    /// Walk a polyline already copied on the main actor. Same spacing as
+    /// `samplePoints(alongLegs:)`, without another `MKPolyline` read.
+    private func samplePoints(alongPolylines polylines: [[CLLocationCoordinate2D]]) -> [RouteSample] {
+        var samples: [RouteSample] = []
+        var distanceSinceLastSample: CLLocationDistance = sampleIntervalMeters
+        var traveled: CLLocationDistance = 0
+
+        for coords in polylines {
+            guard coords.count > 1 else { continue }
+            for index in 1..<coords.count {
+                let segment = CLLocation(latitude: coords[index - 1].latitude, longitude: coords[index - 1].longitude)
+                    .distance(from: CLLocation(latitude: coords[index].latitude, longitude: coords[index].longitude))
+                distanceSinceLastSample += segment
+                traveled += segment
+                if distanceSinceLastSample >= sampleIntervalMeters {
+                    samples.append(RouteSample(coordinate: coords[index], distanceAlongRoute: traveled))
+                    distanceSinceLastSample = 0
+                }
+            }
+        }
+        return samples
     }
 
     /// Walk every leg's polyline and emit a point every `sampleIntervalMeters`.

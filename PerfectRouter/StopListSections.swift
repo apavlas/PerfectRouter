@@ -207,10 +207,10 @@ struct WaypointsSection: View {
         }
     }
 
-    /// Pin plus name. Every row after the origin, including the destination,
-    /// adds the same riding-time line the fuel rows use. The destination's
-    /// line is the whole trip. The caption is a second text only inside a
-    /// stack that already has the name — the other branch is the name alone,
+    /// Pin plus name. The caption is `waypointRidingCaption` (not the fuel
+    /// sheet's `fuelStopRidingCaption`). The first stop has no since-last
+    /// clause; later stops keep it. The caption is a second text only inside
+    /// a stack that already has the name — the other branch is the name alone,
     /// so a replan never leaves an empty stack in the row.
     @ViewBuilder
     private func waypointRow(index: Int, waypoint: Waypoint) -> some View {
@@ -347,8 +347,8 @@ struct SuggestionsSection: View {
             } else {
                 FocusPlaceholderRow()
             }
-            if !viewModel.addableSuggestions.isEmpty {
-                ForEach(viewModel.addableSuggestions.prefix(15)) { stop in
+            if !viewModel.suggestionListStops.isEmpty {
+                ForEach(viewModel.suggestionListStops) { stop in
                     suggestionButton(stop)
                 }
             } else {
