@@ -300,7 +300,13 @@ final class CoreJourneyUITests: XCTestCase {
         expandPlanningSheet(app)
         let field = waitForPlaceSearch(in: app)
         scrollUntilHittable(field, in: app)
+        // The first tap can land while the iPhone sheet is still settling.
+        // typeText then fails: the field has no keyboard focus.
         field.tap()
+        if !placeSearchHasFocus(field, in: app) {
+            field.tap()
+            _ = placeSearchHasFocus(field, in: app)
+        }
         field.typeText(name)
         let result = app.buttons["searchResult.\(name)"]
         XCTAssertTrue(
@@ -311,6 +317,20 @@ final class CoreJourneyUITests: XCTestCase {
         result.tap()
         dismissKeyboard(app)
         expandPlanningSheet(app)
+    }
+
+    /// True once the field owns the keyboard, or a keyboard is on screen.
+    /// Waits up to 5 seconds. A tap that has not focused the field yet is
+    /// not ready for `typeText`.
+    private func placeSearchHasFocus(_ field: XCUIElement, in app: XCUIApplication) -> Bool {
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            if field.hasKeyboardFocus || app.keyboards.count > 0 {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        return field.hasKeyboardFocus || app.keyboards.count > 0
     }
 
     /// The planner uses a text field. iPhone exposes it as a text field;
