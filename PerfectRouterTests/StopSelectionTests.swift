@@ -326,7 +326,7 @@ final class StopSelectionTests: XCTestCase {
         )
     }
 
-    func testSelectRecommendedSelectsOnlyRecommendedFuelStops() {
+    func testSelectRecommendedSelectsOnlyRecommendedFuelStops() async {
         let viewModel = RoutePlannerViewModel()
         viewModel.waypoints = [
             waypoint("Start", lat: 0, lon: 0),
@@ -356,7 +356,7 @@ final class StopSelectionTests: XCTestCase {
         // One recommended row is already checked. The tap still adds both.
         viewModel.toggleBufferedGasStop(early)
         viewModel.toggleBufferedGasStop(other)
-        viewModel.toggleRecommendedFuelSelection()
+        await viewModel.toggleRecommendedFuelSelection()
 
         XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "Early", "Late", "End"])
         XCTAssertEqual(viewModel.waypoints.map(\.isGasFill), [false, true, true, false])
@@ -366,12 +366,12 @@ final class StopSelectionTests: XCTestCase {
         XCTAssertEqual(viewModel.calculatingGeneration, plansBefore + 1)
         XCTAssertEqual(viewModel.scrollToWaypointID, viewModel.waypoints[1].id)
 
-        viewModel.toggleRecommendedFuelSelection()
+        await viewModel.toggleRecommendedFuelSelection()
         XCTAssertEqual(viewModel.calculatingGeneration, plansBefore + 1)
         XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "Early", "Late", "End"])
     }
 
-    func testSelectRecommendedSkipsStopsAlreadyOnTheRoute() {
+    func testSelectRecommendedSkipsStopsAlreadyOnTheRoute() async {
         let viewModel = RoutePlannerViewModel()
         viewModel.waypoints = [
             waypoint("Start", lat: 33.0, lon: -82.0),
@@ -395,7 +395,7 @@ final class StopSelectionTests: XCTestCase {
         ]]
         let plansBefore = viewModel.calculatingGeneration
 
-        viewModel.toggleRecommendedFuelSelection()
+        await viewModel.toggleRecommendedFuelSelection()
 
         XCTAssertTrue(viewModel.bufferedGasStops.isEmpty)
         XCTAssertFalse(viewModel.isGasBuffered(again))
@@ -405,12 +405,12 @@ final class StopSelectionTests: XCTestCase {
         XCTAssertEqual(viewModel.waypoints.filter(\.isGasFill).map(\.name), ["Pilot"])
         XCTAssertTrue(viewModel.selectableRecommendedFuelStops.isEmpty)
         XCTAssertEqual(viewModel.calculatingGeneration, plansBefore + 1)
-        viewModel.toggleRecommendedFuelSelection()
+        await viewModel.toggleRecommendedFuelSelection()
         XCTAssertEqual(viewModel.calculatingGeneration, plansBefore + 1)
         XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "Gas-N-Go", "Pilot", "End"])
     }
 
-    func testSelectRecommendedLeavesAManualCheckForApply() {
+    func testSelectRecommendedLeavesAManualCheckForApply() async {
         let viewModel = RoutePlannerViewModel()
         viewModel.waypoints = [
             waypoint("Start", lat: 0, lon: 0),
@@ -428,7 +428,7 @@ final class StopSelectionTests: XCTestCase {
         let plansBefore = viewModel.calculatingGeneration
 
         viewModel.toggleBufferedGasStop(other)
-        viewModel.toggleRecommendedFuelSelection()
+        await viewModel.toggleRecommendedFuelSelection()
 
         XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "Early", "Late", "End"])
         XCTAssertEqual(viewModel.bufferedGasStops.map(\.name), ["Side Pump"])
@@ -437,7 +437,7 @@ final class StopSelectionTests: XCTestCase {
         XCTAssertTrue(viewModel.selectableRecommendedFuelStops.isEmpty)
     }
 
-    func testApplyRecommendedFuelStopsReplansOnceInRideOrder() {
+    func testApplyRecommendedFuelStopsReplansOnceInRideOrder() async {
         let viewModel = RoutePlannerViewModel()
         let start = CLLocationCoordinate2D(latitude: 0, longitude: 0)
         let lunchAt = CLLocationCoordinate2D(latitude: 0, longitude: 1)
@@ -457,7 +457,7 @@ final class StopSelectionTests: XCTestCase {
         viewModel.fuelFoodStops = [FuelFoodStop(fuelStop: early, nearbyFood: [diner])]
         let plansBefore = viewModel.calculatingGeneration
 
-        viewModel.toggleRecommendedFuelSelection()
+        await viewModel.toggleRecommendedFuelSelection()
 
         XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "Early", "Lunch", "Late", "End"])
         XCTAssertEqual(viewModel.waypoints.map(\.isGasFill), [false, true, false, true, false])
@@ -465,12 +465,12 @@ final class StopSelectionTests: XCTestCase {
         XCTAssertTrue(viewModel.bufferedGasStops.isEmpty)
         XCTAssertTrue(viewModel.selectableRecommendedFuelStops.isEmpty)
 
-        viewModel.toggleRecommendedFuelSelection()
+        await viewModel.toggleRecommendedFuelSelection()
         XCTAssertEqual(viewModel.calculatingGeneration, plansBefore + 1)
         XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "Early", "Lunch", "Late", "End"])
     }
 
-    func testSelectRecommendedAddsEveryStopPastAFiveStopCap() {
+    func testSelectRecommendedAddsEveryStopPastAFiveStopCap() async {
         let viewModel = RoutePlannerViewModel()
         let start = CLLocationCoordinate2D(latitude: 0, longitude: 0)
         let end = CLLocationCoordinate2D(latitude: 0, longitude: 4)
@@ -494,7 +494,7 @@ final class StopSelectionTests: XCTestCase {
         viewModel.fuelPlanEntries = recommended.map { .recommended($0) } + [.pastRange(past)]
         let plansBefore = viewModel.calculatingGeneration
 
-        viewModel.toggleRecommendedFuelSelection()
+        await viewModel.toggleRecommendedFuelSelection()
 
         XCTAssertEqual(
             viewModel.waypoints.map(\.name),
@@ -506,7 +506,7 @@ final class StopSelectionTests: XCTestCase {
         XCTAssertFalse(viewModel.waypoints.contains { $0.name == "Too Far" })
         XCTAssertEqual(viewModel.scrollToWaypointID, viewModel.waypoints[1].id)
 
-        viewModel.toggleRecommendedFuelSelection()
+        await viewModel.toggleRecommendedFuelSelection()
         XCTAssertEqual(viewModel.calculatingGeneration, plansBefore + 1)
     }
 
@@ -530,7 +530,7 @@ final class StopSelectionTests: XCTestCase {
     /// not the pick. A window with nothing inside 170 takes the nearest
     /// station still inside the tank. The station 348 mi later, and the
     /// recommendation after that gap, are not inserted.
-    func testSelectRecommendedCapsSparseLegsAndDoesNotCrossTheGap() {
+    func testSelectRecommendedCapsSparseLegsAndDoesNotCrossTheGap() async {
         let mile = AppSettings.metersPerMile
         let totalMiles = 2_497.0
         // North from Charlotte. Stations sit on polyline vertices so the
@@ -587,7 +587,7 @@ final class StopSelectionTests: XCTestCase {
         ]
         viewModel.gasStations = stations
 
-        viewModel.toggleRecommendedFuelSelection()
+        await viewModel.toggleRecommendedFuelSelection()
 
         XCTAssertEqual(
             viewModel.waypoints.map(\.name),
@@ -615,7 +615,7 @@ final class StopSelectionTests: XCTestCase {
     /// mile 80 is what makes the fill reachable. Measuring Shell from the
     /// origin, or from Pilot, is a 150-mile hop and drops a stop the ride
     /// needs.
-    func testSelectRecommendedKeepsShellAfterTheOnRouteFillSearchAdded() {
+    func testSelectRecommendedKeepsShellAfterTheOnRouteFillSearchAdded() async {
         let mile = UITestFixture.metersPerMile
         let line = [0, 40, 80, 150, 230, UITestFixture.routeMiles].map {
             UITestFixture.coordinate(milesNorth: $0, eastMeters: 0)
@@ -653,7 +653,7 @@ final class StopSelectionTests: XCTestCase {
         ]
         viewModel.gasStations = UITestFixture.places.filter(\.gasStation).map(station)
 
-        viewModel.toggleRecommendedFuelSelection()
+        await viewModel.toggleRecommendedFuelSelection()
 
         XCTAssertEqual(
             viewModel.waypoints.map(\.name),
@@ -664,7 +664,7 @@ final class StopSelectionTests: XCTestCase {
     /// A pump already on the route that is itself past the tank does not
     /// unlock a recommendation beyond it. The rider cannot reach that fill,
     /// so the dry gap is still a gap.
-    func testSelectRecommendedDoesNotUseAnUnreachableOnRoutePumpAsAFill() {
+    func testSelectRecommendedDoesNotUseAnUnreachableOnRoutePumpAsAFill() async {
         let mile = AppSettings.metersPerMile
         func coordinate(atMiles miles: Double) -> CLLocationCoordinate2D {
             CLLocationCoordinate2D(
@@ -702,7 +702,7 @@ final class StopSelectionTests: XCTestCase {
         ]
         viewModel.gasStations = [station("Stranded", miles: 250), station("After", miles: 320)]
 
-        viewModel.toggleRecommendedFuelSelection()
+        await viewModel.toggleRecommendedFuelSelection()
 
         XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "Stranded", "End"])
     }
@@ -710,7 +710,7 @@ final class StopSelectionTests: XCTestCase {
     /// 200 mi tank. Where nothing sits inside 170 mi, Select recommended
     /// inserts the nearest station still inside the tank and leaves a
     /// station past 200 mi off the route.
-    func testSelectRecommendedInsertsTheNearestStationInEachReserveGap() {
+    func testSelectRecommendedInsertsTheNearestStationInEachReserveGap() async {
         let mile = AppSettings.metersPerMile
         let totalMiles = 1_000.0
         func coordinate(atMiles miles: Double) -> CLLocationCoordinate2D {
@@ -757,7 +757,7 @@ final class StopSelectionTests: XCTestCase {
             station("Far B", miles: 389),
             station("Past", miles: 603),
         ])
-        chosen.toggleRecommendedFuelSelection()
+        await chosen.toggleRecommendedFuelSelection()
         XCTAssertEqual(chosen.waypoints.map(\.name), ["Start", "Near A", "Near B", "End"])
         XCTAssertFalse(chosen.waypoints.contains { ["Far A", "Far B", "Past"].contains($0.name) })
         XCTAssertFalse(
@@ -778,5 +778,77 @@ final class StopSelectionTests: XCTestCase {
         XCTAssertEqual(chosen.fuelListNote(for: past), "Past full tank")
         XCTAssertFalse(chosen.fuelStopRidingCaption(for: nearA).contains("Past full tank"))
         XCTAssertFalse(chosen.fuelStopRidingCaption(for: nearA).contains("No fuel within range"))
+    }
+
+    /// Amarillo → LA length, dense enough that projecting every station on
+    /// every row used to keep the main thread busy for more than a minute.
+    /// The scan runs off the main actor. Select recommended plus the
+    /// fuel-list readers finish within about two seconds, and the spinner
+    /// is gone when they return.
+    func testSelectRecommendedAndFuelListFinishWithinTwoSecondsOnALongRoute() async {
+        let mile = AppSettings.metersPerMile
+        let totalMiles = 2_500.0
+        let pointCount = 10_000
+        func coordinate(atMiles miles: Double) -> CLLocationCoordinate2D {
+            CLLocationCoordinate2D(
+                latitude: 35.222 + miles * mile / 111_320,
+                longitude: -101.8313
+            )
+        }
+        let line = (0...pointCount).map { index in
+            coordinate(atMiles: totalMiles * Double(index) / Double(pointCount))
+        }
+        let stationMiles = (0..<40).map { index in
+            60.0 + Double(index) * (2_380.0 / 39.0)
+        }
+        let stations = stationMiles.map { miles in
+            SuggestedStop(
+                name: "Station \(Int(miles.rounded()))",
+                coordinate: coordinate(atMiles: miles),
+                category: .gas,
+                distanceAlongRoute: miles * mile,
+                detourMeters: 0
+            )
+        }
+        let route = StubMKRoute(
+            name: "Amarillo to LA",
+            coordinates: line,
+            distance: totalMiles * mile,
+            expectedTravelTime: (totalMiles / 55) * 3_600,
+            hasHighways: true
+        )
+        let viewModel = RoutePlannerViewModel()
+        viewModel.fuelRangeMeters = 200 * mile
+        viewModel.waypoints = [
+            Waypoint(name: "Amarillo", coordinate: line[0]),
+            Waypoint(name: "Los Angeles", coordinate: line[line.count - 1]),
+        ]
+        viewModel.plannedCorridor = [line]
+        viewModel.legs = [route]
+        viewModel.gasStations = stations
+
+        let started = Date()
+        await viewModel.toggleRecommendedFuelSelection()
+        for station in stations {
+            _ = viewModel.visibleFuelPlanEntries
+            _ = viewModel.recommendedFuelAccessibility(for: station)
+            _ = viewModel.distanceFromStart(of: station)
+            _ = viewModel.isBeyondRemainingRange(
+                distanceAlongRoute: viewModel.distanceFromStart(of: station)
+            )
+            _ = viewModel.isStopOnRoute(station)
+            _ = viewModel.fuelListNote(for: station)
+        }
+        let elapsed = Date().timeIntervalSince(started)
+
+        XCTAssertLessThan(elapsed, 2)
+        XCTAssertFalse(viewModel.isSelectingRecommendedFuel)
+        XCTAssertEqual(AccessibilityID.fuelSelectingSpinner, "fuel.selecting.spinner")
+        XCTAssertEqual(RoutePlannerViewModel.fuelSelectionStatus, "Finding fuel stops…")
+        XCTAssertGreaterThan(viewModel.waypoints.count, 2)
+        let sample = stations[20]
+        let projected = RoutePlannerViewModel.distanceFromStart(of: sample, alongPolylines: [line])
+        XCTAssertEqual(viewModel.distanceFromStart(of: sample), projected, accuracy: 1)
+        XCTAssertGreaterThan(projected, 1_000 * mile)
     }
 }

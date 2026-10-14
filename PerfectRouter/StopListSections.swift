@@ -10,6 +10,7 @@ struct GasStationsSection: View {
     /// entirely; an empty section aborts iPad focus updates.
     static func hasContent(_ viewModel: RoutePlannerViewModel) -> Bool {
         !viewModel.selectableRecommendedFuelStops.isEmpty
+            || viewModel.isSelectingRecommendedFuel
             || !viewModel.bufferedGasStops.isEmpty
             || viewModel.isCalculating
             || viewModel.isSearchingGas
@@ -24,6 +25,11 @@ struct GasStationsSection: View {
         Section("Recommended fuel") {
                 if !viewModel.selectableRecommendedFuelStops.isEmpty {
                     SelectRecommendedFuelButton(viewModel: viewModel)
+                } else {
+                    FocusPlaceholderRow()
+                }
+                if viewModel.isSelectingRecommendedFuel {
+                    FuelSelectionSpinner()
                 } else {
                     FocusPlaceholderRow()
                 }
@@ -315,6 +321,11 @@ struct SuggestionsSection: View {
                 } else {
                     FocusPlaceholderRow()
                 }
+                if viewModel.isSelectingRecommendedFuel {
+                    FuelSelectionSpinner()
+                } else {
+                    FocusPlaceholderRow()
+                }
                 if !viewModel.bufferedGasStops.isEmpty {
                     BufferedGasApplyRow(viewModel: viewModel)
                 } else {
@@ -511,9 +522,26 @@ private struct SelectRecommendedFuelButton: View {
 
     var body: some View {
         Button(viewModel.selectRecommendedButtonTitle) {
-            viewModel.toggleRecommendedFuelSelection()
+            Task { await viewModel.toggleRecommendedFuelSelection() }
         }
         .accessibilityIdentifier(AccessibilityID.selectRecommended)
+    }
+}
+
+/// Small status row for a Select recommended tap that is still going after
+/// half a second. Absent on a short route, which finishes before the delay.
+private struct FuelSelectionSpinner: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+            Text(RoutePlannerViewModel.fuelSelectionStatus)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier(AccessibilityID.fuelSelectingSpinner)
+        .accessibilityLabel(RoutePlannerViewModel.fuelSelectionStatus)
     }
 }
 

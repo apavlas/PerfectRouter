@@ -23,6 +23,23 @@ private struct CachedLeg {
     var usedFastestFallback: Bool
 }
 
+/// One station or waypoint to measure along the route. File-level so the
+/// background measurement is not isolated to the main actor.
+private struct AlongRouteQuery: Sendable {
+    var id: UUID
+    var latitude: Double
+    var longitude: Double
+    /// Mile mark already stored on the stop. Kept when the projection collapses.
+    var known: CLLocationDistance
+}
+
+/// One leg's vertices and drive time, copied on the main actor so the
+/// length scan can run off it. `MKRoute` itself is not sendable.
+private struct DriveLegSnapshot: Sendable {
+    var polyline: [CLLocationCoordinate2D]
+    var expectedTravelTime: TimeInterval
+}
+
 /// What a fuel-range commit restarts. File-level so a nonisolated helper can
 /// return it; a type nested in the main-actor view model would be isolated too.
 enum PlanRestart: Equatable {
@@ -144,7 +161,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     // MARK: - Published state
 
     /// Ordered ride: first = start, last = destination, middle = stops.
-    var waypoints: [Waypoint] = []
+    var waypoints: [Waypoint] = [] {
+        didSet { rebuildDistanceCache() }
+    }
 
     /// Planning list scrolls to this stop after the rider adds one.
     /// Nil until a stop is inserted.
@@ -170,10 +189,22 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     private(set) var currentLocation: CLLocationCoordinate2D?
 
     /// One MKRoute per leg (waypoint i -> waypoint i+1).
-    var legs: [MKRoute] = []
+    var legs: [MKRoute] = [] {
+        didSet {
+            routeGeometryGeneration &+= 1
+            rebuildDriveLegCache()
+            rebuildDistanceCache()
+        }
+    }
+
+    /// Polyline length and drive time for the current legs. Rebuilt when
+    /// `legs` changes. Row captions read this instead of walking the polyline.
+    private var cachedDriveLegs: [FuelStopRidingTime.Leg] = []
 
     /// Recommended stops for the currently selected category.
-    var suggestedStops: [SuggestedStop] = []
+    var suggestedStops: [SuggestedStop] = [] {
+        didSet { rebuildDistanceCache() }
+    }
 
     var selectedCategory: StopCategory = .gas
     var isCalculating = false
@@ -187,7 +218,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     /// Gas stops the rider has checked but not applied. The recommendation
     /// list stays put until `applyBufferedGasStops()`.
-    private(set) var bufferedGasStops: [SuggestedStop] = []
+    private(set) var bufferedGasStops: [SuggestedStop] = [] {
+        didSet { rebuildDistanceCache() }
+    }
 
     /// Rider's fuel range in meters (default ~100 miles).
     var fuelRangeMeters: CLLocationDistance = 160_900
@@ -209,7 +242,12 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// Suggestion distances project onto this copy, which was read on the
     /// main actor. A later `MKPolyline` read can come back empty and would
     /// otherwise label every stop "~0 ft from start".
-    var plannedCorridor: [[CLLocationCoordinate2D]] = []
+    var plannedCorridor: [[CLLocationCoordinate2D]] = [] {
+        didSet {
+            routeGeometryGeneration &+= 1
+            rebuildDistanceCache()
+        }
+    }
 
     /// Route geometry for "miles from start". Prefer the corridor captured
     /// when the route was published. Read the live legs only when that
@@ -564,7 +602,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// Every gas station found along the route, so the rider can pick any of
     /// them regardless of the selected category. Computed after each route
     /// change by `refreshGasStations()`.
-    var gasStations: [SuggestedStop] = []
+    var gasStations: [SuggestedStop] = [] {
+        didSet { rebuildDistanceCache() }
+    }
 
     /// Whether the planning sheet's "All gas on route" disclosure is open.
     /// Gray map pins for non-recommended stations follow this so the map
@@ -582,12 +622,16 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// optional; preferred in-window when the tank-interval ETA is a meal.
     /// Travel-side only. Out-of-range stations are not included; they live
     /// on `fuelPlanEntries` as past-range rows.
-    var fuelStops: [SuggestedStop] = []
+    var fuelStops: [SuggestedStop] = [] {
+        didSet { rebuildDistanceCache() }
+    }
 
     /// Recommended stops, inline gap warnings, and past-range stations, in
     /// ride order. The sheet shows gap and past-range rows only when the
     /// coverage that produced them is trusted.
-    var fuelPlanEntries: [FuelPlanEntry] = []
+    var fuelPlanEntries: [FuelPlanEntry] = [] {
+        didSet { rebuildDistanceCache() }
+    }
 
     /// Fuel rows the sheet should draw. A cancelled or throttled search
     /// keeps in-range recommendations and hides the named gap. A stop
@@ -686,7 +730,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         for entry in visibleFuelPlanEntries {
             switch entry {
             case .recommended(let other), .pastRange(let other):
-                anchors.append(other.distanceAlongRoute)
+                anchors.append(cachedDistance(for: other))
             case .gap:
                 break
             }
@@ -706,12 +750,35 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     }
 
     /// Polyline length and `expectedTravelTime` for each current leg.
+    /// The scan ran when `legs` changed. A row caption must not copy the
+    /// polyline again.
     private func driveLegTimings() -> [FuelStopRidingTime.Leg] {
-        legs.map { route in
-            FuelStopRidingTime.leg(
+        cachedDriveLegs
+    }
+
+    /// Copies each leg on the caller, then measures its length off the main
+    /// thread. View updates only read `cachedDriveLegs`.
+    private func rebuildDriveLegCache() {
+        let snapshots = legs.map { route in
+            DriveLegSnapshot(
                 polyline: RouteGeometry.coordinates(of: route.polyline),
                 expectedTravelTime: route.expectedTravelTime
             )
+        }
+        cachedDriveLegs = Self.driveLegsOffMain(snapshots)
+    }
+
+    private nonisolated static func driveLegsOffMain(
+        _ snapshots: [DriveLegSnapshot]
+    ) -> [FuelStopRidingTime.Leg] {
+        guard !snapshots.isEmpty else { return [] }
+        return DispatchQueue.global(qos: .userInitiated).sync { @Sendable in
+            snapshots.map { snapshot in
+                FuelStopRidingTime.leg(
+                    polyline: snapshot.polyline,
+                    expectedTravelTime: snapshot.expectedTravelTime
+                )
+            }
         }
     }
 
@@ -761,7 +828,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// Gas stations on the rider's side of travel (no crossing oncoming
     /// traffic). Candidate pool for `fuelStops`; recomputed when the route
     /// or tank-interval search changes.
-    private var travelSideGasStations: [SuggestedStop] = []
+    private var travelSideGasStations: [SuggestedStop] = [] {
+        didSet { rebuildDistanceCache() }
+    }
 
     /// Travel-side gas stations that have food within `fuelFoodRadiusMeters`.
     /// Fed into `planFuelStops` so a pump with food wins over a gas-only
@@ -786,7 +855,20 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// A handful of recommended places of interest along the ride — low-detour
     /// sights spread across the route that make good stops. Recomputed after
     /// each route change by `refreshHighlights()`.
-    var rideHighlights: [SuggestedStop] = []
+    var rideHighlights: [SuggestedStop] = [] {
+        didSet { rebuildDistanceCache() }
+    }
+
+    /// Distance along the current route, keyed by station or waypoint id.
+    /// Rebuilt off the main thread when stations or the route change. View
+    /// updates only read this map.
+    private var distanceAlongRouteByID: [UUID: CLLocationDistance] = [:]
+
+    /// Bumped when the polyline changes. Station edits reuse `cachedMeasuredRoute`
+    /// so Select recommended does not rebuild the coast-to-coast line per array.
+    private var routeGeometryGeneration = 0
+    private var measuredRouteGeneration = -1
+    private var cachedMeasuredRoute: RouteGeometry.MeasuredRoute?
 
     /// Bumped when highlights are cleared or refreshed. A description fetch
     /// from an older pass must not write over the newer list.
@@ -1082,6 +1164,23 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         "Select recommended"
     }
 
+    /// Copy next to the small spinner. Shown only when the tap is still
+    /// working after half a second, so a short route never flashes it.
+    nonisolated static let fuelSelectionStatus = "Finding fuel stops…"
+
+    /// True while Select recommended has been working for more than half a
+    /// second. The scan itself is not on the main actor, so the spinner
+    /// can animate and the rest of the sheet stays usable.
+    private(set) var isSelectingRecommendedFuel = false
+
+    /// The in-flight tap. A second tap waits for this one instead of
+    /// inserting the same stops twice.
+    private var recommendedFuelSelectionTask: Task<Void, Never>?
+
+    /// Skips the per-assignment distance rebuild while one tap is writing
+    /// several arrays. The tap measures once, off the main actor, at the end.
+    private var suppressDistanceRebuild = false
+
     /// Checks every recommended fuel stop from the start to the destination,
     /// in ride order, and adds that whole set in the same tap. The route is
     /// recalculated once. When the current line already has stations, the
@@ -1096,10 +1195,39 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// recommendations are still selectable. A pump the rider checked by
     /// hand, and that is not one of these recommendations, stays checked
     /// for Apply and is not routed by this tap.
-    func toggleRecommendedFuelSelection() {
-        let replanned = replanFuelSelectionForRecommendedTap()
+    ///
+    /// The travel-side scan and the distance measurement run off the main
+    /// actor. Callers that need the inserted stops await this function.
+    func toggleRecommendedFuelSelection() async {
+        if let recommendedFuelSelectionTask {
+            await recommendedFuelSelectionTask.value
+            return
+        }
+        let task = Task { @MainActor in
+            await self.performRecommendedFuelSelection()
+        }
+        recommendedFuelSelectionTask = task
+        defer { recommendedFuelSelectionTask = nil }
+        await task.value
+    }
+
+    private func performRecommendedFuelSelection() async {
+        let spinner = Task { @MainActor in
+            try await Task.sleep(for: .milliseconds(500))
+            guard !Task.isCancelled else { return }
+            isSelectingRecommendedFuel = true
+        }
+        defer {
+            spinner.cancel()
+            isSelectingRecommendedFuel = false
+        }
+        // Let the button action return so the sheet can draw while the
+        // scan is in flight.
+        await Task.yield()
+
+        let replanned = await replanFuelSelectionForRecommendedTap()
         var recommended = selectableRecommendedFuelStops
-            .sorted { $0.distanceAlongRoute < $1.distanceAlongRoute }
+            .sorted { cachedDistance(for: $0) < cachedDistance(for: $1) }
         if replanned {
             recommended = fuelStopsWithinTank(from: recommended)
         }
@@ -1107,9 +1235,12 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         let kept = bufferedGasStops.filter { stop in
             !recommended.contains { Self.sameCoordinate($0.coordinate, stop.coordinate) }
         }
+        suppressDistanceRebuild = true
         bufferedGasStops = recommended
         applyBufferedGasStops()
         bufferedGasStops = kept.filter { !isStopOnRoute($0) }
+        suppressDistanceRebuild = false
+        await rebuildDistanceCacheOffMain()
     }
 
     /// True when a waypoint already sits on this place. Matching is the
@@ -1175,7 +1306,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// Miles from the previous fill (or the start) to this station, using
     /// the same anchors as the fuel-row caption.
     func fuelHopMeters(for stop: SuggestedStop) -> CLLocationDistance {
-        let distance = stop.distanceAlongRoute
+        let distance = cachedDistance(for: stop)
         guard distance.isFinite else { return 0 }
         let tolerance = FuelStopRidingTime.sameStopToleranceMeters
         let previous = fuelRidingAnchorDistances(including: distance)
@@ -1199,13 +1330,13 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     private var remainingRangeAnchors: [CLLocationDistance] {
         var anchors: [CLLocationDistance] = [0]
         anchors.append(contentsOf: gasFillDistances)
-        anchors.append(contentsOf: fuelStops.map(\.distanceAlongRoute))
+        anchors.append(contentsOf: fuelStops.map { cachedDistance(for: $0) })
         return anchors
     }
 
     private func isRecommendedFuelDistance(_ distance: CLLocationDistance) -> Bool {
         fuelStops.contains {
-            abs($0.distanceAlongRoute - distance) <= FuelStopRidingTime.sameStopToleranceMeters
+            abs(cachedDistance(for: $0) - distance) <= FuelStopRidingTime.sameStopToleranceMeters
         }
     }
 
@@ -2281,15 +2412,49 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// Same planner `toggleRecommendedFuelSelection` runs before it inserts
     /// stops. Uses the stations already on the line. No food pairing: the
     /// route replan that follows owns the next search.
-    private func replanFuelSelectionForRecommendedTap() -> Bool {
+    private func replanFuelSelectionForRecommendedTap() async -> Bool {
         guard totalDistanceMeters > fuelRangeMeters, !gasStations.isEmpty else { return false }
-        // The side check measures the polyline once, off the main thread.
-        // Doing it per station on the main thread is what froze Select
-        // recommended on a coast-to-coast line.
-        let travelSide = travelSideStations(from: gasStations)
-        travelSideGasStations = Self.preferredFuelPool(from: gasStations, travelSide: travelSide)
+        // The side check measures the polyline once, off the main actor.
+        // The main actor is free while that runs, so the sheet can show
+        // the spinner and keep taking taps.
+        let stations = gasStations
+        let polylines = legs.map { RouteGeometry.coordinates(of: $0.polyline) }
+        let travelSide = await travelSideStations(stations, polylines: polylines)
+        suppressDistanceRebuild = true
+        travelSideGasStations = Self.preferredFuelPool(from: stations, travelSide: travelSide)
         replanFuelStops(pairingFood: false)
+        suppressDistanceRebuild = false
+        await rebuildDistanceCacheOffMain()
         return true
+    }
+
+    /// Stations on the rider's side of `polylines`. The scan is awaited
+    /// off the main actor; this method does not block the sheet.
+    private func travelSideStations(
+        _ stations: [SuggestedStop],
+        polylines: [[CLLocationCoordinate2D]]
+    ) async -> [SuggestedStop] {
+        guard !stations.isEmpty else { return [] }
+        guard polylines.contains(where: { $0.count > 1 }) else { return stations }
+        let queries = stations.enumerated().map { index, stop in
+            RouteGeometry.StationProjectionQuery(
+                index: index,
+                latitude: stop.coordinate.latitude,
+                longitude: stop.coordinate.longitude
+            )
+        }
+        let indices = await Self.travelSideIndicesOffMainAsync(queries: queries, polylines: polylines)
+        let keep = Set(indices)
+        return stations.enumerated().compactMap { keep.contains($0.offset) ? $0.element : nil }
+    }
+
+    private nonisolated static func travelSideIndicesOffMainAsync(
+        queries: [RouteGeometry.StationProjectionQuery],
+        polylines: [[CLLocationCoordinate2D]]
+    ) async -> [Int] {
+        await Task.detached(priority: .userInitiated) {
+            RouteGeometry.travelSideIndices(queries: queries, polylines: polylines)
+        }.value
     }
 
     /// Stations on the rider's side of the current line. The polyline is
@@ -2363,8 +2528,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
         absorbOnRouteFuel()
         var chosen: [SuggestedStop] = []
-        for stop in stops {
-            let distance = stop.distanceAlongRoute
+        let ordered = stops.sorted { cachedDistance(for: $0) < cachedDistance(for: $1) }
+        for stop in ordered {
+            let distance = cachedDistance(for: stop)
             guard distance.isFinite, withinTank(distance) else { break }
             chosen.append(stop)
             if !alreadyReached(distance) {
@@ -2381,10 +2547,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     private func onRouteGasDistances() -> [CLLocationDistance] {
         var distances = gasFillDistances
         for station in gasStations where isStopOnRoute(station) {
-            distances.append(station.distanceAlongRoute)
+            distances.append(cachedDistance(for: station))
         }
         for stop in fuelStops where isStopOnRoute(stop) {
-            distances.append(stop.distanceAlongRoute)
+            distances.append(cachedDistance(for: stop))
         }
         return distances
     }
@@ -2661,11 +2827,13 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     /// Distances along the current route of rider-added gas waypoints, each
     /// treated as a fill so later recommendations start from that point.
+    /// The values were measured when the waypoints or the route changed.
     private var gasFillDistances: [CLLocationDistance] {
-        guard !legs.isEmpty else { return [] }
-        return waypoints
-            .filter(\.isGasFill)
-            .map { RouteGeometry.distanceAlongRoute(of: $0.coordinate, along: legs) }
+        guard !legs.isEmpty || plannedCorridor.contains(where: { $0.count > 1 }) else { return [] }
+        return waypoints.compactMap { waypoint in
+            guard waypoint.isGasFill else { return nil }
+            return distanceAlongRouteByID[waypoint.id] ?? 0
+        }
     }
 
     /// Whether `date` falls in a typical meal window (breakfast / lunch / dinner).
@@ -3111,12 +3279,192 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     // MARK: - Suggestions
 
-    /// Meters from the ride start for one suggestion row. The stop is
-    /// projected onto the published route polyline, so a stored 0 still
-    /// shows the real mile mark. The stored distance is kept only when
-    /// the route has no measurable length.
+    /// Meters from the ride start for one suggestion row. This is the cached
+    /// measurement. Projecting here walked the whole polyline once per row.
     func distanceFromStart(of stop: SuggestedStop) -> CLLocationDistance {
-        Self.distanceFromStart(of: stop, alongPolylines: suggestionRoutePolylines)
+        cachedDistance(for: stop)
+    }
+
+    /// Cached mile mark. A miss uses the distance stored on the stop, which
+    /// is what search already measured. It does not scan the polyline.
+    private func cachedDistance(for stop: SuggestedStop) -> CLLocationDistance {
+        distanceAlongRouteByID[stop.id] ?? stop.distanceAlongRoute
+    }
+
+    /// Measures every current station and waypoint once, off the main thread.
+    /// View bodies then read `distanceAlongRouteByID`.
+    private func rebuildDistanceCache() {
+        guard !suppressDistanceRebuild else { return }
+        distanceAlongRouteByID = Self.projectDistances(
+            queries: distanceQueries(),
+            on: measuredRoute(for: suggestionRoutePolylines)
+        )
+    }
+
+    /// Same measurement as `rebuildDistanceCache`, awaited so the main actor
+    /// can draw the fuel spinner while a long polyline is projected.
+    private func rebuildDistanceCacheOffMain() async {
+        let queries = distanceQueries()
+        let polylines = suggestionRoutePolylines
+        let route = await measuredRouteOffMain(for: polylines)
+        distanceAlongRouteByID = await Self.projectDistancesOffMain(queries: queries, on: route)
+    }
+
+    private func distanceQueries() -> [AlongRouteQuery] {
+        var queries: [AlongRouteQuery] = []
+        var seen = Set<UUID>()
+        func append(id: UUID, coordinate: CLLocationCoordinate2D, known: CLLocationDistance) {
+            guard seen.insert(id).inserted else { return }
+            queries.append(AlongRouteQuery(
+                id: id,
+                latitude: coordinate.latitude,
+                longitude: coordinate.longitude,
+                known: known
+            ))
+        }
+        for stop in gasStations {
+            append(id: stop.id, coordinate: stop.coordinate, known: stop.distanceAlongRoute)
+        }
+        for stop in travelSideGasStations {
+            append(id: stop.id, coordinate: stop.coordinate, known: stop.distanceAlongRoute)
+        }
+        for stop in fuelStops {
+            append(id: stop.id, coordinate: stop.coordinate, known: stop.distanceAlongRoute)
+        }
+        for entry in fuelPlanEntries {
+            switch entry {
+            case .recommended(let stop), .pastRange(let stop):
+                append(id: stop.id, coordinate: stop.coordinate, known: stop.distanceAlongRoute)
+            case .gap:
+                break
+            }
+        }
+        for stop in suggestedStops {
+            append(id: stop.id, coordinate: stop.coordinate, known: stop.distanceAlongRoute)
+        }
+        for stop in rideHighlights {
+            append(id: stop.id, coordinate: stop.coordinate, known: stop.distanceAlongRoute)
+        }
+        for stop in bufferedGasStops {
+            append(id: stop.id, coordinate: stop.coordinate, known: stop.distanceAlongRoute)
+        }
+        for waypoint in waypoints {
+            append(id: waypoint.id, coordinate: waypoint.coordinate, known: 0)
+        }
+        return queries
+    }
+
+    /// The polyline is measured once per route change. Later station edits
+    /// only project onto that measurement.
+    private func measuredRoute(
+        for polylines: [[CLLocationCoordinate2D]]
+    ) -> RouteGeometry.MeasuredRoute? {
+        guard polylines.contains(where: { $0.count > 1 }) else {
+            cachedMeasuredRoute = nil
+            measuredRouteGeneration = routeGeometryGeneration
+            return nil
+        }
+        if measuredRouteGeneration == routeGeometryGeneration, let cachedMeasuredRoute {
+            return cachedMeasuredRoute
+        }
+        let route = Self.measureRouteOffMain(polylines)
+        cachedMeasuredRoute = route
+        measuredRouteGeneration = routeGeometryGeneration
+        return route
+    }
+
+    /// Cache hit stays on the caller. A miss measures off the main actor
+    /// and suspends, so the sheet can draw while the polyline is walked.
+    private func measuredRouteOffMain(
+        for polylines: [[CLLocationCoordinate2D]]
+    ) async -> RouteGeometry.MeasuredRoute? {
+        guard polylines.contains(where: { $0.count > 1 }) else {
+            cachedMeasuredRoute = nil
+            measuredRouteGeneration = routeGeometryGeneration
+            return nil
+        }
+        if measuredRouteGeneration == routeGeometryGeneration, let cachedMeasuredRoute {
+            return cachedMeasuredRoute
+        }
+        let route = await Self.measureRouteAsync(polylines)
+        cachedMeasuredRoute = route
+        measuredRouteGeneration = routeGeometryGeneration
+        return route
+    }
+
+    private nonisolated static func measureRouteAsync(
+        _ polylines: [[CLLocationCoordinate2D]]
+    ) async -> RouteGeometry.MeasuredRoute {
+        await Task.detached(priority: .userInitiated) {
+            RouteGeometry.MeasuredRoute(polylines: polylines)
+        }.value
+    }
+
+    /// Vertex distances for one polyline. Not main-actor isolated.
+    private nonisolated static func measureRouteOffMain(
+        _ polylines: [[CLLocationCoordinate2D]]
+    ) -> RouteGeometry.MeasuredRoute {
+        DispatchQueue.global(qos: .userInitiated).sync { @Sendable in
+            RouteGeometry.MeasuredRoute(polylines: polylines)
+        }
+    }
+
+    /// One projection per id against a route that was already measured.
+    /// A missing route keeps the distance stored on the stop.
+    private nonisolated static func projectDistances(
+        queries: [AlongRouteQuery],
+        on route: RouteGeometry.MeasuredRoute?
+    ) -> [UUID: CLLocationDistance] {
+        guard !queries.isEmpty, route != nil else {
+            return knownDistances(queries)
+        }
+        return DispatchQueue.global(qos: .userInitiated).sync { @Sendable in
+            Self.projectedDistances(queries: queries, on: route)
+        }
+    }
+
+    /// Projection that suspends the main actor instead of blocking it.
+    private nonisolated static func projectDistancesOffMain(
+        queries: [AlongRouteQuery],
+        on route: RouteGeometry.MeasuredRoute?
+    ) async -> [UUID: CLLocationDistance] {
+        guard !queries.isEmpty, route != nil else {
+            return knownDistances(queries)
+        }
+        return await Task.detached(priority: .userInitiated) {
+            Self.projectedDistances(queries: queries, on: route)
+        }.value
+    }
+
+    private nonisolated static func knownDistances(
+        _ queries: [AlongRouteQuery]
+    ) -> [UUID: CLLocationDistance] {
+        var known: [UUID: CLLocationDistance] = [:]
+        for query in queries {
+            known[query.id] = query.known
+        }
+        return known
+    }
+
+    private nonisolated static func projectedDistances(
+        queries: [AlongRouteQuery],
+        on route: RouteGeometry.MeasuredRoute?
+    ) -> [UUID: CLLocationDistance] {
+        guard let route else { return knownDistances(queries) }
+        var measured: [UUID: CLLocationDistance] = [:]
+        measured.reserveCapacity(queries.count)
+        for query in queries {
+            let coordinate = CLLocationCoordinate2D(
+                latitude: query.latitude,
+                longitude: query.longitude
+            )
+            let projected = RouteGeometry.distanceAlongRoute(of: coordinate, on: route)
+            measured[query.id] = RouteGeometry.preferredDistanceAlongRoute(
+                projected: projected,
+                known: query.known
+            )
+        }
+        return measured
     }
 
     nonisolated static func distanceFromStart(
