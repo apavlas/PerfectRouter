@@ -706,4 +706,95 @@ final class StopSelectionTests: XCTestCase {
 
         XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "Stranded", "End"])
     }
+
+    /// 200 mi tank, so the reserve is 170. Select recommended takes the
+    /// station inside that reserve when one exists, and does not stretch
+    /// the leg out to a farther pump that is only inside the tank. When
+    /// the reserve window is empty, the in-tank fallback is still inserted
+    /// and the route list says "No fuel within range".
+    func testSelectRecommendedKeepsTheReserveCapAndFlagsAStretchPastIt() {
+        let mile = AppSettings.metersPerMile
+        let totalMiles = 1_000.0
+        func coordinate(atMiles miles: Double) -> CLLocationCoordinate2D {
+            CLLocationCoordinate2D(
+                latitude: 35.0 + miles * mile / 111_320,
+                longitude: -80.0
+            )
+        }
+        func station(_ name: String, miles: Double) -> SuggestedStop {
+            SuggestedStop(
+                name: name,
+                coordinate: coordinate(atMiles: miles),
+                category: .gas,
+                distanceAlongRoute: miles * mile,
+                detourMeters: 0
+            )
+        }
+        func route(stations: [SuggestedStop]) -> RoutePlannerViewModel {
+            let line = [0, 165, 196, totalMiles].map { coordinate(atMiles: $0) }
+            let viewModel = RoutePlannerViewModel()
+            viewModel.fuelRangeMeters = 200 * mile
+            viewModel.waypoints = [
+                Waypoint(name: "Start", coordinate: line[0]),
+                Waypoint(name: "End", coordinate: line[line.count - 1]),
+            ]
+            viewModel.plannedCorridor = [line]
+            viewModel.legs = [
+                StubMKRoute(
+                    name: "Start to End",
+                    coordinates: line,
+                    distance: totalMiles * mile,
+                    expectedTravelTime: (totalMiles / 55) * 3_600,
+                    hasHighways: true
+                )
+            ]
+            viewModel.gasStations = stations
+            return viewModel
+        }
+        func publish(legs hops: [Double], on viewModel: RoutePlannerViewModel) {
+            var cursor = 0.0
+            viewModel.legs = hops.map { hop in
+                let start = cursor
+                cursor += hop
+                return StubMKRoute(
+                    name: "Leg",
+                    coordinates: [
+                        coordinate(atMiles: start),
+                        coordinate(atMiles: cursor),
+                    ],
+                    distance: hop * mile,
+                    expectedTravelTime: (hop / 55) * 3_600,
+                    hasHighways: true
+                )
+            }
+        }
+
+        let capped = route(stations: [
+            station("Inside", miles: 165),
+            station("Farther", miles: 196),
+        ])
+        capped.toggleRecommendedFuelSelection()
+        XCTAssertEqual(capped.waypoints.map(\.name), ["Start", "Inside", "End"])
+        publish(legs: [165, totalMiles - 165], on: capped)
+        XCTAssertFalse(capped.waypointLacksFuelWithinReserve(at: 1))
+        XCTAssertFalse(capped.waypointRangeNotices(at: 1).contains("No fuel within range"))
+
+        XCTAssertFalse(RoutePlannerViewModel.legExceedsFuelReserve(165 * mile, tank: 200 * mile))
+        XCTAssertFalse(RoutePlannerViewModel.legExceedsFuelReserve(170 * mile, tank: 200 * mile))
+        XCTAssertTrue(RoutePlannerViewModel.legExceedsFuelReserve(183 * mile, tank: 200 * mile))
+        XCTAssertTrue(RoutePlannerViewModel.legExceedsFuelReserve(196 * mile, tank: 200 * mile))
+
+        let dry = route(stations: [station("Only", miles: 196)])
+        dry.toggleRecommendedFuelSelection()
+        XCTAssertEqual(dry.waypoints.map(\.name), ["Start", "Only", "End"])
+        publish(legs: [196, totalMiles - 196], on: dry)
+        XCTAssertEqual(
+            dry.waypointRangeNotices(at: 1),
+            ["No fuel within range"]
+        )
+        XCTAssertTrue(dry.waypointLacksFuelWithinReserve(at: 1))
+        XCTAssertTrue(dry.waypointIsBeyondRemainingRange(at: 2))
+        XCTAssertFalse(dry.waypointRangeNotices(at: 2).contains("No fuel within range"))
+        XCTAssertEqual(RoutePlannerViewModel.noFuelWithinRangeNotice, "No fuel within range")
+    }
 }

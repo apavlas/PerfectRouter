@@ -109,6 +109,43 @@ final class RideHighlightsTests: XCTestCase {
         XCTAssertEqual(picked.map(\.name), ["Early", "Late"])
     }
 
+    /// I-40 passes just north of Cadillac Ranch. The ranch is a highlight
+    /// with its description already set. A Charlotte–Los Angeles chord
+    /// misses it by tens of miles and does not invent the stop.
+    func testCadillacRanchIsAHighlightBesideAmarillo() {
+        let ranch = PlaceDescriptionReader.cadillacRanchCoordinate
+        let interstate = [
+            CLLocationCoordinate2D(latitude: 35.192, longitude: -101.70),
+            CLLocationCoordinate2D(latitude: 35.192, longitude: -102.20),
+        ]
+        let total = RouteGeometry.length(of: interstate)
+        let found = RoutePlannerViewModel.landmarkHighlights(
+            alongPolylines: [interstate],
+            totalDistance: total
+        )
+        XCTAssertEqual(found.map(\.name), ["Cadillac Ranch"])
+        XCTAssertEqual(
+            found.first?.placeDescription,
+            "Ten vintage Cadillacs stand buried nose-down in a wheat field west of Amarillo."
+        )
+        XCTAssertFalse(found.first?.placeDescription?.localizedCaseInsensitiveContains("followers") ?? true)
+        XCTAssertLessThanOrEqual(found.first?.detourMeters ?? 9_000, 8_000)
+
+        let picked = RoutePlannerViewModel.selectHighlights(from: found, totalDistance: total)
+        XCTAssertEqual(picked.map(\.name), ["Cadillac Ranch"])
+        XCTAssertEqual(picked.first?.placeDescription, found.first?.placeDescription)
+
+        let chord = [
+            CLLocationCoordinate2D(latitude: 35.2271, longitude: -80.8431),
+            CLLocationCoordinate2D(latitude: 34.0522, longitude: -118.2437),
+        ]
+        let missed = RoutePlannerViewModel.landmarkHighlights(
+            alongPolylines: [chord],
+            totalDistance: RouteGeometry.length(of: chord)
+        )
+        XCTAssertTrue(missed.isEmpty)
+    }
+
     func testZeroDistanceRouteYieldsNothing() {
         let picked = RoutePlannerViewModel.selectHighlights(
             from: [sight("Anything", along: 0)], totalDistance: 0

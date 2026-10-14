@@ -214,36 +214,27 @@ struct WaypointsSection: View {
     /// so a replan never leaves an empty stack in the row.
     @ViewBuilder
     private func waypointRow(index: Int, waypoint: Waypoint) -> some View {
-        let pastRange = viewModel.waypointIsBeyondRemainingRange(at: index)
+        let notices = viewModel.waypointRangeNotices(at: index)
+        let pastRange = notices.contains("Past your range")
+        let noFuel = notices.contains(RoutePlannerViewModel.noFuelWithinRangeNotice)
         Label {
             if let caption = viewModel.waypointRidingCaption(at: index) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(waypoint.name)
-                        .multilineTextAlignment(.leading)
-                        .lineLimit(4)
-                        .accessibilityIdentifier(AccessibilityID.waypoint(waypoint.name))
+                    waypointName(waypoint)
                     Text(caption)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.leading)
                         .lineLimit(4)
-                    if pastRange {
-                        PastYourRangeLabel()
-                    }
+                    waypointRangeCaptions(pastRange: pastRange, noFuel: noFuel)
                 }
-            } else if pastRange {
+            } else if pastRange || noFuel {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(waypoint.name)
-                        .multilineTextAlignment(.leading)
-                        .lineLimit(4)
-                        .accessibilityIdentifier(AccessibilityID.waypoint(waypoint.name))
-                    PastYourRangeLabel()
+                    waypointName(waypoint)
+                    waypointRangeCaptions(pastRange: pastRange, noFuel: noFuel)
                 }
             } else {
-                Text(waypoint.name)
-                    .multilineTextAlignment(.leading)
-                    .lineLimit(4)
-                    .accessibilityIdentifier(AccessibilityID.waypoint(waypoint.name))
+                waypointName(waypoint)
             }
         } icon: {
             Image(systemName: "mappin.circle.fill")
@@ -252,14 +243,29 @@ struct WaypointsSection: View {
         .id(waypoint.id)
     }
 
+    private func waypointName(_ waypoint: Waypoint) -> some View {
+        Text(waypoint.name)
+            .multilineTextAlignment(.leading)
+            .lineLimit(4)
+            .accessibilityIdentifier(AccessibilityID.waypoint(waypoint.name))
+    }
+
+    @ViewBuilder
+    private func waypointRangeCaptions(pastRange: Bool, noFuel: Bool) -> some View {
+        if pastRange {
+            PastYourRangeLabel()
+        }
+        if noFuel {
+            NoFuelWithinRangeLabel()
+        }
+    }
+
     private func waypointAccessibilityLabel(index: Int, waypoint: Waypoint) -> String {
         var parts = [waypoint.name]
         if let caption = viewModel.waypointRidingCaption(at: index) {
             parts.append(caption)
         }
-        if viewModel.waypointIsBeyondRemainingRange(at: index) {
-            parts.append("Past your range")
-        }
+        parts.append(contentsOf: viewModel.waypointRangeNotices(at: index))
         return parts.joined(separator: ", ")
     }
 }
@@ -268,6 +274,16 @@ struct WaypointsSection: View {
 struct PastYourRangeLabel: View {
     var body: some View {
         Text("Past your range")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.orange)
+    }
+}
+
+/// Orange caption when the published leg is longer than the fuel reserve
+/// because no station sat inside it. The rider sees this before leaving.
+struct NoFuelWithinRangeLabel: View {
+    var body: some View {
+        Text(RoutePlannerViewModel.noFuelWithinRangeNotice)
             .font(.caption2.weight(.semibold))
             .foregroundStyle(.orange)
     }

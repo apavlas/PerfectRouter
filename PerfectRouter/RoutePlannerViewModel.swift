@@ -1150,6 +1150,45 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         return isBeyondRemainingRange(distanceAlongRoute: distance)
     }
 
+    /// Route-list caption when the published leg is longer than the reserve
+    /// (0.85 × tank). Select recommended still inserts the farthest station
+    /// inside the tank when nothing sits inside the reserve; this is the
+    /// line the rider sees before leaving. A leg already marked past the
+    /// tank keeps that caption alone.
+    static let noFuelWithinRangeNotice = "No fuel within range"
+
+    /// True when this row's published leg is longer than the reserve and the
+    /// row is not already marked past the tank. Legs that do not match the
+    /// waypoint list (a replan still in flight) are not labeled.
+    func waypointLacksFuelWithinReserve(at index: Int) -> Bool {
+        guard index > 0, index <= legs.count, legs.count + 1 == waypoints.count else { return false }
+        guard !waypointIsBeyondRemainingRange(at: index) else { return false }
+        return Self.legExceedsFuelReserve(legs[index - 1].distance, tank: fuelRangeMeters)
+    }
+
+    /// Captions the route list draws under the stop name, in order.
+    func waypointRangeNotices(at index: Int) -> [String] {
+        var notices: [String] = []
+        if waypointIsBeyondRemainingRange(at: index) {
+            notices.append("Past your range")
+        }
+        if waypointLacksFuelWithinReserve(at: index) {
+            notices.append(Self.noFuelWithinRangeNotice)
+        }
+        return notices
+    }
+
+    /// A ridden leg longer than `tank × safetyFactor`. The reserve is 170
+    /// miles on a 200-mile tank. A leg of exactly that length still fits.
+    nonisolated static func legExceedsFuelReserve(
+        _ leg: CLLocationDistance,
+        tank: CLLocationDistance,
+        safetyFactor: Double = fuelSafetyFactor
+    ) -> Bool {
+        guard leg.isFinite, tank > 0, safetyFactor > 0 else { return false }
+        return leg > tank * safetyFactor
+    }
+
     private var remainingRangeAnchors: [CLLocationDistance] {
         var anchors: [CLLocationDistance] = [0]
         anchors.append(contentsOf: gasFillDistances)
@@ -2885,9 +2924,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         // category. Otherwise sample the whole ride, paced with the fuel
         // search. Half of the old 25-mile walk ran after a throttled gas
         // grid and came back empty, so the section never mounted.
-        let candidates: [SuggestedStop]
+        let searched: [SuggestedStop]
         if selectedCategory == .attraction, !suggestedStops.isEmpty {
-            candidates = suggestedStops
+            searched = suggestedStops
         } else {
             let found = await searchStops(
                 category: .attraction,
@@ -2896,8 +2935,22 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 corridorRadiusMeters: 8_000,
                 generation: generation
             )
-            guard !Task.isCancelled, found.status == .completed else { return }
-            candidates = found.stops
+            // A cancelled highlight pass publishes nothing. A throttled or
+            // failed lookup is not an empty ride: landmarks on the line
+            // still appear.
+            guard !Task.isCancelled, generation == highlightGeneration else { return }
+            searched = found.status == .completed ? found.stops : []
+        }
+
+        let landmarks = Self.landmarkHighlights(
+            alongPolylines: suggestionRoutePolylines,
+            totalDistance: totalDistanceMeters
+        )
+        let candidates = searched + landmarks.filter { landmark in
+            !searched.contains { candidate in
+                candidate.name.compare(landmark.name, options: .caseInsensitive) == .orderedSame
+                    || Self.sameCoordinate(candidate.coordinate, landmark.coordinate)
+            }
         }
 
         let picked = applyingKnownPlaceDescriptions(Self.selectHighlights(
@@ -2911,13 +2964,45 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     }
 
     /// Copies Apple Maps prose onto scenic and sights stops before the row
-    /// is shown. Places with no prose stay nil — the card then shows nothing.
+    /// is shown. When that prose is missing or only engagement stats, a
+    /// landmark with a known sentence (Cadillac Ranch) still gets it.
+    /// Every other place with no prose stays nil.
     private func applyingKnownPlaceDescriptions(_ stops: [SuggestedStop]) -> [SuggestedStop] {
         stops.map { stop in
             guard stop.category.showsPlaceDescription, stop.placeDescription == nil else { return stop }
-            guard let text = PlaceDescriptionReader.appleMapsText(from: stop.mapItem) else { return stop }
-            return stop.withPlaceDescription(text)
+            if let text = PlaceDescriptionReader.appleMapsText(from: stop.mapItem) {
+                return stop.withPlaceDescription(text)
+            }
+            if let known = PlaceDescriptionReader.knownPlaceDescription(name: stop.name) {
+                return stop.withPlaceDescription(known)
+            }
+            return stop
         }
+    }
+
+    /// Cadillac Ranch sits just south of I-40 west of Amarillo. A dozen
+    /// highlight samples on a coast-to-coast ride miss it unless one lands
+    /// nearby. When the published line passes within the sights corridor,
+    /// the ranch is a candidate and already carries its description.
+    nonisolated static func landmarkHighlights(
+        alongPolylines polylines: [[CLLocationCoordinate2D]],
+        totalDistance: CLLocationDistance,
+        corridorMeters: CLLocationDistance = 8_000
+    ) -> [SuggestedStop] {
+        guard totalDistance > 0, polylinesAreMeasurable(polylines) else { return [] }
+        let coordinate = PlaceDescriptionReader.cadillacRanchCoordinate
+        let detour = RouteGeometry.distanceFromRoute(of: coordinate, alongPolylines: polylines)
+        guard detour.isFinite, detour <= corridorMeters else { return [] }
+        let along = RouteGeometry.distanceAlongRoute(of: coordinate, alongPolylines: polylines)
+        guard along > 1, along < totalDistance - 1 else { return [] }
+        let stop = SuggestedStop(
+            name: "Cadillac Ranch",
+            coordinate: coordinate,
+            category: .attraction,
+            distanceAlongRoute: along,
+            detourMeters: detour
+        )
+        return [stop.withPlaceDescription(PlaceDescriptionReader.cadillacRanchDescription)]
     }
 
     /// Fills in a place's own page description when Apple Maps had no prose.

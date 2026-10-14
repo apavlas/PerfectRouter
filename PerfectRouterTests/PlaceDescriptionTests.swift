@@ -256,6 +256,57 @@ final class PlaceDescriptionTests: XCTestCase {
         )
     }
 
+    /// A follower count used to reject the whole string, so every place
+    /// whose subtitle mentioned one lost its description. The stats
+    /// sentence goes; the prose stays. Cadillac Ranch, whose MapKit text
+    /// is only the name and those stats, still shows its known sentence.
+    func testRealDescriptionSurvivesSocialEngagementStats() {
+        let prose = "Ten vintage Cadillacs stand buried nose-down in a wheat field."
+        let mixed = "\(prose) 38,816 followers · 367 talking about this · 77,990 were here."
+        XCTAssertEqual(
+            PlaceDescriptionReader.acceptedAppleMapsText(
+                mixed,
+                name: "Cadillac Ranch",
+                rejectIfEqual: []
+            ),
+            prose
+        )
+        XCTAssertEqual(PlaceDescriptionReader.acceptedPlaceText(mixed, name: "Cadillac Ranch"), prose)
+        XCTAssertEqual(PlaceDescriptionDisplay.text(for: mixed), prose)
+
+        let mentionsFollowers = "The buried cars draw followers of roadside art from across the country."
+        XCTAssertEqual(PlaceDescriptionDisplay.text(for: mentionsFollowers), mentionsFollowers)
+        XCTAssertEqual(
+            PlaceDescriptionReader.acceptedPlaceText(mentionsFollowers, name: "Cadillac Ranch"),
+            mentionsFollowers
+        )
+    }
+
+    func testCadillacRanchShowsACleanDescription() {
+        let known = PlaceDescriptionReader.knownPlaceDescription(name: "Cadillac Ranch")
+        XCTAssertEqual(known, PlaceDescriptionReader.cadillacRanchDescription)
+        XCTAssertEqual(
+            known,
+            "Ten vintage Cadillacs stand buried nose-down in a wheat field west of Amarillo."
+        )
+        XCTAssertFalse(known?.localizedCaseInsensitiveContains("followers") ?? true)
+        XCTAssertNil(PlaceDescriptionReader.knownPlaceDescription(name: "Casey's"))
+
+        let boilerplate = "Cadillac Ranch, Amarillo. 38,816 followers · 367 talking about this · 77,990 were here."
+        let stop = SuggestedStop(
+            name: "Cadillac Ranch",
+            coordinate: PlaceDescriptionReader.cadillacRanchCoordinate,
+            category: .attraction,
+            distanceAlongRoute: 100_000,
+            detourMeters: 400
+        )
+        XCTAssertNil(stop.withPlaceDescription(boilerplate).placeDescription)
+        XCTAssertEqual(
+            stop.withPlaceDescription(PlaceDescriptionReader.cadillacRanchDescription).placeDescription,
+            PlaceDescriptionReader.cadillacRanchDescription
+        )
+    }
+
     func testPlacePageDescriptionIsUsedWhenAppleMapsHasNone() async {
         let query = placeQuery(url: "https://tallulahgorge.example/visit")
         let html = """

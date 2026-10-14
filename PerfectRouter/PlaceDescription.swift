@@ -8,7 +8,9 @@ import MapKit
 /// Apple Maps place objects expose a name, address, category, phone, and URL.
 /// A card shows `MKPlacemark.subtitle` only when it is already a sentence and
 /// not an address, a phone number, or a bare category. Otherwise the place's
-/// own page is read. Nothing is written to fill a gap.
+/// own page is read. Engagement-stat sentences are removed; the prose around
+/// them stays. Cadillac Ranch is the one landmark with a known sentence when
+/// the published text is only a name or those stats.
 enum PlaceDescriptionDisplay {
     static let collapsedLineLimit = 2
     static let rowSentenceLimit = 2
@@ -18,8 +20,11 @@ enum PlaceDescriptionDisplay {
     /// input and a shorter source stay nil or whole.
     static func text(for description: String?) -> String? {
         guard let text = PlaceDescriptionReader.normalize(description) else { return nil }
-        if PlaceDescriptionReader.isSocialEngagementBoilerplate(text) { return nil }
-        return PlaceDescriptionReader.firstSentences(in: text, limit: rowSentenceLimit)
+        guard let prose = PlaceDescriptionReader.droppingSocialEngagementSentences(in: text) else {
+            return nil
+        }
+        if PlaceDescriptionReader.isNameAndLocality(prose) { return nil }
+        return PlaceDescriptionReader.firstSentences(in: prose, limit: rowSentenceLimit)
     }
 
     /// Same string as `text(for:)`. The row applies `collapsedLineLimit` on top.
@@ -107,16 +112,17 @@ enum PlaceDescriptionReader {
         if let raw, isOnlyPhoneNumber(raw) { return nil }
         guard let text = normalize(raw) else { return nil }
         if isOnlyPhoneNumber(text) || isBareCategory(text) || isOnlyAddress(text) { return nil }
-        if isSocialEngagementBoilerplate(text) { return nil }
-        if let name, same(text, name) { return nil }
+        guard let prose = droppingSocialEngagementSentences(in: text) else { return nil }
+        if let name, same(prose, name) { return nil }
+        if isNameAndLocality(prose, name: name) { return nil }
         if rejects.contains(where: { candidate in
             guard let normalized = normalize(candidate) else { return false }
-            return same(text, normalized)
+            return same(prose, normalized)
         }) {
             return nil
         }
-        guard isAppleMapsProse(text) else { return nil }
-        return firstSentences(in: text, limit: PlaceDescriptionDisplay.rowSentenceLimit)
+        guard isAppleMapsProse(prose) else { return nil }
+        return firstSentences(in: prose, limit: PlaceDescriptionDisplay.rowSentenceLimit)
     }
 
     /// The place's own description fields, in the order the page publishes
@@ -174,9 +180,10 @@ enum PlaceDescriptionReader {
     /// three words or only the place name.
     static func acceptedPlaceText(_ raw: String?, name: String?) -> String? {
         guard let text = normalize(raw) else { return nil }
-        if isSocialEngagementBoilerplate(text) { return nil }
-        if let name, same(text, name) { return nil }
-        let kept = sentences(in: text).filter { !isPureCallToAction($0) }
+        guard let prose = droppingSocialEngagementSentences(in: text) else { return nil }
+        if let name, same(prose, name) { return nil }
+        if isNameAndLocality(prose, name: name) { return nil }
+        let kept = sentences(in: prose).filter { !isPureCallToAction($0) }
         guard !kept.isEmpty else { return nil }
         let capped = firstSentences(
             in: kept.joined(separator: " "),
@@ -187,16 +194,94 @@ enum PlaceDescriptionReader {
         return capped
     }
 
-    /// Facebook-style place stats are not a description. "38,816 followers ·
-    /// 367 talking about this · 77,990 were here" is engagement boilerplate.
+    /// One sentence of Facebook-style place stats is not a description.
+    /// "38,816 followers · 367 talking about this · 77,990 were here" is
+    /// dropped. Two of those phrases, or one phrase with almost no other
+    /// words, marks the sentence. A real sentence that merely says
+    /// "followers" stays.
     static func isSocialEngagementBoilerplate(_ text: String) -> Bool {
         let key = matchKey(text)
         guard !key.isEmpty else { return false }
-        if key.contains("talking about this") { return true }
-        if key.contains("were here") { return true }
-        if key.contains("followers") { return true }
-        return false
+        let markers = ["talking about this", "were here", "followers"]
+        let hits = markers.reduce(into: 0) { count, marker in
+            if key.contains(marker) { count += 1 }
+        }
+        if hits >= 2 { return true }
+        guard hits == 1 else { return false }
+        var remainder = key
+        for marker in markers {
+            remainder = remainder.replacingOccurrences(of: marker, with: " ")
+        }
+        let words = remainder.split(whereSeparator: \.isWhitespace).filter { token in
+            token.contains { $0.isLetter }
+        }
+        return words.count < 3
     }
+
+    /// Drops engagement-stat sentences and keeps the prose around them.
+    /// Nil when every sentence was stats.
+    static func droppingSocialEngagementSentences(in text: String) -> String? {
+        let parts = sentences(in: text)
+        guard !parts.isEmpty else { return nil }
+        let kept = parts.filter { !isSocialEngagementBoilerplate($0) }
+        guard !kept.isEmpty else { return nil }
+        if kept.count == parts.count { return text }
+        return normalize(kept.joined(separator: " "))
+    }
+
+    /// "Cadillac Ranch, Amarillo." is a place label, not a description.
+    /// A sentence with a verb, or with ordinary prose words, is kept.
+    /// When `name` is known, the name plus at most two locality words is
+    /// the same kind of label.
+    static func isNameAndLocality(_ text: String, name: String? = nil) -> Bool {
+        let parts = sentences(in: text)
+        guard parts.count == 1 else { return false }
+        let sentence = parts[0]
+        if let name {
+            let nameKey = matchKey(name)
+            let key = matchKey(sentence)
+            if !nameKey.isEmpty, key == nameKey { return true }
+            if !nameKey.isEmpty, key.hasPrefix(nameKey + " ") {
+                let rest = key.dropFirst(nameKey.count)
+                    .split(whereSeparator: \.isWhitespace)
+                    .map(String.init)
+                if rest.count <= 2,
+                   !rest.contains(where: { proseVerbs.contains($0) || placeLabelFunctionWords.contains($0) }) {
+                    return true
+                }
+            }
+        }
+        guard sentence.contains(",") else { return false }
+        let tokens = addressTokens(in: sentence)
+        guard tokens.count >= 2, tokens.count <= 6 else { return false }
+        if tokens.contains(where: { proseVerbs.contains($0) || placeLabelFunctionWords.contains($0) }) {
+            return false
+        }
+        return true
+    }
+
+    /// Cadillac Ranch, just south of I-40 west of Amarillo. MapKit's
+    /// subtitle for the ranch is a name and a follower count. The card
+    /// shows this sentence instead.
+    static let cadillacRanchDescription =
+        "Ten vintage Cadillacs stand buried nose-down in a wheat field west of Amarillo."
+
+    static let cadillacRanchCoordinate = CLLocationCoordinate2D(
+        latitude: 35.1872,
+        longitude: -101.9870
+    )
+
+    /// The known sentence for a landmark, or nil for every other place.
+    static func knownPlaceDescription(name: String?) -> String? {
+        guard let name else { return nil }
+        guard matchKey(name) == "cadillac ranch" else { return nil }
+        return cadillacRanchDescription
+    }
+
+    private static let placeLabelFunctionWords: Set<String> = [
+        "a", "an", "the", "of", "on", "in", "at", "for", "with", "and", "or",
+        "to", "from", "by", "near",
+    ]
 
     /// MapKit subtitles need a sentence ending as well as three words, so a
     /// street address or a category label is not treated as prose.
