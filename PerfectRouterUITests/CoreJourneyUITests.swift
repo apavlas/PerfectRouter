@@ -300,13 +300,10 @@ final class CoreJourneyUITests: XCTestCase {
         expandPlanningSheet(app)
         let field = waitForPlaceSearch(in: app)
         scrollUntilHittable(field, in: app)
-        // The first tap can land while the iPhone sheet is still settling.
-        // typeText then fails because no keyboard is up yet.
-        field.tap()
-        if !app.keyboards.firstMatch.waitForExistence(timeout: 5) {
-            field.tap()
-            _ = app.keyboards.firstMatch.waitForExistence(timeout: 5)
-        }
+        // A field tucked under the sheet's navigation bar is still "hittable",
+        // but typeText's tap lands on the bar and the field never takes focus.
+        scrollSearchFieldBelowChrome(field, in: app)
+        focusPlaceSearch(field, in: app)
         field.typeText(name)
         let result = app.buttons["searchResult.\(name)"]
         XCTAssertTrue(
@@ -317,6 +314,38 @@ final class CoreJourneyUITests: XCTestCase {
         result.tap()
         dismissKeyboard(app)
         expandPlanningSheet(app)
+    }
+
+    /// `isHittable` stays true while the field still sits under the sheet
+    /// bar. `typeText` taps that overlap and the field never becomes first
+    /// responder, which is the iPhone "no keyboard focus" failure.
+    private func scrollSearchFieldBelowChrome(_ field: XCUIElement, in app: XCUIApplication) {
+        let bar = app.navigationBars["Plan Ride"]
+        let chromeBottom = (bar.exists ? bar.frame.maxY : 0) + 28
+        let lowerBand = app.frame.height * 0.5
+        var nudges = 0
+        while nudges < 8 {
+            guard field.exists, field.frame.height > 1 else { return }
+            let midY = field.frame.midY
+            if midY > chromeBottom, midY < lowerBand { return }
+            nudgePlanningList(in: app, up: midY >= lowerBand)
+            nudges += 1
+        }
+    }
+
+    /// Tap the text itself, then wait for the keyboard that tap summoned.
+    /// A keyboard left up by the previous search does not count.
+    private func focusPlaceSearch(_ field: XCUIElement, in app: XCUIApplication) {
+        dismissKeyboard(app)
+        let point = field.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.5))
+        point.tap()
+        if app.keyboards.firstMatch.waitForExistence(timeout: 3) {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+            return
+        }
+        point.tap()
+        _ = app.keyboards.firstMatch.waitForExistence(timeout: 3)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.25))
     }
 
     /// The planner uses a text field. iPhone exposes it as a text field;
@@ -942,11 +971,13 @@ final class CoreJourneyUITests: XCTestCase {
                 let element = identified(id, in: app)
                 if element.exists { return element }
             }
-            if down >= 14 {
+            // A half-list swipe jumps over the highlight rows. They are short,
+            // and the poll only sees the list between drags.
+            if down >= 40 {
                 scrollToTop(app)
                 down = 0
             } else {
-                swipePlanningList(in: app, up: true)
+                nudgePlanningList(in: app, up: true)
                 down += 1
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.12))
@@ -1088,12 +1119,15 @@ final class CoreJourneyUITests: XCTestCase {
         let hide = app.buttons["Hide keyboard"]
         if hide.exists && hide.isHittable {
             hide.tap()
-            return
+        } else if app.keyboards.firstMatch.exists {
+            let search = app.keyboards.buttons["Search"]
+            if search.exists && search.isHittable {
+                search.tap()
+            }
         }
-        guard app.keyboards.firstMatch.exists else { return }
-        let search = app.keyboards.buttons["Search"]
-        if search.exists && search.isHittable {
-            search.tap()
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline, app.keyboards.firstMatch.exists {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         }
     }
 
