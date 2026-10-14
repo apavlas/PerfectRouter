@@ -28,6 +28,9 @@ struct PlaceDescriptionCard: View {
     var iconColor: Color?
     var titleIdentifier: String = ""
     var descriptionIdentifier: String = ""
+    /// Stamped on the distance line, which already opens the sheet. An
+    /// identifier on the stack hides the name and the description.
+    var rowIdentifier: String = ""
     var alignment: VerticalAlignment = .top
     var spacing: CGFloat = 8
     let onOpen: () -> Void
@@ -49,6 +52,7 @@ struct PlaceDescriptionCard: View {
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.leading)
                     .lineLimit(6)
+                    .modifier(IdentifierIfPresent(identifier: rowIdentifier))
                     .modifier(OpenDescriptionTap(isActive: placeDescription != nil, action: onOpen))
                 if showsPastRange {
                     PastYourRangeLabel()

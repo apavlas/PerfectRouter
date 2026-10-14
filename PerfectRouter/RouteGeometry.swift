@@ -142,59 +142,168 @@ enum RouteGeometry {
     /// projection (longitude scaled by cos(latitude)), which is accurate at
     /// the scale of a road corridor. Returns `nil` if there's no usable
     /// route geometry.
+    /// One route, measured once. Select recommended asks which side of the
+    /// road hundreds of stations are on. Building this per station copied
+    /// the coast-to-coast polyline and allocated a `CLLocation` per vertex
+    /// every time, which kept the main thread busy for more than a minute.
+    struct MeasuredRoute: Sendable {
+        fileprivate var segments: [MeasuredSegment]
+
+        init(polylines: [[CLLocationCoordinate2D]]) {
+            segments = RouteGeometry.measuredSegments(of: polylines)
+        }
+    }
+
+    /// A station reduced to the fields the side check needs, so the scan
+    /// can leave the main thread without touching `MKMapItem`.
+    struct StationProjectionQuery: Sendable {
+        var index: Int
+        var latitude: Double
+        var longitude: Double
+    }
+
+    /// Indices of `queries` that sit on the rider's side of `polylines`.
+    /// The polyline is measured once for the whole set.
+    static func travelSideIndices(
+        queries: [StationProjectionQuery],
+        polylines: [[CLLocationCoordinate2D]],
+        drivesOnRight: Bool = drivesOnRight
+    ) -> [Int] {
+        let route = MeasuredRoute(polylines: polylines)
+        return queries.compactMap { query in
+            let coordinate = CLLocationCoordinate2D(latitude: query.latitude, longitude: query.longitude)
+            guard isOnTravelSide(coordinate, on: route, drivesOnRight: drivesOnRight) else { return nil }
+            return query.index
+        }
+    }
+
+    static func isOnTravelSide(
+        _ coordinate: CLLocationCoordinate2D,
+        on route: MeasuredRoute,
+        drivesOnRight: Bool = drivesOnRight
+    ) -> Bool {
+        switch side(of: coordinate, on: route) {
+        case .unknown:
+            return true
+        case .right:
+            return drivesOnRight
+        case .left:
+            return !drivesOnRight
+        }
+    }
+
+    static func side(
+        of coordinate: CLLocationCoordinate2D,
+        on route: MeasuredRoute
+    ) -> RoadSide {
+        guard let nearest = nearestProjection(of: coordinate, on: route),
+              abs(nearest.cross) > 1e-12 else { return .unknown }
+        return nearest.cross < 0 ? .right : .left
+    }
+
+    static func distanceAlongRoute(
+        of coordinate: CLLocationCoordinate2D,
+        on route: MeasuredRoute
+    ) -> CLLocationDistance {
+        nearestProjection(of: coordinate, on: route)?.distanceAlong ?? 0
+    }
+
+    /// Same visibility as `MeasuredRoute.segments`. A private nested type
+    /// cannot be the type of a fileprivate stored property.
+    fileprivate struct MeasuredSegment: Sendable {
+        var kx: Double
+        var ax: Double
+        var ay: Double
+        var bx: Double
+        var by: Double
+        var dx: Double
+        var dy: Double
+        var lengthSquared: Double
+        var lengthMeters: CLLocationDistance
+        var cumulativeStart: CLLocationDistance
+        var aLongitude: Double
+    }
+
+    /// Vertex distances are measured once per route. Later queries only do
+    /// the planar projection.
+    private static func measuredSegments(
+        of polylines: [[CLLocationCoordinate2D]]
+    ) -> [MeasuredSegment] {
+        var segments: [MeasuredSegment] = []
+        var cumulative: CLLocationDistance = 0
+        for coords in polylines {
+            guard coords.count > 1 else { continue }
+            let locations = coords.map {
+                CLLocation(latitude: $0.latitude, longitude: $0.longitude)
+            }
+            for index in 1..<coords.count {
+                let a = coords[index - 1]
+                let b = coords[index]
+                let segmentMeters = locations[index - 1].distance(from: locations[index])
+                let latRef = ((a.latitude + b.latitude) / 2) * .pi / 180
+                let kx = cos(latRef)
+                let ax = a.longitude * kx
+                let ay = a.latitude
+                let bx = b.longitude * kx
+                let by = b.latitude
+                let dx = bx - ax
+                let dy = by - ay
+                segments.append(MeasuredSegment(
+                    kx: kx,
+                    ax: ax,
+                    ay: ay,
+                    bx: bx,
+                    by: by,
+                    dx: dx,
+                    dy: dy,
+                    lengthSquared: dx * dx + dy * dy,
+                    lengthMeters: segmentMeters,
+                    cumulativeStart: cumulative,
+                    aLongitude: a.longitude
+                ))
+                cumulative += segmentMeters
+            }
+        }
+        return segments
+    }
+
     private static func nearestProjection(
         of coordinate: CLLocationCoordinate2D,
         alongPolylines polylines: [[CLLocationCoordinate2D]]
     ) -> NearestProjection? {
+        nearestProjection(of: coordinate, on: MeasuredRoute(polylines: polylines))
+    }
+
+    private static func nearestProjection(
+        of coordinate: CLLocationCoordinate2D,
+        on route: MeasuredRoute
+    ) -> NearestProjection? {
         var best: NearestProjection?
-        var cumulative: CLLocationDistance = 0
-
-        for coords in polylines {
-            guard coords.count > 1 else { continue }
-
-            for i in 1..<coords.count {
-                let a = coords[i - 1]
-                let b = coords[i]
-                let segmentMeters = CLLocation(latitude: a.latitude, longitude: a.longitude)
-                    .distance(from: CLLocation(latitude: b.latitude, longitude: b.longitude))
-
-                // Local planar projection centered on this segment.
-                let latRef = ((a.latitude + b.latitude) / 2) * .pi / 180
-                let kx = cos(latRef)
-                let ax = a.longitude * kx, ay = a.latitude
-                let bx = b.longitude * kx, by = b.latitude
-                let px = coordinate.longitude * kx, py = coordinate.latitude
-
-                let dx = bx - ax, dy = by - ay
-                let segLengthSquared = dx * dx + dy * dy
-
-                // Closest point on segment a→b to the coordinate (clamped).
-                var t = 0.0
-                if segLengthSquared > 0 {
-                    t = ((px - ax) * dx + (py - ay) * dy) / segLengthSquared
-                    t = max(0, min(1, t))
-                }
-                let cx = ax + t * dx, cy = ay + t * dy
-                let distanceSquared = (px - cx) * (px - cx) + (py - cy) * (py - cy)
-
-                if best == nil || distanceSquared < best!.distanceSquared {
-                    // Cross product of travel direction (d) and vector to point (v).
-                    let vx = px - ax, vy = py - ay
-                    best = NearestProjection(
-                        distanceSquared: distanceSquared,
-                        distanceAlong: cumulative + t * segmentMeters,
-                        cross: dx * vy - dy * vx,
-                        point: CLLocationCoordinate2D(
-                            latitude: cy,
-                            longitude: kx != 0 ? cx / kx : a.longitude
-                        )
+        for segment in route.segments {
+            let px = coordinate.longitude * segment.kx
+            let py = coordinate.latitude
+            var t = 0.0
+            if segment.lengthSquared > 0 {
+                t = ((px - segment.ax) * segment.dx + (py - segment.ay) * segment.dy) / segment.lengthSquared
+                t = max(0, min(1, t))
+            }
+            let cx = segment.ax + t * segment.dx
+            let cy = segment.ay + t * segment.dy
+            let distanceSquared = (px - cx) * (px - cx) + (py - cy) * (py - cy)
+            if best == nil || distanceSquared < best!.distanceSquared {
+                let vx = px - segment.ax
+                let vy = py - segment.ay
+                best = NearestProjection(
+                    distanceSquared: distanceSquared,
+                    distanceAlong: segment.cumulativeStart + t * segment.lengthMeters,
+                    cross: segment.dx * vy - segment.dy * vx,
+                    point: CLLocationCoordinate2D(
+                        latitude: cy,
+                        longitude: segment.kx != 0 ? cx / segment.kx : segment.aLongitude
                     )
-                }
-
-                cumulative += segmentMeters
+                )
             }
         }
-
         return best
     }
 

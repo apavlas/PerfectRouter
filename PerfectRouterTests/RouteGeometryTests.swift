@@ -135,6 +135,31 @@ final class RouteGeometryTests: XCTestCase {
         XCTAssertTrue(RouteGeometry.isOnTravelSide(north, alongPolylines: [eastboundLine], drivesOnRight: false))
     }
 
+    /// A long line and a few hundred stations used to allocate a location
+    /// object per vertex per station and froze Select recommended. One
+    /// measurement of the line has to classify them in well under two seconds.
+    func testTravelSideOfALongRouteStaysUnderTwoSeconds() {
+        let pointCount = 20_000
+        let line: [CLLocationCoordinate2D] = (0..<pointCount).map { index in
+            CLLocationCoordinate2D(
+                latitude: 35.0 + Double(index) * 0.0001,
+                longitude: -100.0
+            )
+        }
+        let queries: [RouteGeometry.StationProjectionQuery] = (0..<400).map { index in
+            let vertex = (index * 40) % (pointCount - 1)
+            return RouteGeometry.StationProjectionQuery(
+                index: index,
+                latitude: line[vertex].latitude - 0.001,
+                longitude: line[vertex].longitude
+            )
+        }
+        let started = Date()
+        let indices = RouteGeometry.travelSideIndices(queries: queries, polylines: [line])
+        XCTAssertLessThan(Date().timeIntervalSince(started), 2)
+        XCTAssertEqual(indices.count, queries.count)
+    }
+
     func testPointOnRouteLineIsAlwaysReachable() {
         let onLine = CLLocationCoordinate2D(latitude: 0, longitude: 0.5)
         XCTAssertTrue(RouteGeometry.isOnTravelSide(onLine, alongPolylines: [eastboundLine], drivesOnRight: true))
