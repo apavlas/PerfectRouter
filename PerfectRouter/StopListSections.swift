@@ -104,7 +104,10 @@ struct GasStationsSection: View {
             ? viewModel.fuelStopRidingCaption(for: stop)
             : milesFromStartCaption(along)
         let pastFullTank = viewModel.fuelListNote(for: stop)
-        let accessibility = viewModel.recommendedFuelAccessibility(for: stop)
+        let accessibility = fuelAccessibility(
+            viewModel.recommendedFuelAccessibility(for: stop),
+            appending: pastFullTank
+        )
         let title = accessibility?.title ?? stop.name
         let button = Button {
             guard !onRoute else { return }
@@ -144,16 +147,27 @@ struct GasStationsSection: View {
         .buttonStyle(.plain)
         .disabled(onRoute)
 
-        if var accessibility {
-            if let pastFullTank {
-                accessibility.label = "\(accessibility.label), \(pastFullTank)"
-            }
+        if let accessibility {
             button.fuelRowAccessibility(accessibility)
         } else if let pastFullTank {
             button.accessibilityLabel("\(title), \(caption), \(pastFullTank)")
         } else {
             button
         }
+    }
+
+    /// The note is folded into the accessibility value before the row is
+    /// built. An assignment inside `gasRow` is a statement, and a view
+    /// builder cannot turn that statement into a view.
+    private func fuelAccessibility(
+        _ accessibility: RecommendedFuelAccessibility?,
+        appending note: String?
+    ) -> RecommendedFuelAccessibility? {
+        guard var accessibility else { return nil }
+        if let note {
+            accessibility.label = "\(accessibility.label), \(note)"
+        }
+        return accessibility
     }
 }
 
