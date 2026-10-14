@@ -5,6 +5,8 @@ import Foundation
 enum AccessibilityID {
     static let placeSearch = "placeSearch"
     static let selectRecommended = "selectRecommended"
+    /// Shown only when Select recommended is still working after half a second.
+    static let fuelSelectingSpinner = "fuel.selecting.spinner"
     static let applyStops = "applyStops"
     static let replanBanner = "replanBanner"
     static let routeStylePicker = "routeStylePicker"

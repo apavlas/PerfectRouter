@@ -28,8 +28,10 @@ struct PlaceDescriptionCard: View {
     var iconColor: Color?
     var titleIdentifier: String = ""
     var descriptionIdentifier: String = ""
-    /// Stamped on the distance line, which already opens the sheet. An
-    /// identifier on the stack hides the name and the description.
+    /// Stamped on the button that wraps the text, and only when non-empty.
+    /// The identifier is the outermost modifier so XCTest sees
+    /// `highlight.<name>.row`. Child name and description identifiers stay
+    /// exposed because the button uses `accessibilityElement(children: .contain)`.
     var rowIdentifier: String = ""
     var alignment: VerticalAlignment = .top
     var spacing: CGFloat = 8
@@ -39,25 +41,7 @@ struct PlaceDescriptionCard: View {
     var body: some View {
         HStack(alignment: alignment, spacing: spacing) {
             icon
-            VStack(alignment: .leading, spacing: 2) {
-                Text(name)
-                    .foregroundStyle(.primary)
-                    .multilineTextAlignment(.leading)
-                    .lineLimit(8)
-                    .modifier(IdentifierIfPresent(identifier: titleIdentifier))
-                    .modifier(OpenDescriptionTap(isActive: placeDescription != nil, action: onOpen))
-                descriptionText
-                Text(detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.leading)
-                    .lineLimit(6)
-                    .modifier(IdentifierIfPresent(identifier: rowIdentifier))
-                    .modifier(OpenDescriptionTap(isActive: placeDescription != nil, action: onOpen))
-                if showsPastRange {
-                    PastYourRangeLabel()
-                }
-            }
+            rowBody
             Spacer(minLength: 0)
             Button(action: onAdd) {
                 Image(systemName: "plus.circle.fill")
@@ -66,6 +50,51 @@ struct PlaceDescriptionCard: View {
             }
             .buttonStyle(.borderless)
             .accessibilityLabel("Add \(name)")
+        }
+    }
+
+    /// Highlight rows need `highlight.<name>.row` on a tappable element.
+    /// Suggestion cards pass an empty id and stay a plain text column, so
+    /// their fuel-row identifier is not covered by a second button.
+    @ViewBuilder
+    private var rowBody: some View {
+        if rowIdentifier.isEmpty {
+            textColumn
+        } else {
+            Button {
+                if placeDescription != nil {
+                    onOpen()
+                }
+            } label: {
+                textColumn
+            }
+            .buttonStyle(.plain)
+            .accessibilityElement(children: .contain)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityIdentifier(rowIdentifier)
+        }
+    }
+
+    /// Name, clipped description, and the distance line. The row id is not
+    /// on this stack: an identifier here hides the name and the description.
+    private var textColumn: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(name)
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(.leading)
+                .lineLimit(8)
+                .modifier(IdentifierIfPresent(identifier: titleIdentifier))
+                .modifier(OpenDescriptionTap(isActive: placeDescription != nil, action: onOpen))
+            descriptionText
+            Text(detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.leading)
+                .lineLimit(6)
+                .modifier(OpenDescriptionTap(isActive: placeDescription != nil, action: onOpen))
+            if showsPastRange {
+                PastYourRangeLabel()
+            }
         }
     }
 
