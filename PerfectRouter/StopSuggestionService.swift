@@ -88,6 +88,78 @@ struct CorridorSearchResult {
     var succeeded: Int
     var failed: Int
     var throttled: Int
+    /// Sample mile-marks that errored or were throttled after retries.
+    /// Those stretches were not searched. They are not empty road.
+    var failedSampleDistances: [CLLocationDistance] = []
+
+    init(
+        stops: [SuggestedStop],
+        status: GasSearchStatus,
+        succeeded: Int,
+        failed: Int,
+        throttled: Int,
+        failedSampleDistances: [CLLocationDistance] = []
+    ) {
+        self.stops = stops
+        self.status = status
+        self.succeeded = succeeded
+        self.failed = failed
+        self.throttled = throttled
+        self.failedSampleDistances = failedSampleDistances
+    }
+}
+
+/// MKLocalSearch allows about 50 requests per minute. A coast-to-coast
+/// fuel grid that fires faster than that loses the later samples, and the
+/// planner then treats the hole as a road with no gas.
+enum MapSearchPace {
+    static let maxRequestsPerWindow = 40
+    static let window: TimeInterval = 60
+
+    /// How long to wait before another request. Zero while the rolling
+    /// window still has room.
+    static func delay(
+        recent: [Date],
+        now: Date,
+        limit: Int = maxRequestsPerWindow,
+        window: TimeInterval = window
+    ) -> TimeInterval {
+        guard limit > 0, window > 0 else { return 0 }
+        let alive = recent.filter { now.timeIntervalSince($0) < window }
+        guard alive.count >= limit, let oldest = alive.min() else { return 0 }
+        return max(0, window - now.timeIntervalSince(oldest)) + 0.05
+    }
+
+    /// Backoff after `MKError.loadingThrottled`. Attempt 1 waits 2 seconds,
+    /// then 4, then 8. A 120 ms pause does not clear Apple's window.
+    static func throttleBackoff(attempt: Int) -> Duration {
+        let seconds = min(8.0, pow(2.0, Double(max(attempt, 1))))
+        return .seconds(seconds)
+    }
+}
+
+/// Serial gate so gas, densify, and highlight lookups share one rate window.
+private actor MapSearchGate {
+    static let shared = MapSearchGate()
+    private var attempts: [Date] = []
+
+    func prepare() async -> Bool {
+        while true {
+            if Task.isCancelled { return false }
+            let wait = MapSearchPace.delay(recent: attempts, now: Date())
+            if wait <= 0 { break }
+            let nanos = UInt64(min(wait, 120) * 1_000_000_000)
+            do {
+                try await Task.sleep(nanoseconds: nanos)
+            } catch {
+                return false
+            }
+        }
+        attempts.append(Date())
+        let cutoff = Date().addingTimeInterval(-(MapSearchPace.window + 1))
+        attempts.removeAll { $0 < cutoff }
+        return !Task.isCancelled
+    }
 }
 
 /// Finds recommended stops (gas, food, etc.) along a calculated route.
@@ -175,6 +247,7 @@ struct StopSuggestionService {
         var seen = Set<String>()          // de-dup by name + rounded coords
         var results: [SuggestedStop] = []
         var tally = GasSampleTally()
+        var failedSampleDistances: [CLLocationDistance] = []
 
         if samples.isEmpty {
             gasLog.error("search has no samples gen=\(generation, privacy: .public) category=\(category.rawValue, privacy: .public)")
@@ -209,16 +282,17 @@ struct StopSuggestionService {
                 coordinate: sample.coordinate,
                 corridor: corridor,
                 index: index,
-                generation: generation,
-                retryDelay: interSearchDelay
+                generation: generation
             )
             switch outcome {
             case .cancelled:
                 tally.cancelled = true
             case .throttled:
                 tally.throttled += 1
+                failedSampleDistances.append(sample.distanceAlongRoute)
             case .failed:
                 tally.failed += 1
+                failedSampleDistances.append(sample.distanceAlongRoute)
             case .hit(let response):
                 tally.succeeded += 1
                 for item in response.mapItems {
@@ -265,7 +339,8 @@ struct StopSuggestionService {
             status: status,
             succeeded: tally.succeeded,
             failed: tally.failed,
-            throttled: tally.throttled
+            throttled: tally.throttled,
+            failedSampleDistances: failedSampleDistances
         )
     }
 
@@ -287,19 +362,21 @@ struct StopSuggestionService {
         case cancelled
     }
 
-    /// One corridor query, with a single backoff retry when MapKit throttles.
-    /// Cancellation never becomes a hit or a quiet failure.
+    /// One corridor query. Throttle retries wait out Apple's window.
+    /// Cancellation never becomes a hit or a quiet failure. A sample that
+    /// still fails is a miss, not an empty stretch of road.
     private static func querySample(
         category: StopCategory,
         coordinate: CLLocationCoordinate2D,
         corridor: CLLocationDistance,
         index: Int,
-        generation: Int,
-        retryDelay: Duration
+        generation: Int
     ) async -> SampleQuery {
-        var allowThrottleRetry = true
+        var throttleAttempt = 0
         while true {
             if Task.isCancelled { return .cancelled }
+            let paced = await MapSearchGate.shared.prepare()
+            if !paced || Task.isCancelled { return .cancelled }
             let request = MKLocalSearch.Request()
             request.naturalLanguageQuery = category.searchQuery
             request.resultTypes = .pointOfInterest
@@ -317,9 +394,9 @@ struct StopSuggestionService {
                 let nsError = error as NSError
                 let throttled = isMapSearchThrottled(error)
                 gasLog.error("sample gen=\(generation, privacy: .public) index=\(index, privacy: .public) domain=\(nsError.domain, privacy: .public) code=\(nsError.code, privacy: .public) throttled=\(throttled, privacy: .public)")
-                if throttled, allowThrottleRetry {
-                    allowThrottleRetry = false
-                    let paused = await pause(retryDelay)
+                if throttled, throttleAttempt < 3 {
+                    throttleAttempt += 1
+                    let paused = await pause(MapSearchPace.throttleBackoff(attempt: throttleAttempt))
                     if !paused || Task.isCancelled { return .cancelled }
                     continue
                 }

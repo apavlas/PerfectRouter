@@ -300,7 +300,13 @@ final class CoreJourneyUITests: XCTestCase {
         expandPlanningSheet(app)
         let field = waitForPlaceSearch(in: app)
         scrollUntilHittable(field, in: app)
+        // The first tap can land while the iPhone sheet is still settling.
+        // typeText then fails because no keyboard is up yet.
         field.tap()
+        if !app.keyboards.firstMatch.waitForExistence(timeout: 5) {
+            field.tap()
+            _ = app.keyboards.firstMatch.waitForExistence(timeout: 5)
+        }
         field.typeText(name)
         let result = app.buttons["searchResult.\(name)"]
         XCTAssertTrue(
