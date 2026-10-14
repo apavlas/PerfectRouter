@@ -527,7 +527,7 @@ final class StopSelectionTests: XCTestCase {
     /// Charlotte → LA, 200 mi tank. Select recommended is the button's entry
     /// point: it replans, then inserts. A station whose along-route mile is
     /// inside 170 but whose detour pushes the ridden leg past the reserve is
-    /// not the pick. A window with nothing inside 170 takes the farthest
+    /// not the pick. A window with nothing inside 170 takes the nearest
     /// station still inside the tank. The station 348 mi later, and the
     /// recommendation after that gap, are not inserted.
     func testSelectRecommendedCapsSparseLegsAndDoesNotCrossTheGap() {
@@ -707,12 +707,10 @@ final class StopSelectionTests: XCTestCase {
         XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "Stranded", "End"])
     }
 
-    /// 200 mi tank, so the reserve is 170. Select recommended takes the
-    /// station inside that reserve when one exists, and does not stretch
-    /// the leg out to a farther pump that is only inside the tank. When
-    /// the reserve window is empty, the in-tank fallback is still inserted
-    /// and the route list says "No fuel within range".
-    func testSelectRecommendedKeepsTheReserveCapAndFlagsAStretchPastIt() {
+    /// 200 mi tank. Where nothing sits inside 170 mi, Select recommended
+    /// inserts the nearest station still inside the tank and leaves a
+    /// station past 200 mi off the route.
+    func testSelectRecommendedInsertsTheNearestStationInEachReserveGap() {
         let mile = AppSettings.metersPerMile
         let totalMiles = 1_000.0
         func coordinate(atMiles miles: Double) -> CLLocationCoordinate2D {
@@ -751,50 +749,34 @@ final class StopSelectionTests: XCTestCase {
             viewModel.gasStations = stations
             return viewModel
         }
-        func publish(legs hops: [Double], on viewModel: RoutePlannerViewModel) {
-            var cursor = 0.0
-            viewModel.legs = hops.map { hop in
-                let start = cursor
-                cursor += hop
-                return StubMKRoute(
-                    name: "Leg",
-                    coordinates: [
-                        coordinate(atMiles: start),
-                        coordinate(atMiles: cursor),
-                    ],
-                    distance: hop * mile,
-                    expectedTravelTime: (hop / 55) * 3_600,
-                    hasHighways: true
-                )
-            }
-        }
 
-        let capped = route(stations: [
-            station("Inside", miles: 165),
-            station("Farther", miles: 196),
+        let chosen = route(stations: [
+            station("Near A", miles: 193),
+            station("Far A", miles: 199),
+            station("Near B", miles: 373),
+            station("Far B", miles: 389),
+            station("Past", miles: 603),
         ])
-        capped.toggleRecommendedFuelSelection()
-        XCTAssertEqual(capped.waypoints.map(\.name), ["Start", "Inside", "End"])
-        publish(legs: [165, totalMiles - 165], on: capped)
-        XCTAssertFalse(capped.waypointLacksFuelWithinReserve(at: 1))
-        XCTAssertFalse(capped.waypointRangeNotices(at: 1).contains("No fuel within range"))
-
-        XCTAssertFalse(RoutePlannerViewModel.legExceedsFuelReserve(165 * mile, tank: 200 * mile))
-        XCTAssertFalse(RoutePlannerViewModel.legExceedsFuelReserve(170 * mile, tank: 200 * mile))
-        XCTAssertTrue(RoutePlannerViewModel.legExceedsFuelReserve(183 * mile, tank: 200 * mile))
-        XCTAssertTrue(RoutePlannerViewModel.legExceedsFuelReserve(196 * mile, tank: 200 * mile))
-
-        let dry = route(stations: [station("Only", miles: 196)])
-        dry.toggleRecommendedFuelSelection()
-        XCTAssertEqual(dry.waypoints.map(\.name), ["Start", "Only", "End"])
-        publish(legs: [196, totalMiles - 196], on: dry)
-        XCTAssertEqual(
-            dry.waypointRangeNotices(at: 1),
-            ["No fuel within range"]
+        chosen.toggleRecommendedFuelSelection()
+        XCTAssertEqual(chosen.waypoints.map(\.name), ["Start", "Near A", "Near B", "End"])
+        XCTAssertFalse(chosen.waypoints.contains { ["Far A", "Far B", "Past"].contains($0.name) })
+        XCTAssertFalse(
+            chosen.waypointRangeNotices(at: 1).joined(separator: " ").contains("No fuel within range")
         )
-        XCTAssertTrue(dry.waypointLacksFuelWithinReserve(at: 1))
-        XCTAssertTrue(dry.waypointIsBeyondRemainingRange(at: 2))
-        XCTAssertFalse(dry.waypointRangeNotices(at: 2).contains("No fuel within range"))
-        XCTAssertEqual(RoutePlannerViewModel.noFuelWithinRangeNotice, "No fuel within range")
+        XCTAssertNil(RoutePlannerViewModel.pastFullTankNote(hopMeters: 193 * mile, tankMeters: 200 * mile))
+        XCTAssertEqual(
+            RoutePlannerViewModel.pastFullTankNote(hopMeters: 230 * mile, tankMeters: 200 * mile),
+            "Past full tank"
+        )
+        let nearA = station("Near A", miles: 193)
+        let past = station("Past", miles: 603)
+        chosen.fuelPlanEntries = [
+            .recommended(nearA),
+            .pastRange(past),
+        ]
+        XCTAssertNil(chosen.fuelListNote(for: nearA))
+        XCTAssertEqual(chosen.fuelListNote(for: past), "Past full tank")
+        XCTAssertFalse(chosen.fuelStopRidingCaption(for: nearA).contains("Past full tank"))
+        XCTAssertFalse(chosen.fuelStopRidingCaption(for: nearA).contains("No fuel within range"))
     }
 }

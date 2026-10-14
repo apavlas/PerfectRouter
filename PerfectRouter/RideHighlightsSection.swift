@@ -24,6 +24,7 @@ struct RideHighlightsSection: View {
                     iconColor: .purple,
                     titleIdentifier: AccessibilityID.rideHighlightName(stop.name),
                     descriptionIdentifier: AccessibilityID.rideHighlightDescription(stop.name),
+                    rowIdentifier: AccessibilityID.rideHighlightRow(stop.name),
                     alignment: .center,
                     onOpen: { present(stop) },
                     onAdd: { viewModel.addStop(from: stop) }

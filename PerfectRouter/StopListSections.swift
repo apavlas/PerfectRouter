@@ -101,8 +101,9 @@ struct GasStationsSection: View {
             || viewModel.isBeyondRemainingRange(distanceAlongRoute: along)
         let showsRidingTime = recommended || viewModel.isRecommendedFuelStop(stop) || markedPast
         let caption = showsRidingTime
-            ? viewModel.fuelStopRidingCaption(for: stop, pastRange: markedPast)
+            ? viewModel.fuelStopRidingCaption(for: stop)
             : milesFromStartCaption(along)
+        let pastFullTank = viewModel.fuelListNote(for: stop)
         let accessibility = viewModel.recommendedFuelAccessibility(for: stop)
         let title = accessibility?.title ?? stop.name
         let button = Button {
@@ -122,6 +123,8 @@ struct GasStationsSection: View {
                     Text("Added")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.secondary)
+                } else if pastFullTank != nil {
+                    PastFullTankLabel()
                 } else if markedPast {
                     PastYourRangeLabel()
                 } else if recommended {
@@ -141,8 +144,13 @@ struct GasStationsSection: View {
         .buttonStyle(.plain)
         .disabled(onRoute)
 
-        if let accessibility {
+        if var accessibility {
+            if let pastFullTank {
+                accessibility.label = "\(accessibility.label), \(pastFullTank)"
+            }
             button.fuelRowAccessibility(accessibility)
+        } else if let pastFullTank {
+            button.accessibilityLabel("\(title), \(caption), \(pastFullTank)")
         } else {
             button
         }
@@ -214,9 +222,7 @@ struct WaypointsSection: View {
     /// so a replan never leaves an empty stack in the row.
     @ViewBuilder
     private func waypointRow(index: Int, waypoint: Waypoint) -> some View {
-        let notices = viewModel.waypointRangeNotices(at: index)
-        let pastRange = notices.contains("Past your range")
-        let noFuel = notices.contains(RoutePlannerViewModel.noFuelWithinRangeNotice)
+        let pastRange = viewModel.waypointIsBeyondRemainingRange(at: index)
         Label {
             if let caption = viewModel.waypointRidingCaption(at: index) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -226,12 +232,14 @@ struct WaypointsSection: View {
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.leading)
                         .lineLimit(4)
-                    waypointRangeCaptions(pastRange: pastRange, noFuel: noFuel)
+                    if pastRange {
+                        PastYourRangeLabel()
+                    }
                 }
-            } else if pastRange || noFuel {
+            } else if pastRange {
                 VStack(alignment: .leading, spacing: 2) {
                     waypointName(waypoint)
-                    waypointRangeCaptions(pastRange: pastRange, noFuel: noFuel)
+                    PastYourRangeLabel()
                 }
             } else {
                 waypointName(waypoint)
@@ -248,16 +256,6 @@ struct WaypointsSection: View {
             .multilineTextAlignment(.leading)
             .lineLimit(4)
             .accessibilityIdentifier(AccessibilityID.waypoint(waypoint.name))
-    }
-
-    @ViewBuilder
-    private func waypointRangeCaptions(pastRange: Bool, noFuel: Bool) -> some View {
-        if pastRange {
-            PastYourRangeLabel()
-        }
-        if noFuel {
-            NoFuelWithinRangeLabel()
-        }
     }
 
     private func waypointAccessibilityLabel(index: Int, waypoint: Waypoint) -> String {
@@ -279,11 +277,10 @@ struct PastYourRangeLabel: View {
     }
 }
 
-/// Orange caption when the published leg is longer than the fuel reserve
-/// because no station sat inside it. The rider sees this before leaving.
-struct NoFuelWithinRangeLabel: View {
+/// Short note when the nearest station is farther than the full tank.
+struct PastFullTankLabel: View {
     var body: some View {
-        Text(RoutePlannerViewModel.noFuelWithinRangeNotice)
+        Text(RoutePlannerViewModel.pastFullTankNotice)
             .font(.caption2.weight(.semibold))
             .foregroundStyle(.orange)
     }

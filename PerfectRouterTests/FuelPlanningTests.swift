@@ -70,7 +70,7 @@ final class FuelPlanningTests: XCTestCase {
 
     func testStationBeyondTheReserveIsTheFallbackInsideTheTank() {
         // 95 km is inside the 100 km tank and outside the 85 km reserve.
-        // Nothing sits inside the reserve, so the farthest in-tank station
+        // Nothing sits inside the reserve, so the nearest in-tank station
         // is the stop. A station past the tank still is not.
         let inTank = gas(at: 95_000)
         let (stops, hasGap) = RoutePlannerViewModel.planFuelStops(
@@ -295,7 +295,7 @@ final class FuelPlanningTests: XCTestCase {
     func testEmptyReserveFallsBackToTheFarthestStationInsideTheTank() {
         XCTAssertEqual(RoutePlannerViewModel.fuelSafetyFactor, 0.85, accuracy: 0.0001)
         // 90 km from the fill is past the 85 km reserve and inside the tank.
-        // The reserve window is empty, so that station is the stop.
+        // The reserve window is empty, so the nearest in-tank station is the stop.
         let station = gas(at: 140_000)
         let (stops, hasGap) = RoutePlannerViewModel.planFuelStops(
             from: [station],
@@ -305,6 +305,52 @@ final class FuelPlanningTests: XCTestCase {
         )
         XCTAssertEqual(stops.map(\.id), [station.id])
         XCTAssertFalse(hasGap)
+    }
+
+    /// 200 mi tank, so the reserve is 170. Each stretch with nothing inside
+    /// the reserve takes the nearest station still inside the tank. A 193 mi
+    /// hop is a normal stop and has no note. The station more than 200 mi
+    /// from the previous stop is not a fuel stop and carries "Past full tank".
+    func testNearestStationFillsEachReserveGapAndNotesOnlyAFullTankGap() {
+        let mile = AppSettings.metersPerMile
+        func station(_ name: String, miles: Double) -> SuggestedStop {
+            SuggestedStop(
+                name: name,
+                coordinate: CLLocationCoordinate2D(latitude: 0, longitude: 0),
+                category: .gas,
+                distanceAlongRoute: miles * mile
+            )
+        }
+        let nearA = station("Near A", miles: 193)
+        let farA = station("Far A", miles: 199)
+        let nearB = station("Near B", miles: 373)
+        let farB = station("Far B", miles: 389)
+        let nearC = station("Near C", miles: 548)
+        let farC = station("Far C", miles: 571)
+        let past = station("Past Tank", miles: 778)
+        let plan = RoutePlannerViewModel.fuelPlan(
+            from: [farC, past, nearA, farA, nearC, farB, nearB],
+            totalDistance: 1_100 * mile,
+            range: 200 * mile
+        )
+
+        XCTAssertEqual(plan.stops.map(\.name), ["Near A", "Near B", "Near C"])
+        let pastNames = plan.entries.compactMap { entry -> String? in
+            if case .pastRange(let stop) = entry { return stop.name }
+            return nil
+        }
+        XCTAssertEqual(pastNames, ["Past Tank"])
+        XCTAssertTrue(plan.hasGap)
+
+        XCTAssertNil(RoutePlannerViewModel.pastFullTankNote(hopMeters: 193 * mile, tankMeters: 200 * mile))
+        XCTAssertNil(RoutePlannerViewModel.pastFullTankNote(hopMeters: 180 * mile, tankMeters: 200 * mile))
+        XCTAssertNil(RoutePlannerViewModel.pastFullTankNote(hopMeters: 175 * mile, tankMeters: 200 * mile))
+        XCTAssertEqual(
+            RoutePlannerViewModel.pastFullTankNote(hopMeters: 230 * mile, tankMeters: 200 * mile),
+            "Past full tank"
+        )
+        XCTAssertEqual(RoutePlannerViewModel.pastFullTankNotice, "Past full tank")
+        XCTAssertFalse(plan.stops.map(\.name).joined(separator: " ").contains("No fuel within range"))
     }
 
     // MARK: - Food at the stop
@@ -356,13 +402,14 @@ final class FuelPlanningTests: XCTestCase {
         XCTAssertEqual(stops.map { Int($0.distanceAlongRoute) }, [80_000])
     }
 
-    func testFoodStopBeyondTheReserveFallsBackToTheFarthestInTheTank() {
-        // Both pumps sit past the 85 km reserve and inside the tank. Meal
-        // time does not pull the stop back; the fallback is the farthest.
+    func testFoodStopBeyondTheReserveUsesTheNearestStationInsideTheTank() {
+        // Both pumps sit past the 85 km reserve and inside the tank. The
+        // empty reserve takes the nearest station, not the farthest, and
+        // meal time does not stretch the hop.
         let withFood = gas(at: 95_000)
         let gasOnly = gas(at: 99_000)
         let (stops, hasGap) = lunchPlan(from: [withFood, gasOnly], preferringFoodAt: [withFood.id])
-        XCTAssertEqual(stops.map(\.id), [gasOnly.id])
+        XCTAssertEqual(stops.map(\.id), [withFood.id])
         XCTAssertFalse(hasGap)
     }
 

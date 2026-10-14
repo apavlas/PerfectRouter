@@ -25,6 +25,10 @@ enum AccessibilityID {
         "fuelStop.\(name).\(checked ? "checked" : "unchecked")"
     }
 
+    /// The highlight row, excluding the Add button. Tapping it opens the
+    /// description sheet when the place has one.
+    static func rideHighlightRow(_ name: String) -> String { "highlight.\(name).row" }
+
     static func rideHighlightName(_ name: String) -> String { "highlight.\(name).name" }
     /// Two-line clip under the place name.
     static func rideHighlightDescription(_ name: String) -> String { "highlight.\(name).description" }

@@ -28,6 +28,8 @@ struct PlaceDescriptionCard: View {
     var iconColor: Color?
     var titleIdentifier: String = ""
     var descriptionIdentifier: String = ""
+    /// Stamped on the text stack. UI tests tap this to open the sheet.
+    var rowIdentifier: String = ""
     var alignment: VerticalAlignment = .top
     var spacing: CGFloat = 8
     let onOpen: () -> Void
@@ -54,6 +56,9 @@ struct PlaceDescriptionCard: View {
                     PastYourRangeLabel()
                 }
             }
+            .contentShape(Rectangle())
+            .modifier(IdentifierIfPresent(identifier: rowIdentifier))
+            .modifier(OpenDescriptionTap(isActive: placeDescription != nil, action: onOpen))
             Spacer(minLength: 0)
             Button(action: onAdd) {
                 Image(systemName: "plus.circle.fill")

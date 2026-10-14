@@ -302,15 +302,22 @@ private struct FuelPlanRows: View {
                         .accessibilityHidden(true)
                     FuelStopTextColumn(
                         title: stop.name,
-                        caption: viewModel.fuelStopRidingCaption(for: stop, pastRange: true),
+                        caption: viewModel.fuelStopRidingCaption(for: stop),
                         titleColor: .orange
                     )
-                    PastYourRangeLabel()
+                    if viewModel.fuelListNote(for: stop) != nil {
+                        PastFullTankLabel()
+                    } else {
+                        PastYourRangeLabel()
+                    }
                     bufferMark(viewModel.isGasBuffered(stop))
                         .accessibilityHidden(true)
                 }
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(
+                "\(stop.name), \(viewModel.fuelStopRidingCaption(for: stop)), \(viewModel.fuelListNote(for: stop) ?? "")"
+            )
         }
     }
 
