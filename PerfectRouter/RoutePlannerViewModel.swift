@@ -1151,7 +1151,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// Shown on a fuel stop whose hop from the previous fill is longer
     /// than the full tank. A hop inside the tank, even past the 170 mi
     /// reserve, keeps its mileage and has no note.
-    static let pastFullTankNotice = "Past full tank"
+    /// Nonisolated so the note helper and the nonisolated planner tests can
+    /// read it; the class is `@MainActor`.
+    nonisolated static let pastFullTankNotice = "Past full tank"
 
     /// Captions the route list draws under the stop name, in order.
     func waypointRangeNotices(at index: Int) -> [String] {
@@ -2303,11 +2305,20 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 longitude: stop.coordinate.longitude
             )
         }
-        let indices = DispatchQueue.global(qos: .userInitiated).sync {
-            RouteGeometry.travelSideIndices(queries: queries, polylines: polylines)
-        }
+        let indices = Self.travelSideIndicesOffMain(queries: queries, polylines: polylines)
         let keep = Set(indices)
         return stations.enumerated().compactMap { keep.contains($0.offset) ? $0.element : nil }
+    }
+
+    /// The scan is nonisolated and only receives sendable values, so it can
+    /// run off the main actor without capturing the view model or map items.
+    private nonisolated static func travelSideIndicesOffMain(
+        queries: [RouteGeometry.StationProjectionQuery],
+        polylines: [[CLLocationCoordinate2D]]
+    ) -> [Int] {
+        DispatchQueue.global(qos: .userInitiated).sync { @Sendable in
+            RouteGeometry.travelSideIndices(queries: queries, polylines: polylines)
+        }
     }
 
     /// Recommended stops the button may insert. Each hop is measured from

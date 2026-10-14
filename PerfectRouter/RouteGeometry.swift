@@ -152,10 +152,6 @@ enum RouteGeometry {
         init(polylines: [[CLLocationCoordinate2D]]) {
             segments = RouteGeometry.measuredSegments(of: polylines)
         }
-
-        init(legs: [MKRoute]) {
-            self.init(polylines: legs.map { RouteGeometry.coordinates(of: $0.polyline) })
-        }
     }
 
     /// A station reduced to the fields the side check needs, so the scan
@@ -212,7 +208,9 @@ enum RouteGeometry {
         nearestProjection(of: coordinate, on: route)?.distanceAlong ?? 0
     }
 
-    private struct MeasuredSegment {
+    /// Same visibility as `MeasuredRoute.segments`. A private nested type
+    /// cannot be the type of a fileprivate stored property.
+    fileprivate struct MeasuredSegment: Sendable {
         var kx: Double
         var ax: Double
         var ay: Double
