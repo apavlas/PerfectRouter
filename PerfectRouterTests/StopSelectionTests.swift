@@ -3,6 +3,13 @@ import Contacts
 import CoreLocation
 @testable import PerfectRouter
 
+/// Main-actor stand-in for `Task.isCompleted`, which Swift 5.10 and Swift 6
+/// do not provide. The selection task sets it after the tap returns.
+@MainActor
+private final class FuelSelectionCompletion: Sendable {
+    var isCompleted = false
+}
+
 /// Unit tests for waypoint order: search/contact `addWaypoint`, long-press
 /// `addStart`, and the shared stop-selection path `addStop(from:)`.
 @MainActor
@@ -850,8 +857,12 @@ final class StopSelectionTests: XCTestCase {
         let made = makeLongFuelRoute()
         let viewModel = made.viewModel
         let started = Date()
+        // `Task` has no `isCompleted` in Swift 5.10 or Swift 6. The task
+        // sets this on the main actor as its last step.
+        let completion = FuelSelectionCompletion()
         let selection = Task { @MainActor in
             await viewModel.toggleRecommendedFuelSelection()
+            completion.isCompleted = true
         }
         var sawSpinner = false
         while Date().timeIntervalSince(started) < 0.5 {
@@ -859,18 +870,18 @@ final class StopSelectionTests: XCTestCase {
                 sawSpinner = true
                 break
             }
-            if selection.isCompleted { break }
+            if completion.isCompleted { break }
             await Task.yield()
         }
         XCTAssertLessThan(Date().timeIntervalSince(started), 0.5)
-        XCTAssertTrue(sawSpinner || selection.isCompleted)
-        if !selection.isCompleted {
+        XCTAssertTrue(sawSpinner || completion.isCompleted)
+        if !completion.isCompleted {
             XCTAssertTrue(viewModel.isSelectingRecommendedFuel)
         }
 
         var turns = 0
         var longestGap: TimeInterval = 0
-        while !selection.isCompleted, Date().timeIntervalSince(started) < 5 {
+        while !completion.isCompleted, Date().timeIntervalSince(started) < 5 {
             let began = Date()
             await Task.yield()
             longestGap = max(longestGap, Date().timeIntervalSince(began))
