@@ -919,7 +919,6 @@ final class StopSelectionTests: XCTestCase {
         let viewModel = made.viewModel
         let stations = made.stations
         let suggestions = made.suggestions
-        let line = made.line
 
         let mile = AppSettings.metersPerMile
         let started = Date()
@@ -947,7 +946,16 @@ final class StopSelectionTests: XCTestCase {
         XCTAssertEqual(RoutePlannerViewModel.fuelSelectionStatus, "Finding fuel stops…")
         XCTAssertGreaterThan(viewModel.waypoints.count, 2)
         let sample = stations[20]
-        let projected = RoutePlannerViewModel.distanceFromStart(of: sample, alongPolylines: [line])
+        // Stops are already on the route, so the cached mile mark follows the
+        // published corridor (or the leg polylines once that corridor is gone),
+        // not the straight line from before the insert.
+        let routePolylines = viewModel.plannedCorridor.contains(where: { $0.count > 1 })
+            ? viewModel.plannedCorridor
+            : viewModel.legs.map { RouteGeometry.coordinates(of: $0.polyline) }
+        let projected = RoutePlannerViewModel.distanceFromStart(
+            of: sample,
+            alongPolylines: routePolylines
+        )
         XCTAssertEqual(viewModel.distanceFromStart(of: sample), projected, accuracy: 1)
         XCTAssertGreaterThan(projected, 1_000 * mile)
     }
