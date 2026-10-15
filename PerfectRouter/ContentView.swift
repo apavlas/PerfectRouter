@@ -402,13 +402,7 @@ struct ContentView: View {
                     viewModel: viewModel,
                     openDescription: $openPlaceDescription
                 )
-                if viewModel.selectedCategory != .gas,
-                   !viewModel.legs.isEmpty,
-                   GasStationsSection.hasContent(viewModel) {
-                    GasStationsSection(viewModel: viewModel)
-                } else {
-                    FocusPlaceholderRow()
-                }
+                GasStationsSectionGate(viewModel: viewModel)
                 FuelRangeSection(viewModel: viewModel)
                 DepartureSection(viewModel: viewModel)
                 RouteStyleSection(viewModel: viewModel)

@@ -102,6 +102,7 @@ fileprivate struct FuelPlanDraft: Sendable {
 /// One station or buffered stop, already copied off `MKMapItem`.
 private struct FuelSelectionStation: Sendable {
     var id: UUID
+    var name: String
     var latitude: Double
     var longitude: Double
     var distance: CLLocationDistance
@@ -141,6 +142,8 @@ private struct FuelSelectionInput: Sendable {
     var hasLegs: Bool
     var countsGasFills: Bool
     var showsGap: Bool
+    var driveLegs: [FuelStopRidingTime.Leg]
+    var usesMetric: Bool
 }
 
 private enum FuelPlacement: Sendable {
@@ -165,6 +168,9 @@ private struct FuelSelectionOutput: Sendable {
     var onRouteGasDistances: [CLLocationDistance]
     var visibleEntryIDs: [String]
     var planHasGap: Bool
+    /// Titles and mile marks for the rows this result shows. Empty when the
+    /// published fuel list is cleared with the insert.
+    var labels: FuelRowLabelSet
 }
 
 /// What a fuel-range commit restarts. File-level so a nonisolated helper can
@@ -253,6 +259,36 @@ struct RecommendedFuelAccessibility: Equatable {
     var label: String
     /// "Fuel stop N: Name", shown on the row and inside `label`.
     var title: String
+    /// Riding caption shown under the title. Paired with `title` so a row
+    /// never mixes a fuel-stop number with the generic miles line.
+    var caption: String
+}
+
+/// Title and caption for one fuel row, published together.
+struct FuelRowLabel: Equatable, Sendable {
+    var title: String
+    var caption: String
+    var accessibilityLabel: String
+    var identifier: String
+    var pastFullTank: Bool
+}
+
+/// Lookup by stop id and by coordinate key. One value is replaced at a time
+/// so every row sees the same titles and mile marks.
+struct FuelRowLabelSet: Equatable, Sendable {
+    var byID: [UUID: FuelRowLabel] = [:]
+    var byKey: [String: FuelRowLabel] = [:]
+
+    func label(id: UUID, key: String) -> FuelRowLabel? {
+        byID[id] ?? byKey[key]
+    }
+}
+
+/// Visible fuel rows and the labels those rows draw. One value, so a list
+/// update cannot show a fuel-stop number with another row's mile caption.
+struct FuelListPresentation {
+    var visibleEntries: [FuelPlanEntry] = []
+    var labels: FuelRowLabelSet = FuelRowLabelSet()
 }
 
 /// One row of the fuel list: an in-range recommendation, the named gap that
@@ -478,11 +514,13 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         // so the list cannot keep showing the previous style's stops.
         if replanningExistingLine {
             twistyLimitationNote = nil
-            fuelStops = []
-            fuelPlanEntries = []
             fuelFoodStops = []
             pairedFuelStopIDs = []
-            hasFuelGap = false
+            mutateFuelList {
+                fuelStops = []
+                fuelPlanEntries = []
+                hasFuelGap = false
+            }
             let generation = calculatingGeneration
             replanProgressTask = Task { await self.noteReplanIfStillRunning(generation: generation) }
         }
@@ -768,13 +806,20 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         didSet { rebuildDistanceCache() }
     }
 
+    /// Fuel rows and their labels, replaced in one assignment. A view that
+    /// reads the array and the label sees the same generation.
+    private var fuelListPresentation = FuelListPresentation()
+
     /// Fuel rows the sheet should draw. A cancelled or throttled search
     /// keeps in-range recommendations and hides the named gap. A stop
     /// already on the route is omitted so Apply cannot add it twice.
     ///
-    /// Stored. Rebuilt off the main thread when the route, the stations,
-    /// the selection, or the tank change. A view body only reads the array.
-    private(set) var visibleFuelPlanEntries: [FuelPlanEntry] = []
+    /// Stored on `fuelListPresentation`. Rebuilt off the main thread when
+    /// the route, the stations, the selection, or the tank change. A view
+    /// body only reads the array.
+    var visibleFuelPlanEntries: [FuelPlanEntry] {
+        fuelListPresentation.visibleEntries
+    }
 
     /// Waypoint coordinates rounded to three decimals. `isStopOnRoute` is
     /// one set lookup, not a scan of the route list.
@@ -792,21 +837,22 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// station name still exposes `fuelStop.<name>.checked` and a
     /// "Fuel stop N:" label. Past-range rows are not fuel stops.
     func recommendedFuelAccessibility(for stop: SuggestedStop) -> RecommendedFuelAccessibility? {
-        var number = 0
-        for entry in visibleFuelPlanEntries {
-            guard case .recommended(let fuel) = entry else { continue }
-            number += 1
-            guard Self.sameFuelPlace(fuel, stop) else { continue }
-            let caption = fuelStopRidingCaption(for: fuel)
-            let title = "Fuel stop \(number): \(fuel.name)"
-            let checked = isGasBuffered(stop) || isGasBuffered(fuel)
-            return RecommendedFuelAccessibility(
-                identifier: AccessibilityID.fuelStop(fuel.name, checked: checked),
-                label: "\(title), \(caption)",
-                title: title
-            )
-        }
-        return nil
+        guard let label = fuelRowLabel(for: stop) else { return nil }
+        return RecommendedFuelAccessibility(
+            identifier: label.identifier,
+            label: label.accessibilityLabel,
+            title: label.title,
+            caption: label.caption
+        )
+    }
+
+    /// Title and caption published for this place. Nil when the stop is not
+    /// one of the current fuel rows. Both strings come from the same value.
+    func fuelRowLabel(for stop: SuggestedStop) -> FuelRowLabel? {
+        fuelListPresentation.labels.label(
+            id: stop.id,
+            key: Self.coordinateKey(stop.coordinate)
+        )
     }
 
     /// Summary, suggestion, and gas-list rows are separate searches, so they
@@ -833,13 +879,6 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             anchors: fuelRidingAnchorDistances(including: distance),
             legs: driveLegTimings()
         )
-    }
-
-    /// Riding caption when `stop` is a recommended or past-range fuel stop.
-    func fuelStopListCaption(for stop: SuggestedStop) -> String? {
-        let pastRange = isPastRangeFuelStop(stop)
-        guard pastRange || isRecommendedFuelStop(stop) else { return nil }
-        return fuelStopRidingCaption(for: stop)
     }
 
     /// Visible fuel rows plus applied gas fills. The fill is no longer a
@@ -1299,6 +1338,11 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// several arrays. The tap measures once, off the main actor, at the end.
     private var suppressDistanceRebuild = false
 
+    /// Greater than zero while stops and entries are changing together.
+    /// Snapshots wait until the batch finishes so a row cannot publish
+    /// halfway through.
+    private var fuelListMutationDepth = 0
+
     /// Checks every recommended fuel stop from the start to the destination,
     /// in ride order, and adds that whole set in the same tap. The route is
     /// recalculated once. When the current line already has stations, the
@@ -1366,15 +1410,16 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     private func makeFuelSelectionInput() -> FuelSelectionInput {
         func station(_ stop: SuggestedStop) -> FuelSelectionStation {
             let coordinate = stop.coordinate
-            return FuelSelectionStation(
-                id: stop.id,
-                latitude: coordinate.latitude,
-                longitude: coordinate.longitude,
-                distance: stop.distanceAlongRoute,
-                detour: stop.detourMeters,
-                key: Self.coordinateKey(coordinate),
-                isGas: stop.category == .gas
-            )
+        return FuelSelectionStation(
+            id: stop.id,
+            name: stop.name,
+            latitude: coordinate.latitude,
+            longitude: coordinate.longitude,
+            distance: stop.distanceAlongRoute,
+            detour: stop.detourMeters,
+            key: Self.coordinateKey(coordinate),
+            isGas: stop.category == .gas
+        )
         }
         var pastRangeIDs = Set<UUID>()
         var pastRangeKeys = Set<String>()
@@ -1413,7 +1458,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             replan: totalDistanceMeters > fuelRangeMeters && !gasStations.isEmpty,
             hasLegs: !legs.isEmpty,
             countsGasFills: !legs.isEmpty || corridorReady,
-            showsGap: showsFuelGapWarning
+            showsGap: showsFuelGapWarning,
+            driveLegs: cachedDriveLegs,
+            usesMetric: AppSettings.usesMetricUnits
         )
     }
 
@@ -1483,22 +1530,18 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         onRouteCoordinateKeys = output.onRouteKeys
         fuelPlanCoordinateKeys = output.clearFuel ? [] : output.fuelPlanKeys
         onRouteGasDistances = output.onRouteGasDistances
-        if output.clearFuel {
-            visibleFuelPlanEntries = []
-        } else if output.didReplan {
-            let entries = Self.fuelPlan(from: output.draft, stops: gasStations).entries
-            var byID: [String: FuelPlanEntry] = [:]
-            for entry in entries {
-                byID[entry.id] = entry
-            }
-            visibleFuelPlanEntries = output.visibleEntryIDs.compactMap { byID[$0] }
-        } else {
-            var byID: [String: FuelPlanEntry] = [:]
-            for entry in fuelPlanEntries {
-                byID[entry.id] = entry
-            }
-            visibleFuelPlanEntries = output.visibleEntryIDs.compactMap { byID[$0] }
+        // Rows and labels swap together, after every other field is in place.
+        var byID: [String: FuelPlanEntry] = [:]
+        for entry in fuelPlanEntries {
+            byID[entry.id] = entry
         }
+        let visible = output.clearFuel
+            ? []
+            : output.visibleEntryIDs.compactMap { byID[$0] }
+        fuelListPresentation = FuelListPresentation(
+            visibleEntries: visible,
+            labels: output.clearFuel ? FuelRowLabelSet() : output.labels
+        )
     }
 
     /// True when a waypoint already sits on this place. Matching is the
@@ -1750,7 +1793,11 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         gasGen: Int
     ) async {
         guard calcGen == calculatingGeneration else { return }
+        // Dropping the old suggestion rows does not need a polyline walk.
+        // The synchronous rebuild blocked the main thread for the whole tap.
+        suppressDistanceRebuild = true
         suggestedStops = []
+        suppressDistanceRebuild = false
         errorMessage = nil
         rainForecast = nil
 
@@ -2373,10 +2420,12 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         gasStations = []
         travelSideGasStations = []
         gasStopsWithFood = []
-        fuelStops = []
-        fuelPlanEntries = []
-        hasFuelGap = false
         fuelFoodStops = []
+        mutateFuelList {
+            fuelStops = []
+            fuelPlanEntries = []
+            hasFuelGap = false
+        }
         pairedFuelStopIDs = []
         highlightGeneration += 1
         rideHighlights = []
@@ -2865,6 +2914,17 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             showsGap: hasInserts ? false : input.showsGap,
             tank: input.tank
         ))
+        let visibleIDs = clearFuel ? [] : snapshot.visibleEntryIDs
+        let labels = Self.fuelLabels(
+            for: visibleIDs,
+            rows: rows,
+            stations: stationByID,
+            distances: distances,
+            anchors: anchors,
+            legs: input.driveLegs,
+            checkedIDs: Set(kept),
+            usesMetric: input.usesMetric
+        )
         return FuelSelectionOutput(
             didReplan: input.replan,
             hasInserts: hasInserts,
@@ -2878,8 +2938,50 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             onRouteKeys: postKeys,
             fuelPlanKeys: clearFuel ? [] : snapshot.fuelPlanKeys,
             onRouteGasDistances: anchors,
-            visibleEntryIDs: clearFuel ? [] : snapshot.visibleEntryIDs,
-            planHasGap: draft.hasGap
+            visibleEntryIDs: visibleIDs,
+            planHasGap: draft.hasGap,
+            labels: labels
+        )
+    }
+
+    /// Labels for the visible fuel rows, from the sendable plan. Runs with
+    /// the rest of the selection, off the main actor.
+    private nonisolated static func fuelLabels(
+        for visibleIDs: [String],
+        rows: [FuelPlanRow],
+        stations: [UUID: FuelSelectionStation],
+        distances: [UUID: CLLocationDistance],
+        anchors: [CLLocationDistance],
+        legs: [FuelStopRidingTime.Leg],
+        checkedIDs: Set<UUID>,
+        usesMetric: Bool
+    ) -> FuelRowLabelSet {
+        var byEntry: [String: FuelPlanRow] = [:]
+        for row in rows {
+            byEntry[row.entryID] = row
+        }
+        var recommended: [(id: UUID, name: String, key: String, distance: CLLocationDistance)] = []
+        var pastRange: [(id: UUID, name: String, key: String, distance: CLLocationDistance)] = []
+        for entryID in visibleIDs {
+            guard let row = byEntry[entryID], let station = stations[row.stopID] else { continue }
+            let distance = distances[row.stopID] ?? station.distance
+            let item = (id: station.id, name: station.name, key: station.key, distance: distance)
+            switch row.kind {
+            case .recommended:
+                recommended.append(item)
+            case .pastRange:
+                pastRange.append(item)
+            case .gap:
+                break
+            }
+        }
+        return fuelRowLabels(
+            recommended: recommended,
+            pastRange: pastRange,
+            anchors: anchors,
+            legs: legs,
+            checkedIDs: checkedIDs,
+            usesMetric: usesMetric
         )
     }
 
@@ -3093,25 +3195,148 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         return chosen
     }
 
-    /// Copies the inputs on the caller, then decides which rows are visible
-    /// off the main thread. View bodies read the stored results.
+    /// Changes stops and entries together, then publishes one fuel list.
+    /// Callers that already hold `suppressDistanceRebuild` still get a
+    /// single snapshot when the outer batch ends.
+    private func mutateFuelList(_ body: () -> Void) {
+        fuelListMutationDepth += 1
+        let wasSuppressed = suppressDistanceRebuild
+        suppressDistanceRebuild = true
+        body()
+        suppressDistanceRebuild = wasSuppressed
+        fuelListMutationDepth -= 1
+        if fuelListMutationDepth == 0, !suppressDistanceRebuild {
+            publishFuelPlanSnapshot()
+        }
+    }
+
+    /// Stores the visible rows and their labels in one assignment. The mile
+    /// marks were already measured. View bodies read this value and do not
+    /// rebuild a caption per row.
     private func publishFuelPlanSnapshot() {
-        guard !suppressDistanceRebuild else { return }
+        guard fuelListMutationDepth == 0, !suppressDistanceRebuild else { return }
         let inputs = fuelPlanInputs()
-        let snapshot = Self.fuelPlanSnapshotOffMain(inputs)
+        let snapshot = Self.fuelPlanSnapshot(inputs)
         onRouteCoordinateKeys = snapshot.onRouteKeys
         fuelPlanCoordinateKeys = snapshot.fuelPlanKeys
         onRouteGasDistances = snapshot.onRouteGasDistances
+        let visible: [FuelPlanEntry]
         if snapshot.visibleEntryIDs.isEmpty {
-            visibleFuelPlanEntries = []
-            return
+            visible = []
+        } else {
+            var byID: [String: FuelPlanEntry] = [:]
+            byID.reserveCapacity(fuelPlanEntries.count)
+            for entry in fuelPlanEntries {
+                byID[entry.id] = entry
+            }
+            visible = snapshot.visibleEntryIDs.compactMap { byID[$0] }
         }
-        var byID: [String: FuelPlanEntry] = [:]
-        byID.reserveCapacity(fuelPlanEntries.count)
-        for entry in fuelPlanEntries {
-            byID[entry.id] = entry
+        fuelListPresentation = FuelListPresentation(
+            visibleEntries: visible,
+            labels: labels(for: visible)
+        )
+    }
+
+    /// Riding captions for the rows about to be shown. Formatting only —
+    /// the mile marks are already measured.
+    private func labels(for entries: [FuelPlanEntry]) -> FuelRowLabelSet {
+        var recommended: [(id: UUID, name: String, key: String, distance: CLLocationDistance)] = []
+        var pastRange: [(id: UUID, name: String, key: String, distance: CLLocationDistance)] = []
+        for entry in entries {
+            switch entry {
+            case .recommended(let stop):
+                recommended.append((
+                    stop.id,
+                    stop.name,
+                    Self.coordinateKey(stop.coordinate),
+                    cachedDistance(for: stop)
+                ))
+            case .pastRange(let stop):
+                pastRange.append((
+                    stop.id,
+                    stop.name,
+                    Self.coordinateKey(stop.coordinate),
+                    cachedDistance(for: stop)
+                ))
+            case .gap:
+                break
+            }
         }
-        visibleFuelPlanEntries = snapshot.visibleEntryIDs.compactMap { byID[$0] }
+        let checked = Set(bufferedGasStops.map(\.id))
+        var anchors = gasFillDistances
+        anchors.append(contentsOf: recommended.map(\.distance))
+        anchors.append(contentsOf: pastRange.map(\.distance))
+        return Self.fuelRowLabels(
+            recommended: recommended,
+            pastRange: pastRange,
+            anchors: anchors,
+            legs: cachedDriveLegs,
+            checkedIDs: checked,
+            usesMetric: AppSettings.usesMetricUnits
+        )
+    }
+
+    /// Formats each fuel row's title and mile caption. The two strings are
+    /// one value, so the list cannot show "Fuel stop 12" with another
+    /// station's "~164 mi from start" line.
+    private nonisolated static func fuelRowLabels(
+        recommended: [(id: UUID, name: String, key: String, distance: CLLocationDistance)],
+        pastRange: [(id: UUID, name: String, key: String, distance: CLLocationDistance)],
+        anchors: [CLLocationDistance],
+        legs: [FuelStopRidingTime.Leg],
+        checkedIDs: Set<UUID>,
+        usesMetric: Bool
+    ) -> FuelRowLabelSet {
+        var set = FuelRowLabelSet()
+        func store(_ label: FuelRowLabel, id: UUID, key: String) {
+            set.byID[id] = label
+            if !key.isEmpty {
+                set.byKey[key] = label
+            }
+        }
+        for (number, stop) in recommended.enumerated() {
+            let title = "Fuel stop \(number + 1): \(stop.name)"
+            let caption = FuelStopRidingTime.caption(
+                distanceMeters: stop.distance,
+                anchors: anchors,
+                legs: legs,
+                usesMetric: usesMetric
+            )
+            let checked = checkedIDs.contains(stop.id)
+            store(
+                FuelRowLabel(
+                    title: title,
+                    caption: caption,
+                    accessibilityLabel: "\(title), \(caption)",
+                    identifier: AccessibilityID.fuelStop(stop.name, checked: checked),
+                    pastFullTank: false
+                ),
+                id: stop.id,
+                key: stop.key
+            )
+        }
+        for stop in pastRange {
+            let caption = FuelStopRidingTime.caption(
+                distanceMeters: stop.distance,
+                anchors: anchors,
+                legs: legs,
+                usesMetric: usesMetric
+            )
+            let checked = checkedIDs.contains(stop.id)
+            let note = pastFullTankNotice
+            store(
+                FuelRowLabel(
+                    title: stop.name,
+                    caption: caption,
+                    accessibilityLabel: "\(stop.name), \(caption), \(note)",
+                    identifier: AccessibilityID.fuelStop(stop.name, checked: checked),
+                    pastFullTank: true
+                ),
+                id: stop.id,
+                key: stop.key
+            )
+        }
+        return set
     }
 
     /// One pass over stations and waypoints. Coordinate keys are formatted
@@ -3160,14 +3385,6 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             showsGap: showsFuelGapWarning,
             tank: fuelRangeMeters
         )
-    }
-
-    private nonisolated static func fuelPlanSnapshotOffMain(
-        _ inputs: FuelPlanInputs
-    ) -> FuelPlanSnapshot {
-        DispatchQueue.global(qos: .userInitiated).sync { @Sendable in
-            Self.fuelPlanSnapshot(inputs)
-        }
     }
 
     private nonisolated static func fuelPlanSnapshot(
@@ -3263,11 +3480,13 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// tank-interval search has already run — no network.
     func replanFuelStops(pairingFood: Bool = true) {
         guard totalDistanceMeters > fuelRangeMeters else {
-            fuelStops = []
-            fuelPlanEntries = []
-            hasFuelGap = false
             fuelFoodStops = []
             pairedFuelStopIDs = []
+            mutateFuelList {
+                fuelStops = []
+                fuelPlanEntries = []
+                hasFuelGap = false
+            }
             return
         }
         let plan = Self.fuelPlan(
@@ -3280,12 +3499,16 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             totalTravelTime: totalExpectedTravelTime,
             unsearched: unsearchedFuelDistances
         )
-        fuelStops = plan.stops
-        fuelPlanEntries = plan.entries
-        // A dry stretch only becomes the rider-facing warning when this pool
-        // came from a search that returned every sample. Departure-time meal
-        // replans keep that trust bit; they do not invent a gap.
-        hasFuelGap = plan.hasGap && gasCoverageTrusted
+        // One snapshot after both arrays are in place. Publishing from the
+        // first assignment would number old rows against the new stops.
+        mutateFuelList {
+            fuelStops = plan.stops
+            fuelPlanEntries = plan.entries
+            // A dry stretch only becomes the rider-facing warning when this pool
+            // came from a search that returned every sample. Departure-time meal
+            // replans keep that trust bit; they do not invent a gap.
+            hasFuelGap = plan.hasGap && gasCoverageTrusted
+        }
         gasLog.info("fuel gap gen=\(self.gasGeneration, privacy: .public) planGap=\(plan.hasGap, privacy: .public) trusted=\(self.gasCoverageTrusted, privacy: .public) show=\(self.hasFuelGap, privacy: .public)")
         // Re-pair food when the range slider changes the chosen stops. The
         // identity guard inside makes this a no-op (no network) when the set
@@ -4061,15 +4284,32 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         distanceAlongRouteByID[stop.id] ?? stop.distanceAlongRoute
     }
 
-    /// Measures every current station and waypoint once, off the main thread.
-    /// View bodies then read `distanceAlongRouteByID`.
+    /// Measures every current station and waypoint once.
+    /// A short route stays on the caller so a unit test can read mile marks
+    /// immediately. A long polyline is projected off the main actor, then
+    /// published once — `DispatchQueue.sync` here blocked the tap for seconds.
     private func rebuildDistanceCache() {
         guard !suppressDistanceRebuild else { return }
-        distanceAlongRouteByID = Self.projectDistances(
-            queries: distanceQueries(),
-            on: measuredRoute(for: suggestionRoutePolylines)
-        )
-        publishFuelPlanSnapshot()
+        let queries = distanceQueries()
+        let polylines = suggestionRoutePolylines
+        let points = polylines.reduce(0) { $0 + $1.count }
+        if points <= 2_000, queries.count <= 400 {
+            distanceAlongRouteByID = Self.projectDistances(
+                queries: queries,
+                on: measuredRoute(for: polylines)
+            )
+            publishFuelPlanSnapshot()
+            return
+        }
+        let generation = routeGeometryGeneration
+        Task { @MainActor in
+            guard !self.suppressDistanceRebuild, generation == self.routeGeometryGeneration else { return }
+            let route = await Self.measureRouteAsync(polylines)
+            let distances = await Self.projectDistancesOffMain(queries: queries, on: route)
+            guard !self.suppressDistanceRebuild, generation == self.routeGeometryGeneration else { return }
+            self.distanceAlongRouteByID = distances
+            self.publishFuelPlanSnapshot()
+        }
     }
 
     /// Same measurement as `rebuildDistanceCache`, awaited so the main actor

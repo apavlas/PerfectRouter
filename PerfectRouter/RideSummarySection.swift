@@ -243,8 +243,9 @@ private struct FuelPlanRows: View {
     private func rowContent(_ row: FuelPlanRow) -> some View {
         switch row.kind {
         case .recommended(let fuelStop, let number):
-            let title = "Fuel stop \(number): \(fuelStop.name)"
-            let caption = viewModel.fuelStopRidingCaption(for: fuelStop)
+            let stored = viewModel.fuelRowLabel(for: fuelStop)
+            let title = stored?.title ?? "Fuel stop \(number): \(fuelStop.name)"
+            let caption = stored?.caption ?? viewModel.fuelStopRidingCaption(for: fuelStop)
             Button {
                 viewModel.toggleBufferedGasStop(fuelStop)
             } label: {
@@ -268,9 +269,10 @@ private struct FuelPlanRows: View {
             .buttonStyle(.plain)
             .fuelRowAccessibility(
                 RecommendedFuelAccessibility(
-                    identifier: AccessibilityID.fuelStop(fuelStop.name, checked: viewModel.isGasBuffered(fuelStop)),
-                    label: "\(title), \(caption)",
-                    title: title
+                    identifier: stored?.identifier ?? AccessibilityID.fuelStop(fuelStop.name, checked: viewModel.isGasBuffered(fuelStop)),
+                    label: stored?.accessibilityLabel ?? "\(title), \(caption)",
+                    title: title,
+                    caption: caption
                 )
             )
         case .food(let food):
@@ -293,6 +295,12 @@ private struct FuelPlanRows: View {
                 .foregroundStyle(.orange)
                 .font(.subheadline)
         case .pastRange(let stop):
+            let stored = viewModel.fuelRowLabel(for: stop)
+            let title = stored?.title ?? stop.name
+            let caption = stored?.caption ?? viewModel.fuelStopRidingCaption(for: stop)
+            let note = stored?.pastFullTank == true
+                ? RoutePlannerViewModel.pastFullTankNotice
+                : viewModel.fuelListNote(for: stop)
             Button {
                 viewModel.toggleBufferedGasStop(stop)
             } label: {
@@ -301,11 +309,11 @@ private struct FuelPlanRows: View {
                         .foregroundStyle(.orange)
                         .accessibilityHidden(true)
                     FuelStopTextColumn(
-                        title: stop.name,
-                        caption: viewModel.fuelStopRidingCaption(for: stop),
+                        title: title,
+                        caption: caption,
                         titleColor: .orange
                     )
-                    if viewModel.fuelListNote(for: stop) != nil {
+                    if note != nil {
                         PastFullTankLabel()
                     } else {
                         PastYourRangeLabel()
@@ -315,9 +323,7 @@ private struct FuelPlanRows: View {
                 }
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(
-                "\(stop.name), \(viewModel.fuelStopRidingCaption(for: stop)), \(viewModel.fuelListNote(for: stop) ?? "")"
-            )
+            .accessibilityLabel(stored?.accessibilityLabel ?? "\(title), \(caption), \(note ?? "")")
         }
     }
 

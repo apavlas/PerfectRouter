@@ -139,9 +139,30 @@ struct SuggestedStop: Identifiable {
     /// Prose Apple Maps or the place itself published. Nil means the card
     /// shows no description — nothing is filled in.
     var placeDescription: String? = nil
+    /// Copied once from the placemark. List rows and the fuel scan read
+    /// these instead of touching `MKMapItem` again.
+    let latitude: Double
+    let longitude: Double
 
     var name: String { mapItem.name ?? "Unknown" }
-    var coordinate: CLLocationCoordinate2D { mapItem.placemark.coordinate }
+    var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
+
+    init(mapItem: MKMapItem,
+         category: StopCategory,
+         distanceAlongRoute: CLLocationDistance,
+         detourMeters: CLLocationDistance = 0,
+         placeDescription: String? = nil) {
+        self.mapItem = mapItem
+        self.category = category
+        self.distanceAlongRoute = distanceAlongRoute
+        self.detourMeters = detourMeters
+        self.placeDescription = placeDescription
+        let coordinate = mapItem.placemark.coordinate
+        self.latitude = coordinate.latitude
+        self.longitude = coordinate.longitude
+    }
 }
 
 /// Local-time windows when a rider is likely to want food with a fuel stop.

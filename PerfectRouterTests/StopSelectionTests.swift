@@ -366,6 +366,11 @@ final class StopSelectionTests: XCTestCase {
         await viewModel.toggleRecommendedFuelSelection()
 
         XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "Early", "Late", "End"])
+        let earlyLabel = viewModel.fuelRowLabel(for: early)
+        XCTAssertNotNil(earlyLabel)
+        XCTAssertTrue(earlyLabel?.title.hasPrefix("Fuel stop ") ?? false)
+        XCTAssertTrue(earlyLabel?.title.contains("Early") ?? false)
+        XCTAssertFalse(earlyLabel?.caption.contains("from start") ?? true)
         XCTAssertEqual(viewModel.waypoints.map(\.isGasFill), [false, true, true, false])
         XCTAssertEqual(viewModel.bufferedGasStops.map(\.name), ["Side Pump"])
         XCTAssertFalse(viewModel.waypoints.contains { $0.name == "Too Far" || $0.name == "Diner" || $0.name == "Side Pump" })
