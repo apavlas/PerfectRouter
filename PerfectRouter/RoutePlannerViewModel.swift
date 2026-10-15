@@ -135,6 +135,9 @@ private struct FuelSelectionInput: Sendable {
     var waypoints: [FuelSelectionWaypoint]
     var queries: [AlongRouteQuery]
     var polylines: [[CLLocationCoordinate2D]]
+    /// `routeGeometryGeneration` of `polylines`. Distances belong to this
+    /// corridor only; a newer route must not keep them.
+    var corridorGeneration: Int
     var tank: CLLocationDistance
     var totalDistance: CLLocationDistance
     var totalTravelTime: TimeInterval
@@ -167,6 +170,8 @@ private struct FuelSelectionOutput: Sendable {
     var placements: [FuelPlacement]
     var keptBufferedIDs: [UUID]
     var distances: [UUID: CLLocationDistance]
+    /// Corridor generation `distances` were projected onto.
+    var corridorGeneration: Int
     var onRouteKeys: Set<String>
     var fuelPlanKeys: Set<String>
     var onRouteGasDistances: [CLLocationDistance]
@@ -358,7 +363,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// One MKRoute per leg (waypoint i -> waypoint i+1).
     var legs: [MKRoute] = [] {
         didSet {
-            routeGeometryGeneration &+= 1
+            noteRouteGeometryChanged()
             rebuildDriveLegCache()
             rebuildDistanceCache()
         }
@@ -415,12 +420,20 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// Suggestion distances project onto this copy, which was read on the
     /// main actor. A later `MKPolyline` read can come back empty and would
     /// otherwise label every stop "~0 ft from start".
-    var plannedCorridor: [[CLLocationCoordinate2D]] = [] {
-        didSet {
-            routeGeometryGeneration &+= 1
+    ///
+    /// Stored as its own coordinate buffers. The caller's array, and any
+    /// `MKPolyline` built from it, must not be able to change these vertices
+    /// while a background measurement is reading them.
+    var plannedCorridor: [[CLLocationCoordinate2D]] {
+        get { corridorStorage }
+        set {
+            corridorStorage = Self.snapshotPolylines(newValue)
+            noteRouteGeometryChanged()
             rebuildDistanceCache()
         }
     }
+
+    private var corridorStorage: [[CLLocationCoordinate2D]] = []
 
     /// Route geometry for "miles from start". Prefer the corridor captured
     /// when the route was published. Read the live legs only when that
@@ -1018,13 +1031,20 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         didSet { rebuildDistanceCache() }
     }
 
-    /// Distance along the current route, keyed by station or waypoint id.
-    /// Rebuilt off the main thread when stations or the route change. View
-    /// updates only read this map.
-    private var distanceAlongRouteByID: [UUID: CLLocationDistance] = [:]
+    /// Distance along one corridor, published together with the generation
+    /// those distances were measured against. A route change bumps
+    /// `routeGeometryGeneration` and this value no longer matches, so readers
+    /// project directly instead of keeping a mile mark from the previous line.
+    private struct DistanceAlongRouteCache {
+        var generation: Int
+        var distances: [UUID: CLLocationDistance]
+    }
+
+    private var distanceAlongRouteCache = DistanceAlongRouteCache(generation: -1, distances: [:])
 
     /// Bumped when the polyline changes. Station edits reuse `cachedMeasuredRoute`
     /// so Select recommended does not rebuild the coast-to-coast line per array.
+    /// Starts at 0, so a cache generation of -1 is stale until the first publish.
     private var routeGeometryGeneration = 0
     private var measuredRouteGeneration = -1
     private var cachedMeasuredRoute: RouteGeometry.MeasuredRoute?
@@ -1455,7 +1475,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 )
             },
             queries: distanceQueries(),
-            polylines: corridorReady ? plannedCorridor : [],
+            polylines: corridorReady ? Self.snapshotPolylines(plannedCorridor) : [],
+            corridorGeneration: routeGeometryGeneration,
             tank: fuelRangeMeters,
             totalDistance: totalDistanceMeters,
             totalTravelTime: totalExpectedTravelTime,
@@ -1536,8 +1557,17 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
         // Drop in-flight rebuilds. They captured an earlier polyline and
         // would replace this projection before the list reads it.
+        // Generation and distances publish together. A corridor that moved
+        // while the scan ran does not keep that scan's mile marks.
         distanceRebuildToken &+= 1
-        distanceAlongRouteByID = output.distances
+        if output.corridorGeneration == routeGeometryGeneration {
+            distanceAlongRouteCache = DistanceAlongRouteCache(
+                generation: output.corridorGeneration,
+                distances: output.distances
+            )
+        } else {
+            distanceAlongRouteCache = DistanceAlongRouteCache(generation: -1, distances: [:])
+        }
         onRouteCoordinateKeys = output.onRouteKeys
         fuelPlanCoordinateKeys = output.clearFuel ? [] : output.fuelPlanKeys
         onRouteGasDistances = output.onRouteGasDistances
@@ -2947,6 +2977,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             placements: hasInserts ? placements : [],
             keptBufferedIDs: kept,
             distances: distances,
+            corridorGeneration: input.corridorGeneration,
             onRouteKeys: postKeys,
             fuelPlanKeys: clearFuel ? [] : snapshot.fuelPlanKeys,
             onRouteGasDistances: anchors,
@@ -3780,9 +3811,16 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// The values were measured when the waypoints or the route changed.
     private var gasFillDistances: [CLLocationDistance] {
         guard !legs.isEmpty || plannedCorridor.contains(where: { $0.count > 1 }) else { return [] }
+        let cache = distanceAlongRouteCache
+        guard cache.generation == routeGeometryGeneration else {
+            return waypoints.compactMap { waypoint in
+                guard waypoint.isGasFill else { return nil }
+                return 0
+            }
+        }
         return waypoints.compactMap { waypoint in
             guard waypoint.isGasFill else { return nil }
-            return distanceAlongRouteByID[waypoint.id] ?? 0
+            return cache.distances[waypoint.id] ?? 0
         }
     }
 
@@ -4302,33 +4340,62 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         cachedDistance(for: stop)
     }
 
-    /// Cached mile mark. A miss uses the distance stored on the stop, which
-    /// is what search already measured. It does not scan the polyline.
+    /// Cached mile mark for the current corridor. A stale generation, or an
+    /// id the current measurement did not include, uses the same projection
+    /// as `distanceFromStart(of:alongPolylines:)`.
     private func cachedDistance(for stop: SuggestedStop) -> CLLocationDistance {
-        distanceAlongRouteByID[stop.id] ?? stop.distanceAlongRoute
+        let cache = distanceAlongRouteCache
+        if cache.generation == routeGeometryGeneration, let distance = cache.distances[stop.id] {
+            return distance
+        }
+        return Self.distanceFromStart(of: stop, alongPolylines: suggestionRoutePolylines)
+    }
+
+    /// Drops mile marks measured on a previous line. The next publish is the
+    /// only value `distanceFromStart` will trust for the new generation.
+    private func noteRouteGeometryChanged() {
+        routeGeometryGeneration &+= 1
+        cachedMeasuredRoute = nil
+        measuredRouteGeneration = -1
+        distanceAlongRouteCache = DistanceAlongRouteCache(generation: -1, distances: [:])
+    }
+
+    /// One assignment: the generation and every id measured on that corridor.
+    private func publishDistanceCache(
+        generation: Int,
+        distances: [UUID: CLLocationDistance]
+    ) {
+        guard generation == routeGeometryGeneration else { return }
+        distanceAlongRouteCache = DistanceAlongRouteCache(
+            generation: generation,
+            distances: distances
+        )
+        publishFuelPlanSnapshot()
     }
 
     /// Measures every current station and waypoint once.
     /// A short route stays on the caller so a unit test can read mile marks
     /// immediately. A long polyline is projected off the main actor, then
     /// published once — `DispatchQueue.sync` here blocked the tap for seconds.
+    /// The vertices are copied before that work so the measurement cannot
+    /// observe a later edit of the caller's storage.
     private func rebuildDistanceCache() {
         guard !suppressDistanceRebuild else { return }
         let queries = distanceQueries()
-        let polylines = suggestionRoutePolylines
+        let polylines = Self.snapshotPolylines(suggestionRoutePolylines)
+        let generation = routeGeometryGeneration
         let points = polylines.reduce(0) { $0 + $1.count }
         if points <= 2_000, queries.count <= 400 {
             distanceRebuildToken &+= 1
-            distanceAlongRouteByID = Self.projectDistances(
+            let distances = Self.projectDistances(
                 queries: queries,
                 on: measuredRoute(for: polylines)
             )
-            publishFuelPlanSnapshot()
+            publishDistanceCache(generation: generation, distances: distances)
             return
         }
         distanceRebuildToken &+= 1
         let token = distanceRebuildToken
-        let generation = routeGeometryGeneration
         Task { @MainActor in
             guard token == self.distanceRebuildToken,
                   !self.suppressDistanceRebuild,
@@ -4338,8 +4405,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             guard token == self.distanceRebuildToken,
                   !self.suppressDistanceRebuild,
                   generation == self.routeGeometryGeneration else { return }
-            self.distanceAlongRouteByID = distances
-            self.publishFuelPlanSnapshot()
+            self.publishDistanceCache(generation: generation, distances: distances)
         }
     }
 
@@ -4347,10 +4413,12 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// can draw the fuel spinner while a long polyline is projected.
     private func rebuildDistanceCacheOffMain() async {
         let queries = distanceQueries()
-        let polylines = suggestionRoutePolylines
+        let polylines = Self.snapshotPolylines(suggestionRoutePolylines)
+        let generation = routeGeometryGeneration
         let route = await measuredRouteOffMain(for: polylines)
-        distanceAlongRouteByID = await Self.projectDistancesOffMain(queries: queries, on: route)
-        publishFuelPlanSnapshot()
+        guard generation == routeGeometryGeneration else { return }
+        let distances = await Self.projectDistancesOffMain(queries: queries, on: route)
+        publishDistanceCache(generation: generation, distances: distances)
     }
 
     private func distanceQueries() -> [AlongRouteQuery] {
@@ -4429,10 +4497,31 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         if measuredRouteGeneration == routeGeometryGeneration, let cachedMeasuredRoute {
             return cachedMeasuredRoute
         }
+        let generation = routeGeometryGeneration
         let route = await Self.measureRouteAsync(polylines)
+        guard generation == routeGeometryGeneration else { return nil }
         cachedMeasuredRoute = route
-        measuredRouteGeneration = routeGeometryGeneration
+        measuredRouteGeneration = generation
         return route
+    }
+
+    /// Copies each vertex into storage this measurement alone owns. An array
+    /// copy still shares its buffer until the next mutation, and a background
+    /// scan must not read that buffer while the route changes.
+    private nonisolated static func snapshotPolylines(
+        _ polylines: [[CLLocationCoordinate2D]]
+    ) -> [[CLLocationCoordinate2D]] {
+        polylines.map { coords in
+            var copy: [CLLocationCoordinate2D] = []
+            copy.reserveCapacity(coords.count)
+            for coordinate in coords {
+                copy.append(CLLocationCoordinate2D(
+                    latitude: coordinate.latitude,
+                    longitude: coordinate.longitude
+                ))
+            }
+            return copy
+        }
     }
 
     private nonisolated static func measureRouteAsync(
@@ -4497,14 +4586,11 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         var measured: [UUID: CLLocationDistance] = [:]
         measured.reserveCapacity(queries.count)
         for query in queries {
-            let coordinate = CLLocationCoordinate2D(
+            measured[query.id] = projectedDistance(
                 latitude: query.latitude,
-                longitude: query.longitude
-            )
-            let projected = RouteGeometry.distanceAlongRoute(of: coordinate, on: route)
-            measured[query.id] = RouteGeometry.preferredDistanceAlongRoute(
-                projected: projected,
-                known: query.known
+                longitude: query.longitude,
+                known: query.known,
+                on: route
             )
         }
         return measured
@@ -4515,13 +4601,12 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         alongPolylines polylines: [[CLLocationCoordinate2D]]
     ) -> CLLocationDistance {
         guard polylinesAreMeasurable(polylines) else { return stop.distanceAlongRoute }
-        let projected = RouteGeometry.distanceAlongRoute(
-            of: stop.coordinate,
-            alongPolylines: polylines
-        )
-        return RouteGeometry.preferredDistanceAlongRoute(
-            projected: projected,
-            known: stop.distanceAlongRoute
+        let route = RouteGeometry.MeasuredRoute(polylines: snapshotPolylines(polylines))
+        return projectedDistance(
+            latitude: stop.coordinate.latitude,
+            longitude: stop.coordinate.longitude,
+            known: stop.distanceAlongRoute,
+            on: route
         )
     }
 
@@ -4533,15 +4618,14 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         alongPolylines polylines: [[CLLocationCoordinate2D]]
     ) -> [SuggestedStop] {
         guard polylinesAreMeasurable(polylines) else { return stops }
+        let route = RouteGeometry.MeasuredRoute(polylines: snapshotPolylines(polylines))
         return stops.map { stop in
-            let projected = RouteGeometry.distanceAlongRoute(
-                of: stop.coordinate,
-                alongPolylines: polylines
-            )
-            return stop.withDistanceAlongRoute(
-                RouteGeometry.preferredDistanceAlongRoute(
-                    projected: projected,
-                    known: stop.distanceAlongRoute
+            stop.withDistanceAlongRoute(
+                projectedDistance(
+                    latitude: stop.coordinate.latitude,
+                    longitude: stop.coordinate.longitude,
+                    known: stop.distanceAlongRoute,
+                    on: route
                 )
             )
         }
