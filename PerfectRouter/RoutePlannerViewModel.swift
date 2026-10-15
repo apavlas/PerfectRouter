@@ -40,6 +40,42 @@ private struct DriveLegSnapshot: Sendable {
     var expectedTravelTime: TimeInterval
 }
 
+private enum FuelPlanRowKind: Sendable {
+    case recommended
+    case pastRange
+    case gap
+}
+
+/// One fuel-list row reduced to sendable fields. The visible-plan pass
+/// runs off the main actor and never touches `MKMapItem`.
+private struct FuelPlanRow: Sendable {
+    var entryID: String
+    var stopID: UUID
+    var key: String
+    var distance: CLLocationDistance
+    var kind: FuelPlanRowKind
+}
+
+private struct FuelPlanInputs: Sendable {
+    var rows: [FuelPlanRow]
+    var onRouteKeys: Set<String>
+    var onRouteGasDistances: [CLLocationDistance]
+    var showsGap: Bool
+    var tank: CLLocationDistance
+}
+
+private struct FuelPlanSnapshot: Sendable {
+    var visibleEntryIDs: [String]
+    var fuelPlanKeys: Set<String>
+    var onRouteKeys: Set<String>
+    var onRouteGasDistances: [CLLocationDistance]
+}
+
+private struct TankCandidate: Sendable {
+    var id: UUID
+    var distance: CLLocationDistance
+}
+
 /// What a fuel-range commit restarts. File-level so a nonisolated helper can
 /// return it; a type nested in the main-actor view model would be isolated too.
 enum PlanRestart: Equatable {
@@ -207,12 +243,16 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     }
 
     var selectedCategory: StopCategory = .gas
-    var isCalculating = false
+    var isCalculating = false {
+        didSet { publishFuelPlanSnapshot() }
+    }
     /// Rider-facing line under the route spinner so a long Twisty plan
     /// doesn't look frozen.
     var calculationStatus: String?
     /// True while the tank-interval gas search is in flight.
-    var isSearchingGas = false
+    var isSearchingGas = false {
+        didSet { publishFuelPlanSnapshot() }
+    }
     var isLoadingSuggestions = false
     var errorMessage: String?
 
@@ -223,7 +263,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     }
 
     /// Rider's fuel range in meters (default ~100 miles).
-    var fuelRangeMeters: CLLocationDistance = 160_900
+    var fuelRangeMeters: CLLocationDistance = 160_900 {
+        didSet { publishFuelPlanSnapshot() }
+    }
 
     /// How routes are biased — fastest, avoiding highways, scenic, or twisty.
     var routeStyle: RouteStyle = .fastest
@@ -312,7 +354,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     /// Distinct from "searching". Only `.empty` may say there are no stations.
     /// A cancel leaves this alone (the replacement search owns the screen).
-    private(set) var gasLoadState: GasLoadState = .pending
+    private(set) var gasLoadState: GasLoadState = .pending {
+        didSet { publishFuelPlanSnapshot() }
+    }
 
     /// Shown when MapKit throttles or every sample errors. Not an empty corridor.
     nonisolated static let gasLoadFailedCopy = "Couldn't load gas — tap to retry"
@@ -636,36 +680,21 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// Fuel rows the sheet should draw. A cancelled or throttled search
     /// keeps in-range recommendations and hides the named gap. A stop
     /// already on the route is omitted so Apply cannot add it twice.
-    var visibleFuelPlanEntries: [FuelPlanEntry] {
-        // Reachability is decided from the plan's own recommended rows.
-        // `fuelStops` is the same set after a replan, but the summary,
-        // the accessibility id, and "already shown in the fuel plan" are
-        // read off `fuelPlanEntries` directly.
-        let recommended = fuelPlanEntries.compactMap { entry -> SuggestedStop? in
-            if case .recommended(let stop) = entry { return stop }
-            return nil
-        }
-        let reachable = fuelStopsWithinTank(
-            from: recommended.sorted { $0.distanceAlongRoute < $1.distanceAlongRoute }
-        )
-        return fuelPlanEntries.compactMap { entry in
-            switch entry {
-            case .recommended(let stop):
-                // The route list only inserts stops the tank can reach.
-                // A later recommendation across a dry or unsearched stretch
-                // stays off both surfaces, so the summary cannot list a
-                // stop the route then skips on the way to the destination.
-                let onPlan = reachable.contains { Self.sameFuelPlace($0, stop) }
-                guard onPlan, !isStopOnRoute(stop) else { return nil }
-                return entry
-            case .pastRange(let stop):
-                guard showsFuelGapWarning, !isStopOnRoute(stop) else { return nil }
-                return entry
-            case .gap:
-                return showsFuelGapWarning ? entry : nil
-            }
-        }
-    }
+    ///
+    /// Stored. Rebuilt off the main thread when the route, the stations,
+    /// the selection, or the tank change. A view body only reads the array.
+    private(set) var visibleFuelPlanEntries: [FuelPlanEntry] = []
+
+    /// Waypoint coordinates rounded to three decimals. `isStopOnRoute` is
+    /// one set lookup, not a scan of the route list.
+    private var onRouteCoordinateKeys: Set<String> = []
+
+    /// Coordinates of the fuel rows currently on screen. Suggestions use
+    /// this so they are not listed again under the fuel plan.
+    private var fuelPlanCoordinateKeys: Set<String> = []
+
+    /// Mile marks of gas already on the route. Rebuilt with the fuel plan.
+    private var onRouteGasDistances: [CLLocationDistance] = []
 
     /// Test identity for one in-range recommendation. Summary rows and the
     /// plain station rows share it, so a list cell that only shows the
@@ -803,15 +832,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     }
 
     /// True when the summary already renders this place as a fuel row.
+    /// Rounded coordinate, so a re-fetched pin of the same pump matches.
     func isShownAsFuelPlanRow(_ stop: SuggestedStop) -> Bool {
-        visibleFuelPlanEntries.contains { entry in
-            switch entry {
-            case .recommended(let fuel), .pastRange(let fuel):
-                return Self.sameFuelPlace(fuel, stop)
-            case .gap:
-                return false
-            }
-        }
+        fuelPlanCoordinateKeys.contains(Self.coordinateKey(stop.coordinate))
     }
 
     /// Identifier whose suffix is the in-range recommendations, in ride
@@ -839,7 +862,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     /// True when the ride is longer than one tank but the route has a stretch
     /// longer than the fuel range with no gas station found.
-    var hasFuelGap = false
+    var hasFuelGap = false {
+        didSet { publishFuelPlanSnapshot() }
+    }
 
     /// Each recommended fuel stop paired with food found right next to it, so a
     /// rider can refuel and eat in one stop. Recomputed whenever `fuelStops`
@@ -955,7 +980,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// True only after the current generation published a search in which
     /// every sample returned. The gap warning reads this so a partial or
     /// throttled pool cannot say the tank does not reach.
-    private var gasCoverageTrusted = false
+    private var gasCoverageTrusted = false {
+        didSet { publishFuelPlanSnapshot() }
+    }
 
     /// Mile marks whose lookup throttled or failed. The planner must not
     /// treat the road between them as empty.
@@ -1238,6 +1265,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         suppressDistanceRebuild = true
         bufferedGasStops = recommended
         applyBufferedGasStops()
+        // Waypoint edits were suppressed, so refresh the on-route set before
+        // dropping pumps that this tap just inserted.
+        onRouteCoordinateKeys = Set(waypoints.map { Self.coordinateKey($0.coordinate) })
         bufferedGasStops = kept.filter { !isStopOnRoute($0) }
         suppressDistanceRebuild = false
         await rebuildDistanceCacheOffMain()
@@ -1247,7 +1277,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// coordinate rounded to three decimals (~111 m), so a re-fetched pin
     /// with a new name still counts as the stop the rider applied.
     func isStopOnRoute(_ stop: SuggestedStop) -> Bool {
-        waypoints.contains { Self.sameCoordinate($0.coordinate, stop.coordinate) }
+        onRouteCoordinateKeys.contains(Self.coordinateKey(stop.coordinate))
     }
 
     /// A station the fuel list marks past the tank. Never part of the
@@ -2495,7 +2525,146 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// in the tank. A station past the tank from every reachable fill stays
     /// off the route, including one planned on the far side of a dry gap.
     private func fuelStopsWithinTank(from stops: [SuggestedStop]) -> [SuggestedStop] {
-        let onRoute = onRouteGasDistances().filter(\.isFinite)
+        let candidates = stops.map { stop in
+            TankCandidate(id: stop.id, distance: cachedDistance(for: stop))
+        }
+        let ids = Self.reachableStopIDs(
+            candidates: candidates,
+            onRoute: onRouteGasDistances,
+            tank: fuelRangeMeters
+        )
+        var chosen: [SuggestedStop] = []
+        for stop in stops.sorted(by: { cachedDistance(for: $0) < cachedDistance(for: $1) }) {
+            guard ids.contains(stop.id) else { break }
+            chosen.append(stop)
+        }
+        return chosen
+    }
+
+    /// Copies the inputs on the caller, then decides which rows are visible
+    /// off the main thread. View bodies read the stored results.
+    private func publishFuelPlanSnapshot() {
+        guard !suppressDistanceRebuild else { return }
+        let inputs = fuelPlanInputs()
+        let snapshot = Self.fuelPlanSnapshotOffMain(inputs)
+        onRouteCoordinateKeys = snapshot.onRouteKeys
+        fuelPlanCoordinateKeys = snapshot.fuelPlanKeys
+        onRouteGasDistances = snapshot.onRouteGasDistances
+        if snapshot.visibleEntryIDs.isEmpty {
+            visibleFuelPlanEntries = []
+            return
+        }
+        var byID: [String: FuelPlanEntry] = [:]
+        byID.reserveCapacity(fuelPlanEntries.count)
+        for entry in fuelPlanEntries {
+            byID[entry.id] = entry
+        }
+        visibleFuelPlanEntries = snapshot.visibleEntryIDs.compactMap { byID[$0] }
+    }
+
+    /// One pass over stations and waypoints. Coordinate keys are formatted
+    /// here so the background pass does not touch map items.
+    private func fuelPlanInputs() -> FuelPlanInputs {
+        let onRouteKeys = Set(waypoints.map { Self.coordinateKey($0.coordinate) })
+        var onRouteDistances = gasFillDistances
+        for station in gasStations where onRouteKeys.contains(Self.coordinateKey(station.coordinate)) {
+            onRouteDistances.append(cachedDistance(for: station))
+        }
+        for stop in fuelStops where onRouteKeys.contains(Self.coordinateKey(stop.coordinate)) {
+            onRouteDistances.append(cachedDistance(for: stop))
+        }
+        let rows = fuelPlanEntries.map { entry -> FuelPlanRow in
+            switch entry {
+            case .recommended(let stop):
+                return FuelPlanRow(
+                    entryID: entry.id,
+                    stopID: stop.id,
+                    key: Self.coordinateKey(stop.coordinate),
+                    distance: cachedDistance(for: stop),
+                    kind: .recommended
+                )
+            case .pastRange(let stop):
+                return FuelPlanRow(
+                    entryID: entry.id,
+                    stopID: stop.id,
+                    key: Self.coordinateKey(stop.coordinate),
+                    distance: cachedDistance(for: stop),
+                    kind: .pastRange
+                )
+            case .gap:
+                return FuelPlanRow(
+                    entryID: entry.id,
+                    stopID: UUID(),
+                    key: "",
+                    distance: 0,
+                    kind: .gap
+                )
+            }
+        }
+        return FuelPlanInputs(
+            rows: rows,
+            onRouteKeys: onRouteKeys,
+            onRouteGasDistances: onRouteDistances,
+            showsGap: showsFuelGapWarning,
+            tank: fuelRangeMeters
+        )
+    }
+
+    private nonisolated static func fuelPlanSnapshotOffMain(
+        _ inputs: FuelPlanInputs
+    ) -> FuelPlanSnapshot {
+        DispatchQueue.global(qos: .userInitiated).sync { @Sendable in
+            Self.fuelPlanSnapshot(inputs)
+        }
+    }
+
+    private nonisolated static func fuelPlanSnapshot(
+        _ inputs: FuelPlanInputs
+    ) -> FuelPlanSnapshot {
+        let recommended = inputs.rows.compactMap { row -> TankCandidate? in
+            guard row.kind == .recommended else { return nil }
+            return TankCandidate(id: row.stopID, distance: row.distance)
+        }
+        let reachable = reachableStopIDs(
+            candidates: recommended,
+            onRoute: inputs.onRouteGasDistances,
+            tank: inputs.tank
+        )
+        var visible: [String] = []
+        var keys = Set<String>()
+        visible.reserveCapacity(inputs.rows.count)
+        for row in inputs.rows {
+            switch row.kind {
+            case .recommended:
+                guard reachable.contains(row.stopID), !inputs.onRouteKeys.contains(row.key) else { continue }
+                visible.append(row.entryID)
+                keys.insert(row.key)
+            case .pastRange:
+                guard inputs.showsGap, !inputs.onRouteKeys.contains(row.key) else { continue }
+                visible.append(row.entryID)
+                keys.insert(row.key)
+            case .gap:
+                if inputs.showsGap {
+                    visible.append(row.entryID)
+                }
+            }
+        }
+        return FuelPlanSnapshot(
+            visibleEntryIDs: visible,
+            fuelPlanKeys: keys,
+            onRouteKeys: inputs.onRouteKeys,
+            onRouteGasDistances: inputs.onRouteGasDistances
+        )
+    }
+
+    /// Stops the tank can reach, in ride order. The first stop past the tank
+    /// ends the walk, matching the selection the rider can insert.
+    private nonisolated static func reachableStopIDs(
+        candidates: [TankCandidate],
+        onRoute: [CLLocationDistance],
+        tank: CLLocationDistance
+    ) -> Set<UUID> {
+        let onRoute = onRoute.filter(\.isFinite)
         let tolerance = FuelStopRidingTime.sameStopToleranceMeters
         var reachable: [CLLocationDistance] = [0]
 
@@ -2509,11 +2678,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             let hop = distance - anchor
             guard hop.isFinite else { return false }
             if hop < 0 { return -hop <= tolerance }
-            return hop <= fuelRangeMeters
+            return hop <= tank
         }
 
-        // A fill already on the route counts only once the rider can get
-        // there. An unreachable pump must not unlock stations beyond it.
         func absorbOnRouteFuel() {
             var added = true
             while added {
@@ -2527,32 +2694,16 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         }
 
         absorbOnRouteFuel()
-        var chosen: [SuggestedStop] = []
-        let ordered = stops.sorted { cachedDistance(for: $0) < cachedDistance(for: $1) }
-        for stop in ordered {
-            let distance = cachedDistance(for: stop)
-            guard distance.isFinite, withinTank(distance) else { break }
-            chosen.append(stop)
-            if !alreadyReached(distance) {
-                reachable.append(distance)
+        var ids = Set<UUID>()
+        for stop in candidates.sorted(by: { $0.distance < $1.distance }) {
+            guard stop.distance.isFinite, withinTank(stop.distance) else { break }
+            ids.insert(stop.id)
+            if !alreadyReached(stop.distance) {
+                reachable.append(stop.distance)
             }
             absorbOnRouteFuel()
         }
-        return chosen
-    }
-
-    /// Mile marks of gas already on the route. `gasFillDistances` only sees
-    /// waypoints flagged `isGasFill`. Search inserts a pump as a plain
-    /// waypoint, and that pump is still a fill for the next hop.
-    private func onRouteGasDistances() -> [CLLocationDistance] {
-        var distances = gasFillDistances
-        for station in gasStations where isStopOnRoute(station) {
-            distances.append(cachedDistance(for: station))
-        }
-        for stop in fuelStops where isStopOnRoute(stop) {
-            distances.append(cachedDistance(for: stop))
-        }
-        return distances
+        return ids
     }
 
     /// Re-selects the recommended fuel stops from the already-computed
@@ -3299,6 +3450,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             queries: distanceQueries(),
             on: measuredRoute(for: suggestionRoutePolylines)
         )
+        publishFuelPlanSnapshot()
     }
 
     /// Same measurement as `rebuildDistanceCache`, awaited so the main actor
@@ -3308,6 +3460,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         let polylines = suggestionRoutePolylines
         let route = await measuredRouteOffMain(for: polylines)
         distanceAlongRouteByID = await Self.projectDistancesOffMain(queries: queries, on: route)
+        publishFuelPlanSnapshot()
     }
 
     private func distanceQueries() -> [AlongRouteQuery] {

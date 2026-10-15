@@ -782,9 +782,9 @@ final class StopSelectionTests: XCTestCase {
 
     /// Amarillo → LA length, dense enough that projecting every station on
     /// every row used to keep the main thread busy for more than a minute.
-    /// The scan runs off the main actor. Select recommended plus the
-    /// fuel-list readers finish within about two seconds, and the spinner
-    /// is gone when they return.
+    /// Select recommended finishes within about two seconds. Reading the
+    /// suggestion list and the fuel plan, which the sheet does once per row,
+    /// stays under a tenth of a second for 40 stations and 40 suggestions.
     func testSelectRecommendedAndFuelListFinishWithinTwoSecondsOnALongRoute() async {
         let mile = AppSettings.metersPerMile
         let totalMiles = 2_500.0
@@ -826,22 +826,39 @@ final class StopSelectionTests: XCTestCase {
         viewModel.plannedCorridor = [line]
         viewModel.legs = [route]
         viewModel.gasStations = stations
+        viewModel.selectedCategory = .gas
+        let suggestions = (0..<40).map { index in
+            let miles = 70.0 + Double(index) * 60.0
+            return SuggestedStop(
+                name: "Suggestion \(index)",
+                coordinate: coordinate(atMiles: miles),
+                category: .gas,
+                distanceAlongRoute: miles * mile,
+                detourMeters: 0
+            )
+        }
+        viewModel.suggestedStops = suggestions
 
         let started = Date()
         await viewModel.toggleRecommendedFuelSelection()
-        for station in stations {
-            _ = viewModel.visibleFuelPlanEntries
-            _ = viewModel.recommendedFuelAccessibility(for: station)
-            _ = viewModel.distanceFromStart(of: station)
-            _ = viewModel.isBeyondRemainingRange(
-                distanceAlongRoute: viewModel.distanceFromStart(of: station)
-            )
-            _ = viewModel.isStopOnRoute(station)
-            _ = viewModel.fuelListNote(for: station)
-        }
-        let elapsed = Date().timeIntervalSince(started)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 2)
 
-        XCTAssertLessThan(elapsed, 2)
+        let read = Date()
+        for _ in 0..<40 {
+            _ = viewModel.suggestionListStops
+            _ = viewModel.addableSuggestions
+            _ = viewModel.visibleFuelPlanEntries
+            for stop in stations + suggestions {
+                _ = viewModel.isStopOnRoute(stop)
+                _ = viewModel.isShownAsFuelPlanRow(stop)
+                _ = viewModel.recommendedFuelAccessibility(for: stop)
+                _ = viewModel.distanceFromStart(of: stop)
+                _ = viewModel.isBeyondRemainingRange(
+                    distanceAlongRoute: viewModel.distanceFromStart(of: stop)
+                )
+            }
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(read), 0.1)
         XCTAssertFalse(viewModel.isSelectingRecommendedFuel)
         XCTAssertEqual(AccessibilityID.fuelSelectingSpinner, "fuel.selecting.spinner")
         XCTAssertEqual(RoutePlannerViewModel.fuelSelectionStatus, "Finding fuel stops…")
