@@ -78,20 +78,22 @@ private struct TankCandidate: Sendable {
 
 /// A gas station reduced to the fields the fuel planner reads. `SuggestedStop`
 /// holds an `MKMapItem`, so the background selection never sees one.
-private struct FuelCandidate: Sendable {
+/// Fileprivate so the fileprivate planner methods can name it.
+fileprivate struct FuelCandidate: Sendable {
     var id: UUID
     var distanceAlongRoute: CLLocationDistance
     var detourMeters: CLLocationDistance
 }
 
-private enum FuelPlanDraftEntry: Sendable {
+fileprivate enum FuelPlanDraftEntry: Sendable {
     case recommended(UUID)
     case pastRange(UUID)
     case gap(fromMeters: CLLocationDistance, toMeters: CLLocationDistance, rangeMeters: CLLocationDistance)
 }
 
 /// Fuel plan as ids. The main actor maps these back onto the real stops.
-private struct FuelPlanDraft: Sendable {
+/// Fileprivate so the fileprivate planner methods can name it.
+fileprivate struct FuelPlanDraft: Sendable {
     var recommendedIDs: [UUID]
     var entries: [FuelPlanDraftEntry]
     var hasGap: Bool
@@ -3660,7 +3662,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     }
 
     /// Maps a background plan back onto the stops the rider is holding.
-    nonisolated static func fuelPlan(
+    fileprivate nonisolated static func fuelPlan(
         from draft: FuelPlanDraft,
         stops: [SuggestedStop]
     ) -> FuelPlan {
@@ -3689,7 +3691,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         return FuelPlan(stops: recommended, entries: entries, hasGap: draft.hasGap)
     }
 
-    nonisolated static func fuelPlanDraft(
+    fileprivate nonisolated static func fuelPlanDraft(
         from candidates: [FuelCandidate],
         totalDistance: CLLocationDistance,
         range: CLLocationDistance,
