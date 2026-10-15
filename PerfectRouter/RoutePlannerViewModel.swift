@@ -66,6 +66,10 @@ private struct FuelPlanInputs: Sendable {
 
 private struct FuelPlanSnapshot: Sendable {
     var visibleEntryIDs: [String]
+    /// Visible rows, plus reachable recommendations that are already on the
+    /// route. Those are hidden from the list, but the tap still publishes a
+    /// title and caption for them in the same atomic swap.
+    var labelEntryIDs: [String]
     var fuelPlanKeys: Set<String>
     var onRouteKeys: Set<String>
     var onRouteGasDistances: [CLLocationDistance]
@@ -1338,6 +1342,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// several arrays. The tap measures once, off the main actor, at the end.
     private var suppressDistanceRebuild = false
 
+    /// Bumped when a newer mile-mark result is published. A long-route rebuild
+    /// that started earlier must not overwrite it with a different polyline.
+    private var distanceRebuildToken = 0
+
     /// Greater than zero while stops and entries are changing together.
     /// Snapshots wait until the batch finishes so a row cannot publish
     /// halfway through.
@@ -1526,6 +1534,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             scheduleRecalculation()
         }
 
+        // Drop in-flight rebuilds. They captured an earlier polyline and
+        // would replace this projection before the list reads it.
+        distanceRebuildToken &+= 1
         distanceAlongRouteByID = output.distances
         onRouteCoordinateKeys = output.onRouteKeys
         fuelPlanCoordinateKeys = output.clearFuel ? [] : output.fuelPlanKeys
@@ -2915,8 +2926,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             tank: input.tank
         ))
         let visibleIDs = clearFuel ? [] : snapshot.visibleEntryIDs
+        let labelIDs = clearFuel ? [] : snapshot.labelEntryIDs
         let labels = Self.fuelLabels(
-            for: visibleIDs,
+            for: labelIDs,
             rows: rows,
             stations: stationByID,
             distances: distances,
@@ -3220,20 +3232,18 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         onRouteCoordinateKeys = snapshot.onRouteKeys
         fuelPlanCoordinateKeys = snapshot.fuelPlanKeys
         onRouteGasDistances = snapshot.onRouteGasDistances
-        let visible: [FuelPlanEntry]
-        if snapshot.visibleEntryIDs.isEmpty {
-            visible = []
-        } else {
-            var byID: [String: FuelPlanEntry] = [:]
+        var byID: [String: FuelPlanEntry] = [:]
+        if !snapshot.visibleEntryIDs.isEmpty || !snapshot.labelEntryIDs.isEmpty {
             byID.reserveCapacity(fuelPlanEntries.count)
             for entry in fuelPlanEntries {
                 byID[entry.id] = entry
             }
-            visible = snapshot.visibleEntryIDs.compactMap { byID[$0] }
         }
+        let visible = snapshot.visibleEntryIDs.compactMap { byID[$0] }
+        let labeled = snapshot.labelEntryIDs.compactMap { byID[$0] }
         fuelListPresentation = FuelListPresentation(
             visibleEntries: visible,
-            labels: labels(for: visible)
+            labels: labels(for: labeled)
         )
     }
 
@@ -3400,26 +3410,40 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             tank: inputs.tank
         )
         var visible: [String] = []
+        var labelIDs: [String] = []
+        var onRouteLabels: [String] = []
         var keys = Set<String>()
         visible.reserveCapacity(inputs.rows.count)
         for row in inputs.rows {
             switch row.kind {
             case .recommended:
-                guard reachable.contains(row.stopID), !inputs.onRouteKeys.contains(row.key) else { continue }
+                guard reachable.contains(row.stopID) else { continue }
+                // On-route pumps stay out of the list. Their label is still
+                // part of this snapshot so the row title exists after the swap.
+                if inputs.onRouteKeys.contains(row.key) {
+                    onRouteLabels.append(row.entryID)
+                    continue
+                }
                 visible.append(row.entryID)
+                labelIDs.append(row.entryID)
                 keys.insert(row.key)
             case .pastRange:
                 guard inputs.showsGap, !inputs.onRouteKeys.contains(row.key) else { continue }
                 visible.append(row.entryID)
+                labelIDs.append(row.entryID)
                 keys.insert(row.key)
             case .gap:
                 if inputs.showsGap {
                     visible.append(row.entryID)
+                    labelIDs.append(row.entryID)
                 }
             }
         }
+        // Number the rows the list shows first, then pumps already on the route.
+        labelIDs.append(contentsOf: onRouteLabels)
         return FuelPlanSnapshot(
             visibleEntryIDs: visible,
+            labelEntryIDs: labelIDs,
             fuelPlanKeys: keys,
             onRouteKeys: inputs.onRouteKeys,
             onRouteGasDistances: inputs.onRouteGasDistances
@@ -4294,6 +4318,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         let polylines = suggestionRoutePolylines
         let points = polylines.reduce(0) { $0 + $1.count }
         if points <= 2_000, queries.count <= 400 {
+            distanceRebuildToken &+= 1
             distanceAlongRouteByID = Self.projectDistances(
                 queries: queries,
                 on: measuredRoute(for: polylines)
@@ -4301,12 +4326,18 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             publishFuelPlanSnapshot()
             return
         }
+        distanceRebuildToken &+= 1
+        let token = distanceRebuildToken
         let generation = routeGeometryGeneration
         Task { @MainActor in
-            guard !self.suppressDistanceRebuild, generation == self.routeGeometryGeneration else { return }
+            guard token == self.distanceRebuildToken,
+                  !self.suppressDistanceRebuild,
+                  generation == self.routeGeometryGeneration else { return }
             let route = await Self.measureRouteAsync(polylines)
             let distances = await Self.projectDistancesOffMain(queries: queries, on: route)
-            guard !self.suppressDistanceRebuild, generation == self.routeGeometryGeneration else { return }
+            guard token == self.distanceRebuildToken,
+                  !self.suppressDistanceRebuild,
+                  generation == self.routeGeometryGeneration else { return }
             self.distanceAlongRouteByID = distances
             self.publishFuelPlanSnapshot()
         }

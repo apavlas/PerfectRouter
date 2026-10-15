@@ -363,7 +363,16 @@ final class StopSelectionTests: XCTestCase {
         // One recommended row is already checked. The tap still adds both.
         viewModel.toggleBufferedGasStop(early)
         viewModel.toggleBufferedGasStop(other)
-        await viewModel.toggleRecommendedFuelSelection()
+        // The list swaps in one assignment. `Task` has no `isCompleted`, so
+        // the selection task sets this flag as its last step. Titles are read
+        // only after that.
+        let completion = FuelSelectionCompletion()
+        let selection = Task { @MainActor in
+            await viewModel.toggleRecommendedFuelSelection()
+            completion.isCompleted = true
+        }
+        await selection.value
+        XCTAssertTrue(completion.isCompleted)
 
         XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "Early", "Late", "End"])
         let earlyLabel = viewModel.fuelRowLabel(for: early)
