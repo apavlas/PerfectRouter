@@ -1,5 +1,22 @@
 import SwiftUI
 
+/// Decides whether the gas section is on the sheet. The selecting flag is
+/// read only by `FuelSelectionSpinnerSlot`, so a tap does not rebuild the
+/// route list or the suggestion labels.
+struct GasStationsSectionGate: View {
+    let viewModel: RoutePlannerViewModel
+
+    var body: some View {
+        if viewModel.selectedCategory != .gas,
+           !viewModel.legs.isEmpty,
+           GasStationsSection.hasContent(viewModel) {
+            GasStationsSection(viewModel: viewModel)
+        } else {
+            FocusPlaceholderRow()
+        }
+    }
+}
+
 /// Short recommended-fuel block for Food / Coffee / Scenic. The Gas chip
 /// already lists stations under Suggested Gas, so this section stays gated
 /// off that category. The full corridor list is optional under disclosure.
@@ -10,7 +27,6 @@ struct GasStationsSection: View {
     /// entirely; an empty section aborts iPad focus updates.
     static func hasContent(_ viewModel: RoutePlannerViewModel) -> Bool {
         !viewModel.selectableRecommendedFuelStops.isEmpty
-            || viewModel.isSelectingRecommendedFuel
             || !viewModel.bufferedGasStops.isEmpty
             || viewModel.isCalculating
             || viewModel.isSearchingGas
@@ -28,11 +44,7 @@ struct GasStationsSection: View {
                 } else {
                     FocusPlaceholderRow()
                 }
-                if viewModel.isSelectingRecommendedFuel {
-                    FuelSelectionSpinner()
-                } else {
-                    FocusPlaceholderRow()
-                }
+                FuelSelectionSpinnerSlot(viewModel: viewModel)
                 if !viewModel.bufferedGasStops.isEmpty {
                     BufferedGasApplyRow(viewModel: viewModel)
                 } else {
@@ -102,19 +114,27 @@ struct GasStationsSection: View {
     private func gasRow(_ stop: SuggestedStop, recommended: Bool, pastRange: Bool = false) -> some View {
         let onRoute = viewModel.isStopOnRoute(stop)
         let along = viewModel.distanceFromStart(of: stop)
-        let markedPast = pastRange
+        let stored = viewModel.fuelRowLabel(for: stop)
+        let markedPast = stored?.pastFullTank == true
+            || pastRange
             || viewModel.isPastRangeFuelStop(stop)
             || viewModel.isBeyondRemainingRange(distanceAlongRoute: along)
-        let showsRidingTime = recommended || viewModel.isRecommendedFuelStop(stop) || markedPast
-        let caption = showsRidingTime
-            ? viewModel.fuelStopRidingCaption(for: stop)
-            : milesFromStartCaption(along)
-        let pastFullTank = viewModel.fuelListNote(for: stop)
+        let pastFullTank = stored?.pastFullTank == true
+            ? RoutePlannerViewModel.pastFullTankNotice
+            : (stored == nil ? viewModel.fuelListNote(for: stop) : nil)
+        let title = stored?.title ?? stop.name
+        let caption = stored?.caption ?? milesFromStartCaption(along)
         let accessibility = fuelAccessibility(
-            viewModel.recommendedFuelAccessibility(for: stop),
+            stored.flatMap { label in
+                label.pastFullTank ? nil : RecommendedFuelAccessibility(
+                    identifier: label.identifier,
+                    label: label.accessibilityLabel,
+                    title: label.title,
+                    caption: label.caption
+                )
+            },
             appending: pastFullTank
         )
-        let title = accessibility?.title ?? stop.name
         let button = Button {
             guard !onRoute else { return }
             viewModel.toggleBufferedGasStop(stop)
@@ -321,11 +341,7 @@ struct SuggestionsSection: View {
                 } else {
                     FocusPlaceholderRow()
                 }
-                if viewModel.isSelectingRecommendedFuel {
-                    FuelSelectionSpinner()
-                } else {
-                    FocusPlaceholderRow()
-                }
+                FuelSelectionSpinnerSlot(viewModel: viewModel)
                 if !viewModel.bufferedGasStops.isEmpty {
                     BufferedGasApplyRow(viewModel: viewModel)
                 } else {
@@ -400,11 +416,20 @@ struct SuggestionsSection: View {
     @ViewBuilder
     private func suggestionButton(_ stop: SuggestedStop) -> some View {
         let along = viewModel.distanceFromStart(of: stop)
-        let caption = viewModel.fuelStopListCaption(for: stop)
-            ?? milesFromStartCaption(along)
-        let accessibility = viewModel.recommendedFuelAccessibility(for: stop)
-        let title = accessibility?.title ?? stop.name
-        let pastRange = viewModel.isPastRangeFuelStop(stop)
+        let stored = viewModel.fuelRowLabel(for: stop)
+        let title = stored?.title ?? stop.name
+        let caption = stored?.caption ?? milesFromStartCaption(along)
+        let accessibility = stored.flatMap { label -> RecommendedFuelAccessibility? in
+            guard !label.pastFullTank else { return nil }
+            return RecommendedFuelAccessibility(
+                identifier: label.identifier,
+                label: label.accessibilityLabel,
+                title: label.title,
+                caption: label.caption
+            )
+        }
+        let pastRange = stored?.pastFullTank == true
+            || viewModel.isPastRangeFuelStop(stop)
             || viewModel.isBeyondRemainingRange(distanceAlongRoute: along)
         if stop.category.showsPlaceDescription {
             describedSuggestion(
@@ -511,6 +536,20 @@ struct GasLoadFailedButton: View {
         } label: {
             Label(RoutePlannerViewModel.gasLoadFailedCopy, systemImage: "arrow.clockwise")
                 .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// Spinner row. This is the only view that reads the selecting flag, so
+/// the tap can paint it without rebuilding every fuel and suggestion label.
+private struct FuelSelectionSpinnerSlot: View {
+    let viewModel: RoutePlannerViewModel
+
+    var body: some View {
+        if viewModel.isSelectingRecommendedFuel {
+            FuelSelectionSpinner()
+        } else {
+            FocusPlaceholderRow()
         }
     }
 }

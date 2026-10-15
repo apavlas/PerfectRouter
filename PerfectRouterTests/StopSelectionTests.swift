@@ -363,9 +363,23 @@ final class StopSelectionTests: XCTestCase {
         // One recommended row is already checked. The tap still adds both.
         viewModel.toggleBufferedGasStop(early)
         viewModel.toggleBufferedGasStop(other)
-        await viewModel.toggleRecommendedFuelSelection()
+        // The list swaps in one assignment. `Task` has no `isCompleted`, so
+        // the selection task sets this flag as its last step. Titles are read
+        // only after that.
+        let completion = FuelSelectionCompletion()
+        let selection = Task { @MainActor in
+            await viewModel.toggleRecommendedFuelSelection()
+            completion.isCompleted = true
+        }
+        await selection.value
+        XCTAssertTrue(completion.isCompleted)
 
         XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "Early", "Late", "End"])
+        let earlyLabel = viewModel.fuelRowLabel(for: early)
+        XCTAssertNotNil(earlyLabel)
+        XCTAssertTrue(earlyLabel?.title.hasPrefix("Fuel stop ") ?? false)
+        XCTAssertTrue(earlyLabel?.title.contains("Early") ?? false)
+        XCTAssertFalse(earlyLabel?.caption.contains("from start") ?? true)
         XCTAssertEqual(viewModel.waypoints.map(\.isGasFill), [false, true, true, false])
         XCTAssertEqual(viewModel.bufferedGasStops.map(\.name), ["Side Pump"])
         XCTAssertFalse(viewModel.waypoints.contains { $0.name == "Too Far" || $0.name == "Diner" || $0.name == "Side Pump" })
@@ -905,7 +919,6 @@ final class StopSelectionTests: XCTestCase {
         let viewModel = made.viewModel
         let stations = made.stations
         let suggestions = made.suggestions
-        let line = made.line
 
         let mile = AppSettings.metersPerMile
         let started = Date()
@@ -933,7 +946,16 @@ final class StopSelectionTests: XCTestCase {
         XCTAssertEqual(RoutePlannerViewModel.fuelSelectionStatus, "Finding fuel stops…")
         XCTAssertGreaterThan(viewModel.waypoints.count, 2)
         let sample = stations[20]
-        let projected = RoutePlannerViewModel.distanceFromStart(of: sample, alongPolylines: [line])
+        // Stops are already on the route, so the cached mile mark follows the
+        // published corridor (or the leg polylines once that corridor is gone),
+        // not the straight line from before the insert.
+        let routePolylines = viewModel.plannedCorridor.contains(where: { $0.count > 1 })
+            ? viewModel.plannedCorridor
+            : viewModel.legs.map { RouteGeometry.coordinates(of: $0.polyline) }
+        let projected = RoutePlannerViewModel.distanceFromStart(
+            of: sample,
+            alongPolylines: routePolylines
+        )
         XCTAssertEqual(viewModel.distanceFromStart(of: sample), projected, accuracy: 1)
         XCTAssertGreaterThan(projected, 1_000 * mile)
     }

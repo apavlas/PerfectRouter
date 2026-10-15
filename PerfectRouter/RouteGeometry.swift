@@ -226,6 +226,49 @@ enum RouteGeometry {
 
     /// Vertex distances are measured once per route. Later queries only do
     /// the planar projection.
+    /// WGS-84 ellipsoidal distance (Vincenty inverse), pure Swift.
+    /// `CLLocation.distance(from:)` returns different values when called
+    /// from several threads at once, so the off-main mile-mark scan and the
+    /// main-actor projection disagreed by tens of meters run to run.
+    nonisolated static func geodesicMeters(
+        _ p1: CLLocationCoordinate2D,
+        _ p2: CLLocationCoordinate2D
+    ) -> CLLocationDistance {
+        let a = 6_378_137.0
+        let f = 1 / 298.257223563
+        let b = (1 - f) * a
+        let rad = Double.pi / 180
+        let L = (p2.longitude - p1.longitude) * rad
+        let U1 = atan((1 - f) * tan(p1.latitude * rad))
+        let U2 = atan((1 - f) * tan(p2.latitude * rad))
+        let sinU1 = sin(U1), cosU1 = cos(U1), sinU2 = sin(U2), cosU2 = cos(U2)
+        var lambda = L
+        var sinSigma = 0.0, cosSigma = 0.0, sigma = 0.0, cosSqAlpha = 0.0, cos2SigmaM = 0.0
+        for _ in 0..<200 {
+            let sinLambda = sin(lambda), cosLambda = cos(lambda)
+            let t1 = cosU2 * sinLambda
+            let t2 = cosU1 * sinU2 - sinU1 * cosU2 * cosLambda
+            sinSigma = (t1 * t1 + t2 * t2).squareRoot()
+            if sinSigma == 0 { return 0 }
+            cosSigma = sinU1 * sinU2 + cosU1 * cosU2 * cosLambda
+            sigma = atan2(sinSigma, cosSigma)
+            let sinAlpha = cosU1 * cosU2 * sinLambda / sinSigma
+            cosSqAlpha = 1 - sinAlpha * sinAlpha
+            cos2SigmaM = cosSqAlpha != 0 ? cosSigma - 2 * sinU1 * sinU2 / cosSqAlpha : 0
+            let C = f / 16 * cosSqAlpha * (4 + f * (4 - 3 * cosSqAlpha))
+            let previous = lambda
+            lambda = L + (1 - C) * f * sinAlpha
+                * (sigma + C * sinSigma * (cos2SigmaM + C * cosSigma * (-1 + 2 * cos2SigmaM * cos2SigmaM)))
+            if abs(lambda - previous) < 1e-12 { break }
+        }
+        let uSq = cosSqAlpha * (a * a - b * b) / (b * b)
+        let A = 1 + uSq / 16384 * (4096 + uSq * (-768 + uSq * (320 - 175 * uSq)))
+        let B = uSq / 1024 * (256 + uSq * (-128 + uSq * (74 - 47 * uSq)))
+        let deltaSigma = B * sinSigma * (cos2SigmaM + B / 4 * (cosSigma * (-1 + 2 * cos2SigmaM * cos2SigmaM)
+            - B / 6 * cos2SigmaM * (-3 + 4 * sinSigma * sinSigma) * (-3 + 4 * cos2SigmaM * cos2SigmaM)))
+        return b * A * (sigma - deltaSigma)
+    }
+
     private static func measuredSegments(
         of polylines: [[CLLocationCoordinate2D]]
     ) -> [MeasuredSegment] {
@@ -233,13 +276,10 @@ enum RouteGeometry {
         var cumulative: CLLocationDistance = 0
         for coords in polylines {
             guard coords.count > 1 else { continue }
-            let locations = coords.map {
-                CLLocation(latitude: $0.latitude, longitude: $0.longitude)
-            }
             for index in 1..<coords.count {
                 let a = coords[index - 1]
                 let b = coords[index]
-                let segmentMeters = locations[index - 1].distance(from: locations[index])
+                let segmentMeters = geodesicMeters(a, b)
                 let latRef = ((a.latitude + b.latitude) / 2) * .pi / 180
                 let kx = cos(latRef)
                 let ax = a.longitude * kx
