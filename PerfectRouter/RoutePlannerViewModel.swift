@@ -1280,12 +1280,13 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         "Select recommended"
     }
 
-    /// Copy next to the small spinner. Shown for the whole selection, which
-    /// starts before any scan so a frame can paint it.
+    /// Copy next to the small spinner. The flag is set on the tap, before
+    /// the scan, so this row can appear within half a second.
     nonisolated static let fuelSelectionStatus = "Finding fuel stops…"
 
     /// True from the tap until the route list takes the result. Set before
-    /// any scan so `fuel.selecting.spinner` can render while the work runs.
+    /// any scan so `fuel.selecting.spinner` is on screen within half a
+    /// second, including while a multi-second scan keeps the main actor free.
     private(set) var isSelectingRecommendedFuel = false
 
     /// The in-flight tap. A second tap waits for this one instead of
@@ -1326,9 +1327,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         }
     }
 
-    /// Sets the spinner and returns before any scan. The sheet paints
-    /// `fuel.selecting.spinner` on the next frame, and the main actor stays
-    /// free while the selection runs.
+    /// Sets the spinner and returns before any scan. The sheet can paint
+    /// `fuel.selecting.spinner` within half a second, and the main actor
+    /// stays free for the rest of the scan even when that scan takes a few
+    /// seconds.
     func startRecommendedFuelSelection() {
         guard recommendedFuelSelectionTask == nil else { return }
         isSelectingRecommendedFuel = true

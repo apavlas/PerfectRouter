@@ -529,8 +529,8 @@ private struct SelectRecommendedFuelButton: View {
 }
 
 /// Small status row while Select recommended is choosing stops. The flag
-/// is set before the scan, so a tap that takes more than a frame shows
-/// `fuel.selecting.spinner`.
+/// is set on the tap, before the scan, so `fuel.selecting.spinner` is on
+/// screen within half a second and stays up while the list can still scroll.
 private struct FuelSelectionSpinner: View {
     var body: some View {
         HStack(spacing: 8) {
