@@ -76,6 +76,97 @@ private struct TankCandidate: Sendable {
     var distance: CLLocationDistance
 }
 
+/// A gas station reduced to the fields the fuel planner reads. `SuggestedStop`
+/// holds an `MKMapItem`, so the background selection never sees one.
+/// Fileprivate so the fileprivate planner methods can name it.
+fileprivate struct FuelCandidate: Sendable {
+    var id: UUID
+    var distanceAlongRoute: CLLocationDistance
+    var detourMeters: CLLocationDistance
+}
+
+fileprivate enum FuelPlanDraftEntry: Sendable {
+    case recommended(UUID)
+    case pastRange(UUID)
+    case gap(fromMeters: CLLocationDistance, toMeters: CLLocationDistance, rangeMeters: CLLocationDistance)
+}
+
+/// Fuel plan as ids. The main actor maps these back onto the real stops.
+/// Fileprivate so the fileprivate planner methods can name it.
+fileprivate struct FuelPlanDraft: Sendable {
+    var recommendedIDs: [UUID]
+    var entries: [FuelPlanDraftEntry]
+    var hasGap: Bool
+}
+
+/// One station or buffered stop, already copied off `MKMapItem`.
+private struct FuelSelectionStation: Sendable {
+    var id: UUID
+    var latitude: Double
+    var longitude: Double
+    var distance: CLLocationDistance
+    var detour: CLLocationDistance
+    var key: String
+    var isGas: Bool
+}
+
+private struct FuelSelectionWaypoint: Sendable {
+    var id: UUID
+    var name: String
+    var latitude: Double
+    var longitude: Double
+    var isGasFill: Bool
+    var key: String
+}
+
+/// Everything Select recommended needs, captured after the spinner yields.
+private struct FuelSelectionInput: Sendable {
+    var stations: [FuelSelectionStation]
+    var existingFuelStops: [FuelSelectionStation]
+    var existingRows: [FuelPlanRow]
+    var buffered: [FuelSelectionStation]
+    var pastRangeIDs: Set<UUID>
+    var pastRangeKeys: Set<String>
+    var waypoints: [FuelSelectionWaypoint]
+    var queries: [AlongRouteQuery]
+    var polylines: [[CLLocationCoordinate2D]]
+    var tank: CLLocationDistance
+    var totalDistance: CLLocationDistance
+    var totalTravelTime: TimeInterval
+    var departure: Date?
+    var foodIDs: Set<UUID>
+    var unsearched: [CLLocationDistance]
+    var drivesOnRight: Bool
+    var replan: Bool
+    var hasLegs: Bool
+    var countsGasFills: Bool
+    var showsGap: Bool
+}
+
+private enum FuelPlacement: Sendable {
+    case keep(UUID)
+    case insert(UUID)
+}
+
+/// The route list, the fuel rows, and the cached distances, ready to assign.
+private struct FuelSelectionOutput: Sendable {
+    var didReplan: Bool
+    var hasInserts: Bool
+    /// Legs are about to be replaced, so the published fuel rows are cleared.
+    var clearFuel: Bool
+    var poolIDs: [UUID]
+    var recommendedIDs: [UUID]
+    var draft: FuelPlanDraft
+    var placements: [FuelPlacement]
+    var keptBufferedIDs: [UUID]
+    var distances: [UUID: CLLocationDistance]
+    var onRouteKeys: Set<String>
+    var fuelPlanKeys: Set<String>
+    var onRouteGasDistances: [CLLocationDistance]
+    var visibleEntryIDs: [String]
+    var planHasGap: Bool
+}
+
 /// What a fuel-range commit restarts. File-level so a nonisolated helper can
 /// return it; a type nested in the main-actor view model would be isolated too.
 enum PlanRestart: Equatable {
@@ -1191,13 +1282,13 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         "Select recommended"
     }
 
-    /// Copy next to the small spinner. Shown only when the tap is still
-    /// working after half a second, so a short route never flashes it.
+    /// Copy next to the small spinner. The flag is set on the tap, before
+    /// the scan, so this row can appear within half a second.
     nonisolated static let fuelSelectionStatus = "Finding fuel stops…"
 
-    /// True while Select recommended has been working for more than half a
-    /// second. The scan itself is not on the main actor, so the spinner
-    /// can animate and the rest of the sheet stays usable.
+    /// True from the tap until the route list takes the result. Set before
+    /// any scan so `fuel.selecting.spinner` is on screen within half a
+    /// second, including while a multi-second scan keeps the main actor free.
     private(set) var isSelectingRecommendedFuel = false
 
     /// The in-flight tap. A second tap waits for this one instead of
@@ -1223,54 +1314,191 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// hand, and that is not one of these recommendations, stays checked
     /// for Apply and is not routed by this tap.
     ///
-    /// The travel-side scan and the distance measurement run off the main
-    /// actor. Callers that need the inserted stops await this function.
+    /// The travel-side scan, the fuel plan, and the route insert run off
+    /// the main actor. Callers that need the inserted stops await this.
+    /// The button does not: `startRecommendedFuelSelection` returns as soon
+    /// as the flag is set.
     func toggleRecommendedFuelSelection() async {
         if let recommendedFuelSelectionTask {
             await recommendedFuelSelectionTask.value
             return
         }
-        let task = Task { @MainActor in
-            await self.performRecommendedFuelSelection()
+        startRecommendedFuelSelection()
+        if let recommendedFuelSelectionTask {
+            await recommendedFuelSelectionTask.value
         }
-        recommendedFuelSelectionTask = task
-        defer { recommendedFuelSelectionTask = nil }
-        await task.value
     }
 
-    private func performRecommendedFuelSelection() async {
-        let spinner = Task { @MainActor in
-            try await Task.sleep(for: .milliseconds(500))
-            guard !Task.isCancelled else { return }
-            isSelectingRecommendedFuel = true
+    /// Sets the spinner and returns before any scan. The sheet can paint
+    /// `fuel.selecting.spinner` within half a second, and the main actor
+    /// stays free for the rest of the scan even when that scan takes a few
+    /// seconds.
+    func startRecommendedFuelSelection() {
+        guard recommendedFuelSelectionTask == nil else { return }
+        isSelectingRecommendedFuel = true
+        let task = Task { @MainActor in
+            defer {
+                self.isSelectingRecommendedFuel = false
+                self.recommendedFuelSelectionTask = nil
+            }
+            // One turn for SwiftUI to draw the spinner before the snapshot.
+            await Task.yield()
+            await self.runRecommendedFuelSelection()
         }
-        defer {
-            spinner.cancel()
-            isSelectingRecommendedFuel = false
-        }
-        // Let the button action return so the sheet can draw while the
-        // scan is in flight.
-        await Task.yield()
+        recommendedFuelSelectionTask = task
+    }
 
-        let replanned = await replanFuelSelectionForRecommendedTap()
-        var recommended = selectableRecommendedFuelStops
-            .sorted { cachedDistance(for: $0) < cachedDistance(for: $1) }
-        if replanned {
-            recommended = fuelStopsWithinTank(from: recommended)
+    /// Snapshots sendable inputs, then awaits the whole selection off the
+    /// main actor and assigns the result once.
+    private func runRecommendedFuelSelection() async {
+        let input = makeFuelSelectionInput()
+        if !input.replan, !Self.hasSelectableFuel(input) {
+            return
         }
-        guard !recommended.isEmpty else { return }
-        let kept = bufferedGasStops.filter { stop in
-            !recommended.contains { Self.sameCoordinate($0.coordinate, stop.coordinate) }
+        let output = await Task.detached(priority: .userInitiated) {
+            Self.computeFuelSelection(input)
+        }.value
+        applyFuelSelection(output)
+    }
+
+    /// Copies coordinates and ids on the main actor. The scan that follows
+    /// does not touch `MKMapItem` or `MKPolyline`.
+    private func makeFuelSelectionInput() -> FuelSelectionInput {
+        func station(_ stop: SuggestedStop) -> FuelSelectionStation {
+            let coordinate = stop.coordinate
+            return FuelSelectionStation(
+                id: stop.id,
+                latitude: coordinate.latitude,
+                longitude: coordinate.longitude,
+                distance: stop.distanceAlongRoute,
+                detour: stop.detourMeters,
+                key: Self.coordinateKey(coordinate),
+                isGas: stop.category == .gas
+            )
         }
+        var pastRangeIDs = Set<UUID>()
+        var pastRangeKeys = Set<String>()
+        for entry in fuelPlanEntries {
+            guard case .pastRange(let stop) = entry else { continue }
+            pastRangeIDs.insert(stop.id)
+            pastRangeKeys.insert(Self.coordinateKey(stop.coordinate))
+        }
+        let corridorReady = plannedCorridor.contains(where: { $0.count > 1 })
+        return FuelSelectionInput(
+            stations: gasStations.map(station),
+            existingFuelStops: fuelStops.map(station),
+            existingRows: fuelPlanInputs().rows,
+            buffered: bufferedGasStops.map(station),
+            pastRangeIDs: pastRangeIDs,
+            pastRangeKeys: pastRangeKeys,
+            waypoints: waypoints.map { waypoint in
+                FuelSelectionWaypoint(
+                    id: waypoint.id,
+                    name: waypoint.name,
+                    latitude: waypoint.coordinate.latitude,
+                    longitude: waypoint.coordinate.longitude,
+                    isGasFill: waypoint.isGasFill,
+                    key: Self.coordinateKey(waypoint.coordinate)
+                )
+            },
+            queries: distanceQueries(),
+            polylines: corridorReady ? plannedCorridor : [],
+            tank: fuelRangeMeters,
+            totalDistance: totalDistanceMeters,
+            totalTravelTime: totalExpectedTravelTime,
+            departure: effectiveDeparture,
+            foodIDs: gasStopsWithFood,
+            unsearched: unsearchedFuelDistances,
+            drivesOnRight: RouteGeometry.drivesOnRight,
+            replan: totalDistanceMeters > fuelRangeMeters && !gasStations.isEmpty,
+            hasLegs: !legs.isEmpty,
+            countsGasFills: !legs.isEmpty || corridorReady,
+            showsGap: showsFuelGapWarning
+        )
+    }
+
+    /// One turn: waypoints, the fuel rows, and the cached sets. Distance
+    /// rebuilds stay suppressed so each stored property does not measure
+    /// the polyline again.
+    private func applyFuelSelection(_ output: FuelSelectionOutput) {
         suppressDistanceRebuild = true
-        bufferedGasStops = recommended
-        applyBufferedGasStops()
-        // Waypoint edits were suppressed, so refresh the on-route set before
-        // dropping pumps that this tap just inserted.
-        onRouteCoordinateKeys = Set(waypoints.map { Self.coordinateKey($0.coordinate) })
-        bufferedGasStops = kept.filter { !isStopOnRoute($0) }
-        suppressDistanceRebuild = false
-        await rebuildDistanceCacheOffMain()
+        defer { suppressDistanceRebuild = false }
+
+        var stationsByID: [UUID: SuggestedStop] = [:]
+        for stop in gasStations {
+            stationsByID[stop.id] = stop
+        }
+        var fuelStopsByID: [UUID: SuggestedStop] = [:]
+        for stop in fuelStops {
+            fuelStopsByID[stop.id] = stop
+        }
+        func stop(for id: UUID) -> SuggestedStop? {
+            stationsByID[id] ?? fuelStopsByID[id]
+        }
+
+        if output.didReplan {
+            travelSideGasStations = output.poolIDs.compactMap { stationsByID[$0] }
+            if !output.clearFuel {
+                let plan = Self.fuelPlan(from: output.draft, stops: gasStations)
+                fuelStops = plan.stops
+                fuelPlanEntries = plan.entries
+                hasFuelGap = output.planHasGap && gasCoverageTrusted
+            }
+        }
+
+        if output.hasInserts {
+            var waypointsByID: [UUID: Waypoint] = [:]
+            for waypoint in waypoints {
+                waypointsByID[waypoint.id] = waypoint
+            }
+            let existingIDs = Set(waypoints.map(\.id))
+            var placed: [Waypoint] = []
+            placed.reserveCapacity(output.placements.count)
+            for placement in output.placements {
+                switch placement {
+                case .keep(let id):
+                    if let waypoint = waypointsByID[id] {
+                        placed.append(waypoint)
+                    }
+                case .insert(let id):
+                    guard let stop = stop(for: id) else { continue }
+                    placed.append(Self.waypoint(from: stop))
+                }
+            }
+            if placed.count >= 2 {
+                waypoints = placed
+            }
+            var bufferedByID: [UUID: SuggestedStop] = [:]
+            for stop in bufferedGasStops {
+                bufferedByID[stop.id] = stop
+            }
+            bufferedGasStops = output.keptBufferedIDs.compactMap { bufferedByID[$0] }
+            if let added = waypoints.first(where: { !existingIDs.contains($0.id) }) {
+                scrollToWaypointID = added.id
+            }
+            scheduleRecalculation()
+        }
+
+        distanceAlongRouteByID = output.distances
+        onRouteCoordinateKeys = output.onRouteKeys
+        fuelPlanCoordinateKeys = output.clearFuel ? [] : output.fuelPlanKeys
+        onRouteGasDistances = output.onRouteGasDistances
+        if output.clearFuel {
+            visibleFuelPlanEntries = []
+        } else if output.didReplan {
+            let entries = Self.fuelPlan(from: output.draft, stops: gasStations).entries
+            var byID: [String: FuelPlanEntry] = [:]
+            for entry in entries {
+                byID[entry.id] = entry
+            }
+            visibleFuelPlanEntries = output.visibleEntryIDs.compactMap { byID[$0] }
+        } else {
+            var byID: [String: FuelPlanEntry] = [:]
+            for entry in fuelPlanEntries {
+                byID[entry.id] = entry
+            }
+            visibleFuelPlanEntries = output.visibleEntryIDs.compactMap { byID[$0] }
+        }
     }
 
     /// True when a waypoint already sits on this place. Matching is the
@@ -1425,6 +1653,12 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             }
             return waypoints + added
         }
+        // One measurement for every middle stop. A start-and-end ride has
+        // nothing to project, and rebuilding the line per stop was the hitch.
+        let measured: RouteGeometry.MeasuredRoute? = waypoints.count > 2
+            && polylines.contains(where: { $0.count > 1 })
+            ? RouteGeometry.MeasuredRoute(polylines: polylines)
+            : nil
         var placed: [(distance: CLLocationDistance, waypoint: Waypoint)] = []
         for (index, waypoint) in waypoints.enumerated() {
             let distance: CLLocationDistance
@@ -1432,10 +1666,12 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 distance = 0
             } else if index == waypoints.count - 1 {
                 distance = .greatestFiniteMagnitude
+            } else if let measured {
+                distance = RouteGeometry.distanceAlongRoute(of: waypoint.coordinate, on: measured)
             } else if polylines.isEmpty {
                 distance = totalDistance * Double(index) / Double(waypoints.count)
             } else {
-                distance = RouteGeometry.distanceAlongRoute(of: waypoint.coordinate, alongPolylines: polylines)
+                distance = 0
             }
             placed.append((distance, waypoint))
         }
@@ -2439,52 +2675,368 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         travelSide.isEmpty ? stations : travelSide
     }
 
-    /// Same planner `toggleRecommendedFuelSelection` runs before it inserts
-    /// stops. Uses the stations already on the line. No food pairing: the
-    /// route replan that follows owns the next search.
-    private func replanFuelSelectionForRecommendedTap() async -> Bool {
-        guard totalDistanceMeters > fuelRangeMeters, !gasStations.isEmpty else { return false }
-        // The side check measures the polyline once, off the main actor.
-        // The main actor is free while that runs, so the sheet can show
-        // the spinner and keep taking taps.
-        let stations = gasStations
-        let polylines = legs.map { RouteGeometry.coordinates(of: $0.polyline) }
-        let travelSide = await travelSideStations(stations, polylines: polylines)
-        suppressDistanceRebuild = true
-        travelSideGasStations = Self.preferredFuelPool(from: stations, travelSide: travelSide)
-        replanFuelStops(pairingFood: false)
-        suppressDistanceRebuild = false
-        await rebuildDistanceCacheOffMain()
-        return true
+    /// True when the published fuel list still has a pump to add and this
+    /// tap is not replanning from the station pool.
+    private nonisolated static func hasSelectableFuel(_ input: FuelSelectionInput) -> Bool {
+        let onRoute = Set(input.waypoints.map(\.key))
+        return input.existingFuelStops.contains { stop in
+            stop.isGas
+                && !input.pastRangeIDs.contains(stop.id)
+                && !input.pastRangeKeys.contains(stop.key)
+                && !onRoute.contains(stop.key)
+        }
     }
 
-    /// Stations on the rider's side of `polylines`. The scan is awaited
-    /// off the main actor; this method does not block the sheet.
-    private func travelSideStations(
-        _ stations: [SuggestedStop],
-        polylines: [[CLLocationCoordinate2D]]
-    ) async -> [SuggestedStop] {
-        guard !stations.isEmpty else { return [] }
-        guard polylines.contains(where: { $0.count > 1 }) else { return stations }
-        let queries = stations.enumerated().map { index, stop in
-            RouteGeometry.StationProjectionQuery(
-                index: index,
-                latitude: stop.coordinate.latitude,
-                longitude: stop.coordinate.longitude
+    /// Travel side, fuel plan, within-tank filter, distances, and the
+    /// waypoint order. The polyline is measured once. Nothing here is
+    /// isolated to the main actor.
+    private nonisolated static func computeFuelSelection(
+        _ input: FuelSelectionInput
+    ) -> FuelSelectionOutput {
+        let route: RouteGeometry.MeasuredRoute? = input.polylines.contains(where: { $0.count > 1 })
+            ? RouteGeometry.MeasuredRoute(polylines: input.polylines)
+            : nil
+        var distances: [UUID: CLLocationDistance] = [:]
+        distances.reserveCapacity(input.queries.count)
+        for query in input.queries {
+            distances[query.id] = projectedDistance(
+                latitude: query.latitude,
+                longitude: query.longitude,
+                known: query.known,
+                on: route
             )
         }
-        let indices = await Self.travelSideIndicesOffMainAsync(queries: queries, polylines: polylines)
-        let keep = Set(indices)
-        return stations.enumerated().compactMap { keep.contains($0.offset) ? $0.element : nil }
+
+        var stationByID: [UUID: FuelSelectionStation] = [:]
+        for station in input.stations {
+            stationByID[station.id] = station
+        }
+        for stop in input.existingFuelStops where stationByID[stop.id] == nil {
+            stationByID[stop.id] = stop
+        }
+        func cached(_ station: FuelSelectionStation) -> CLLocationDistance {
+            distances[station.id] ?? station.distance
+        }
+
+        let preKeys = Set(input.waypoints.map(\.key))
+        var pool = input.stations
+        var draft = FuelPlanDraft(recommendedIDs: [], entries: [], hasGap: false)
+        var chosen: [FuelSelectionStation] = []
+
+        if input.replan {
+            if let route {
+                let travel = input.stations.filter { station in
+                    let coordinate = CLLocationCoordinate2D(
+                        latitude: station.latitude,
+                        longitude: station.longitude
+                    )
+                    return RouteGeometry.isOnTravelSide(
+                        coordinate,
+                        on: route,
+                        drivesOnRight: input.drivesOnRight
+                    )
+                }
+                pool = travel.isEmpty ? input.stations : travel
+            }
+            draft = fuelPlanDraft(
+                from: pool.map {
+                    FuelCandidate(
+                        id: $0.id,
+                        distanceAlongRoute: $0.distance,
+                        detourMeters: $0.detour
+                    )
+                },
+                totalDistance: input.totalDistance,
+                range: input.tank,
+                filledAt: plannedFillDistances(input, distances: distances),
+                preferringFoodAt: input.foodIDs,
+                departure: input.departure,
+                totalTravelTime: input.totalTravelTime,
+                unsearched: input.unsearched
+            )
+            var pastIDs = Set<UUID>()
+            var pastKeys = Set<String>()
+            for entry in draft.entries {
+                guard case .pastRange(let id) = entry else { continue }
+                pastIDs.insert(id)
+                if let key = stationByID[id]?.key {
+                    pastKeys.insert(key)
+                }
+            }
+            let recommended = draft.recommendedIDs.compactMap { stationByID[$0] }
+            let selectable = recommended.filter { station in
+                station.isGas
+                    && !pastIDs.contains(station.id)
+                    && !pastKeys.contains(station.key)
+                    && !preKeys.contains(station.key)
+            }
+            let anchors = selectionAnchors(
+                input: input,
+                distances: distances,
+                keys: preKeys,
+                extra: recommended
+            )
+            let reachable = reachableStopIDs(
+                candidates: selectable.map { TankCandidate(id: $0.id, distance: cached($0)) },
+                onRoute: anchors,
+                tank: input.tank
+            )
+            for station in selectable.sorted(by: { cached($0) < cached($1) }) {
+                guard reachable.contains(station.id) else { break }
+                chosen.append(station)
+            }
+        } else {
+            let selectable = input.existingFuelStops.filter { station in
+                station.isGas
+                    && !input.pastRangeIDs.contains(station.id)
+                    && !input.pastRangeKeys.contains(station.key)
+                    && !preKeys.contains(station.key)
+            }
+            chosen = selectable.sorted { cached($0) < cached($1) }
+        }
+
+        let placements = placedSelections(chosen, on: input, route: route)
+        let hasInserts = placements.contains { placement in
+            if case .insert = placement { return true }
+            return false
+        }
+        let clearFuel = hasInserts && input.hasLegs
+        var postKeys = Set<String>()
+        if hasInserts {
+            for placement in placements {
+                switch placement {
+                case .keep(let id):
+                    if let waypoint = input.waypoints.first(where: { $0.id == id }) {
+                        postKeys.insert(waypoint.key)
+                    }
+                case .insert(let id):
+                    if let station = stationByID[id] {
+                        postKeys.insert(station.key)
+                    }
+                }
+            }
+        } else {
+            postKeys = preKeys
+        }
+
+        var kept: [UUID] = []
+        if hasInserts {
+            let insertedKeys = Set(chosen.map(\.key))
+            for stop in input.buffered {
+                if insertedKeys.contains(stop.key) || postKeys.contains(stop.key) {
+                    continue
+                }
+                kept.append(stop.id)
+            }
+        }
+
+        let remaining: [FuelSelectionStation]
+        if clearFuel {
+            remaining = []
+        } else if input.replan {
+            remaining = draft.recommendedIDs.compactMap { stationByID[$0] }
+        } else {
+            remaining = input.existingFuelStops
+        }
+        let rows: [FuelPlanRow]
+        if clearFuel {
+            rows = []
+        } else if input.replan {
+            rows = draftRows(draft, stations: stationByID, distances: distances)
+        } else {
+            rows = input.existingRows.map { row in
+                guard row.kind != .gap, let distance = distances[row.stopID] else { return row }
+                var copy = row
+                copy.distance = distance
+                return copy
+            }
+        }
+        let anchors = publishedFillDistances(
+            input: input,
+            distances: distances,
+            postKeys: postKeys,
+            chosen: hasInserts ? chosen : [],
+            remaining: remaining
+        )
+        let snapshot = fuelPlanSnapshot(FuelPlanInputs(
+            rows: rows,
+            onRouteKeys: postKeys,
+            onRouteGasDistances: anchors,
+            showsGap: hasInserts ? false : input.showsGap,
+            tank: input.tank
+        ))
+        return FuelSelectionOutput(
+            didReplan: input.replan,
+            hasInserts: hasInserts,
+            clearFuel: clearFuel,
+            poolIDs: pool.map(\.id),
+            recommendedIDs: draft.recommendedIDs,
+            draft: draft,
+            placements: hasInserts ? placements : [],
+            keptBufferedIDs: kept,
+            distances: distances,
+            onRouteKeys: postKeys,
+            fuelPlanKeys: clearFuel ? [] : snapshot.fuelPlanKeys,
+            onRouteGasDistances: anchors,
+            visibleEntryIDs: clearFuel ? [] : snapshot.visibleEntryIDs,
+            planHasGap: draft.hasGap
+        )
     }
 
-    private nonisolated static func travelSideIndicesOffMainAsync(
-        queries: [RouteGeometry.StationProjectionQuery],
-        polylines: [[CLLocationCoordinate2D]]
-    ) async -> [Int] {
-        await Task.detached(priority: .userInitiated) {
-            RouteGeometry.travelSideIndices(queries: queries, polylines: polylines)
-        }.value
+    private nonisolated static func projectedDistance(
+        latitude: Double,
+        longitude: Double,
+        known: CLLocationDistance,
+        on route: RouteGeometry.MeasuredRoute?
+    ) -> CLLocationDistance {
+        guard let route else { return known }
+        let projected = RouteGeometry.distanceAlongRoute(
+            of: CLLocationCoordinate2D(latitude: latitude, longitude: longitude),
+            on: route
+        )
+        return RouteGeometry.preferredDistanceAlongRoute(projected: projected, known: known)
+    }
+
+    /// Gas-fill waypoints the planner treats as already filled. Missing
+    /// cache entries are 0, matching `gasFillDistances`.
+    private nonisolated static func plannedFillDistances(
+        _ input: FuelSelectionInput,
+        distances: [UUID: CLLocationDistance]
+    ) -> [CLLocationDistance] {
+        guard input.countsGasFills else { return [] }
+        return input.waypoints.compactMap { waypoint in
+            guard waypoint.isGasFill else { return nil }
+            return distances[waypoint.id] ?? 0
+        }
+    }
+
+    /// Anchors for the within-tank walk: fills already on the route, plus
+    /// any newly planned stop that sits on a waypoint.
+    private nonisolated static func selectionAnchors(
+        input: FuelSelectionInput,
+        distances: [UUID: CLLocationDistance],
+        keys: Set<String>,
+        extra: [FuelSelectionStation]
+    ) -> [CLLocationDistance] {
+        var anchors = plannedFillDistances(input, distances: distances)
+        func append(_ station: FuelSelectionStation) {
+            guard keys.contains(station.key) else { return }
+            anchors.append(distances[station.id] ?? station.distance)
+        }
+        for station in input.stations {
+            append(station)
+        }
+        for stop in extra {
+            append(stop)
+        }
+        return anchors
+    }
+
+    /// Mile marks stored with the fuel snapshot after the insert.
+    private nonisolated static func publishedFillDistances(
+        input: FuelSelectionInput,
+        distances: [UUID: CLLocationDistance],
+        postKeys: Set<String>,
+        chosen: [FuelSelectionStation],
+        remaining: [FuelSelectionStation]
+    ) -> [CLLocationDistance] {
+        var anchors = plannedFillDistances(input, distances: distances)
+        if input.countsGasFills {
+            for station in chosen {
+                anchors.append(distances[station.id] ?? station.distance)
+            }
+        }
+        for station in input.stations where postKeys.contains(station.key) {
+            anchors.append(distances[station.id] ?? station.distance)
+        }
+        for stop in remaining where postKeys.contains(stop.key) {
+            anchors.append(distances[stop.id] ?? stop.distance)
+        }
+        return anchors
+    }
+
+    /// Ride order for one assignment. Middle waypoints share one measurement.
+    private nonisolated static func placedSelections(
+        _ chosen: [FuelSelectionStation],
+        on input: FuelSelectionInput,
+        route: RouteGeometry.MeasuredRoute?
+    ) -> [FuelPlacement] {
+        let waypoints = input.waypoints
+        guard waypoints.count >= 2 else {
+            var occupied = Set(waypoints.map(\.key))
+            var placements = waypoints.map { FuelPlacement.keep($0.id) }
+            for station in chosen.sorted(by: { $0.distance < $1.distance }) {
+                guard occupied.insert(station.key).inserted else { continue }
+                placements.append(.insert(station.id))
+            }
+            return placements
+        }
+        var placed: [(distance: CLLocationDistance, placement: FuelPlacement)] = []
+        for (index, waypoint) in waypoints.enumerated() {
+            let distance: CLLocationDistance
+            if index == 0 {
+                distance = 0
+            } else if index == waypoints.count - 1 {
+                distance = .greatestFiniteMagnitude
+            } else if let route {
+                distance = RouteGeometry.distanceAlongRoute(
+                    of: CLLocationCoordinate2D(
+                        latitude: waypoint.latitude,
+                        longitude: waypoint.longitude
+                    ),
+                    on: route
+                )
+            } else if input.polylines.isEmpty {
+                distance = input.totalDistance * Double(index) / Double(max(waypoints.count, 1))
+            } else {
+                distance = 0
+            }
+            placed.append((distance, .keep(waypoint.id)))
+        }
+        var occupied = Set(waypoints.map(\.key))
+        for station in chosen.sorted(by: { $0.distance < $1.distance }) {
+            guard occupied.insert(station.key).inserted else { continue }
+            let index = placed.firstIndex { $0.distance > station.distance } ?? placed.count
+            placed.insert((station.distance, .insert(station.id)), at: index)
+        }
+        return placed.map(\.placement)
+    }
+
+    private nonisolated static func draftRows(
+        _ draft: FuelPlanDraft,
+        stations: [UUID: FuelSelectionStation],
+        distances: [UUID: CLLocationDistance]
+    ) -> [FuelPlanRow] {
+        draft.entries.compactMap { entry in
+            switch entry {
+            case .recommended(let id):
+                guard let station = stations[id] else { return nil }
+                return FuelPlanRow(
+                    entryID: "rec-\(id.uuidString)",
+                    stopID: id,
+                    key: station.key,
+                    distance: distances[id] ?? station.distance,
+                    kind: .recommended
+                )
+            case .pastRange(let id):
+                guard let station = stations[id] else { return nil }
+                return FuelPlanRow(
+                    entryID: "past-\(id.uuidString)",
+                    stopID: id,
+                    key: station.key,
+                    distance: distances[id] ?? station.distance,
+                    kind: .pastRange
+                )
+            case .gap(let from, let to, _):
+                return FuelPlanRow(
+                    entryID: "gap-\(Int(from.rounded()))-\(Int(to.rounded()))",
+                    stopID: UUID(),
+                    key: "",
+                    distance: 0,
+                    kind: .gap
+                )
+            }
+        }
     }
 
     /// Stations on the rider's side of the current line. The polyline is
@@ -3086,15 +3638,82 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         calendar: Calendar = .current,
         unsearched: [CLLocationDistance] = []
     ) -> FuelPlan {
+        let draft = fuelPlanDraft(
+            from: gasStops.map {
+                FuelCandidate(
+                    id: $0.id,
+                    distanceAlongRoute: $0.distanceAlongRoute,
+                    detourMeters: $0.detourMeters
+                )
+            },
+            totalDistance: totalDistance,
+            range: range,
+            filledAt: filledAt,
+            safetyFactor: safetyFactor,
+            minimumSeparationFactor: minimumSeparationFactor,
+            preferringFoodAt: preferringFoodAt,
+            departure: departure,
+            totalTravelTime: totalTravelTime,
+            mealWindows: mealWindows,
+            calendar: calendar,
+            unsearched: unsearched
+        )
+        return fuelPlan(from: draft, stops: gasStops)
+    }
+
+    /// Maps a background plan back onto the stops the rider is holding.
+    fileprivate nonisolated static func fuelPlan(
+        from draft: FuelPlanDraft,
+        stops: [SuggestedStop]
+    ) -> FuelPlan {
+        var byID: [UUID: SuggestedStop] = [:]
+        byID.reserveCapacity(stops.count)
+        for stop in stops where byID[stop.id] == nil {
+            byID[stop.id] = stop
+        }
+        let recommended = draft.recommendedIDs.compactMap { byID[$0] }
+        let entries = draft.entries.compactMap { entry -> FuelPlanEntry? in
+            switch entry {
+            case .recommended(let id):
+                guard let stop = byID[id] else { return nil }
+                return .recommended(stop)
+            case .pastRange(let id):
+                guard let stop = byID[id] else { return nil }
+                return .pastRange(stop)
+            case .gap(let fromMeters, let toMeters, let rangeMeters):
+                return .gap(FuelGap(
+                    fromMeters: fromMeters,
+                    toMeters: toMeters,
+                    rangeMeters: rangeMeters
+                ))
+            }
+        }
+        return FuelPlan(stops: recommended, entries: entries, hasGap: draft.hasGap)
+    }
+
+    fileprivate nonisolated static func fuelPlanDraft(
+        from candidates: [FuelCandidate],
+        totalDistance: CLLocationDistance,
+        range: CLLocationDistance,
+        filledAt: [CLLocationDistance] = [],
+        safetyFactor: Double = fuelSafetyFactor,
+        minimumSeparationFactor: Double = fuelStopMinimumSeparationFactor,
+        preferringFoodAt: Set<UUID> = [],
+        departure: Date? = nil,
+        totalTravelTime: TimeInterval = 0,
+        mealWindows: [MealWindow] = MealWindow.typical,
+        calendar: Calendar = .current,
+        unsearched: [CLLocationDistance] = []
+    ) -> FuelPlanDraft {
         guard range > 0, totalDistance > range else {
-            return FuelPlan(stops: [], entries: [], hasGap: false)
+            return FuelPlanDraft(recommendedIDs: [], entries: [], hasGap: false)
         }
 
         let comfortRange = range * safetyFactor
         let minimumSeparation = range * minimumSeparationFactor
-        let sorted = gasStops.sorted { $0.distanceAlongRoute < $1.distanceAlongRoute }
-        var recommended: [SuggestedStop] = []
-        var entries: [FuelPlanEntry] = []
+        let sorted = candidates.sorted { $0.distanceAlongRoute < $1.distanceAlongRoute }
+        var recommendedIDs: [UUID] = []
+        var entries: [FuelPlanDraftEntry] = []
         var skippedNear = Set<UUID>()
         // Rider-added gas stops count as fills; later pumps plan from the last one.
         var lastRefuel: CLLocationDistance = max(0, filledAt.max() ?? 0)
@@ -3104,7 +3723,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         var steps = 0
         let stepLimit = max(sorted.count * 3, 1) + 4
 
-        func finiteDetour(_ stop: SuggestedStop) -> CLLocationDistance {
+        func finiteDetour(_ stop: FuelCandidate) -> CLLocationDistance {
             let detour = stop.detourMeters
             guard detour.isFinite else { return 0 }
             return max(0, detour)
@@ -3112,7 +3731,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
         /// Along-route progress plus both detours. This is the leg length
         /// after Select recommended inserts the stop and the route replans.
-        func riddenHop(to stop: SuggestedStop) -> CLLocationDistance {
+        func riddenHop(to stop: FuelCandidate) -> CLLocationDistance {
             (stop.distanceAlongRoute - lastRefuel) + lastDetour + finiteDetour(stop)
         }
 
@@ -3122,7 +3741,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             }
         }
 
-        func inWindow(_ limit: CLLocationDistance) -> [SuggestedStop] {
+        func inWindow(_ limit: CLLocationDistance) -> [FuelCandidate] {
             sorted.filter {
                 $0.distanceAlongRoute > lastRefuel
                     && riddenHop(to: $0) <= limit
@@ -3133,7 +3752,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
         // Farthest station within the window. Food is a meal-time preference,
         // not a gate — off-meal we keep the tank-interval gas pick.
-        func farthest(_ limit: CLLocationDistance, preferFood: Bool) -> SuggestedStop? {
+        func farthest(_ limit: CLLocationDistance, preferFood: Bool) -> FuelCandidate? {
             let window = inWindow(limit)
             let withFood = (preferFood && !preferringFoodAt.isEmpty)
                 ? window.filter { preferringFoodAt.contains($0.id) }
@@ -3144,14 +3763,14 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
         /// Closest station still inside the tank. Used only when the reserve
         /// window is empty.
-        func nearest(_ limit: CLLocationDistance) -> SuggestedStop? {
+        func nearest(_ limit: CLLocationDistance) -> FuelCandidate? {
             inWindow(limit).min(by: { $0.distanceAlongRoute < $1.distanceAlongRoute })
         }
 
         /// A short hop is worth taking when the destination, or some later
         /// station, sits past the current tank but inside the tank measured
         /// from this stop.
-        func extendsReach(_ stop: SuggestedStop) -> Bool {
+        func extendsReach(_ stop: FuelCandidate) -> Bool {
             let unlockedStart = lastRefuel + range
             let unlockedEnd = stop.distanceAlongRoute + range
             if totalDistance > unlockedStart, totalDistance <= unlockedEnd {
@@ -3164,13 +3783,13 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             }
         }
 
-        func nextStation(after distance: CLLocationDistance) -> SuggestedStop? {
+        func nextStation(after distance: CLLocationDistance) -> FuelCandidate? {
             sorted.first { $0.distanceAlongRoute > distance }
         }
 
         func appendGap(from start: CLLocationDistance, to end: CLLocationDistance) {
             guard end - start > range else { return }
-            entries.append(.gap(FuelGap(fromMeters: start, toMeters: end, rangeMeters: range)))
+            entries.append(.gap(fromMeters: start, toMeters: end, rangeMeters: range))
         }
 
         // Keep refueling until the remaining distance fits in the reserve.
@@ -3214,7 +3833,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                         let end = next?.distanceAlongRoute ?? totalDistance
                         appendGap(from: stop.distanceAlongRoute, to: end)
                         if let next {
-                            entries.append(.pastRange(next))
+                            entries.append(.pastRange(next.id))
                             lastRefuel = next.distanceAlongRoute
                             lastDetour = finiteDetour(next)
                             skippedNear.removeAll()
@@ -3224,8 +3843,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                     }
                     continue
                 }
-                recommended.append(stop)
-                entries.append(.recommended(stop))
+                recommendedIDs.append(stop.id)
+                entries.append(.recommended(stop.id))
                 lastRefuel = stop.distanceAlongRoute
                 lastDetour = finiteDetour(stop)
                 skippedNear.removeAll()
@@ -3252,7 +3871,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             let end = next?.distanceAlongRoute ?? totalDistance
             appendGap(from: lastRefuel, to: end)
             if let next {
-                entries.append(.pastRange(next))
+                entries.append(.pastRange(next.id))
                 lastRefuel = next.distanceAlongRoute
                 lastDetour = finiteDetour(next)
                 skippedNear.removeAll()
@@ -3265,7 +3884,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             if case .gap = entry { return true }
             return false
         }
-        return FuelPlan(stops: recommended, entries: entries, hasGap: hasGap)
+        return FuelPlanDraft(recommendedIDs: recommendedIDs, entries: entries, hasGap: hasGap)
     }
 
     // MARK: - Ride highlights (places of interest)

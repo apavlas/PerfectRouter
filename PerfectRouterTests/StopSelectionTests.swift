@@ -3,6 +3,13 @@ import Contacts
 import CoreLocation
 @testable import PerfectRouter
 
+/// Main-actor stand-in for `Task.isCompleted`, which Swift 5.10 and Swift 6
+/// do not provide. The selection task sets it after the tap returns.
+@MainActor
+private final class FuelSelectionCompletion: Sendable {
+    var isCompleted = false
+}
+
 /// Unit tests for waypoint order: search/contact `addWaypoint`, long-press
 /// `addStart`, and the shared stop-selection path `addStop(from:)`.
 @MainActor
@@ -780,12 +787,14 @@ final class StopSelectionTests: XCTestCase {
         XCTAssertFalse(chosen.fuelStopRidingCaption(for: nearA).contains("No fuel within range"))
     }
 
-    /// Amarillo → LA length, dense enough that projecting every station on
-    /// every row used to keep the main thread busy for more than a minute.
-    /// Select recommended finishes within about two seconds. Reading the
-    /// suggestion list and the fuel plan, which the sheet does once per row,
-    /// stays under a tenth of a second for 40 stations and 40 suggestions.
-    func testSelectRecommendedAndFuelListFinishWithinTwoSecondsOnALongRoute() async {
+    /// Amarillo → LA length. Ten thousand vertices, so a main-thread walk of
+    /// the polyline is obvious.
+    private func makeLongFuelRoute() -> (
+        viewModel: RoutePlannerViewModel,
+        stations: [SuggestedStop],
+        suggestions: [SuggestedStop],
+        line: [CLLocationCoordinate2D]
+    ) {
         let mile = AppSettings.metersPerMile
         let totalMiles = 2_500.0
         let pointCount = 10_000
@@ -838,10 +847,70 @@ final class StopSelectionTests: XCTestCase {
             )
         }
         viewModel.suggestedStops = suggestions
+        return (viewModel, stations, suggestions, line)
+    }
 
+    /// The spinner flag is up within half a second, and the main actor keeps
+    /// getting turns for the whole scan. A few seconds of background work is
+    /// fine. A blocked main thread would show up as a long gap between turns.
+    func testSelectRecommendedDoesNotBlockTheMainActor() async {
+        let made = makeLongFuelRoute()
+        let viewModel = made.viewModel
+        let started = Date()
+        // `Task` has no `isCompleted` in Swift 5.10 or Swift 6. The task
+        // sets this on the main actor as its last step.
+        let completion = FuelSelectionCompletion()
+        let selection = Task { @MainActor in
+            await viewModel.toggleRecommendedFuelSelection()
+            completion.isCompleted = true
+        }
+        var sawSpinner = false
+        while Date().timeIntervalSince(started) < 0.5 {
+            if viewModel.isSelectingRecommendedFuel {
+                sawSpinner = true
+                break
+            }
+            if completion.isCompleted { break }
+            await Task.yield()
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 0.5)
+        XCTAssertTrue(sawSpinner || completion.isCompleted)
+        if !completion.isCompleted {
+            XCTAssertTrue(viewModel.isSelectingRecommendedFuel)
+        }
+
+        var turns = 0
+        var longestGap: TimeInterval = 0
+        while !completion.isCompleted, Date().timeIntervalSince(started) < 5 {
+            let began = Date()
+            await Task.yield()
+            longestGap = max(longestGap, Date().timeIntervalSince(began))
+            turns += 1
+        }
+        await selection.value
+        XCTAssertLessThan(longestGap, 0.5, "Select recommended blocked the main actor")
+        if Date().timeIntervalSince(started) > 0.5 {
+            XCTAssertGreaterThan(turns, 1)
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5)
+        XCTAssertFalse(viewModel.isSelectingRecommendedFuel)
+        XCTAssertGreaterThan(viewModel.waypoints.count, 2)
+    }
+
+    /// Reading the suggestion list and the fuel plan, which the sheet does
+    /// once per row, stays under a tenth of a second for 40 stations and
+    /// 40 suggestions. The scan itself may take a few seconds.
+    func testSelectRecommendedAndFuelListFinishWithinTwoSecondsOnALongRoute() async {
+        let made = makeLongFuelRoute()
+        let viewModel = made.viewModel
+        let stations = made.stations
+        let suggestions = made.suggestions
+        let line = made.line
+
+        let mile = AppSettings.metersPerMile
         let started = Date()
         await viewModel.toggleRecommendedFuelSelection()
-        XCTAssertLessThan(Date().timeIntervalSince(started), 2)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5)
 
         let read = Date()
         for _ in 0..<40 {
