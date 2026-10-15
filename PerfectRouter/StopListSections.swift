@@ -522,14 +522,15 @@ private struct SelectRecommendedFuelButton: View {
 
     var body: some View {
         Button(viewModel.selectRecommendedButtonTitle) {
-            Task { await viewModel.toggleRecommendedFuelSelection() }
+            viewModel.startRecommendedFuelSelection()
         }
         .accessibilityIdentifier(AccessibilityID.selectRecommended)
     }
 }
 
-/// Small status row for a Select recommended tap that is still going after
-/// half a second. Absent on a short route, which finishes before the delay.
+/// Small status row while Select recommended is choosing stops. The flag
+/// is set before the scan, so a tap that takes more than a frame shows
+/// `fuel.selecting.spinner`.
 private struct FuelSelectionSpinner: View {
     var body: some View {
         HStack(spacing: 8) {

@@ -780,12 +780,14 @@ final class StopSelectionTests: XCTestCase {
         XCTAssertFalse(chosen.fuelStopRidingCaption(for: nearA).contains("No fuel within range"))
     }
 
-    /// Amarillo → LA length, dense enough that projecting every station on
-    /// every row used to keep the main thread busy for more than a minute.
-    /// Select recommended finishes within about two seconds. Reading the
-    /// suggestion list and the fuel plan, which the sheet does once per row,
-    /// stays under a tenth of a second for 40 stations and 40 suggestions.
-    func testSelectRecommendedAndFuelListFinishWithinTwoSecondsOnALongRoute() async {
+    /// Amarillo → LA length. Ten thousand vertices, so a main-thread walk of
+    /// the polyline is obvious.
+    private func makeLongFuelRoute() -> (
+        viewModel: RoutePlannerViewModel,
+        stations: [SuggestedStop],
+        suggestions: [SuggestedStop],
+        line: [CLLocationCoordinate2D]
+    ) {
         let mile = AppSettings.metersPerMile
         let totalMiles = 2_500.0
         let pointCount = 10_000
@@ -838,7 +840,56 @@ final class StopSelectionTests: XCTestCase {
             )
         }
         viewModel.suggestedStops = suggestions
+        return (viewModel, stations, suggestions, line)
+    }
 
+    /// The tap sets the spinner and returns the main actor before the scan.
+    /// A blocked selection would still be inside the first yield after this
+    /// window. The list itself is in place within about two seconds.
+    func testSelectRecommendedDoesNotBlockTheMainActor() async {
+        let made = makeLongFuelRoute()
+        let viewModel = made.viewModel
+        let started = Date()
+        let selection = Task { @MainActor in
+            await viewModel.toggleRecommendedFuelSelection()
+        }
+        var turns = 0
+        var sawSpinner = false
+        while Date().timeIntervalSince(started) < 0.05 {
+            turns += 1
+            if viewModel.isSelectingRecommendedFuel {
+                sawSpinner = true
+            }
+            if selection.isCompleted { break }
+            await Task.yield()
+        }
+        XCTAssertLessThan(
+            Date().timeIntervalSince(started),
+            0.1,
+            "Select recommended blocked the main actor"
+        )
+        XCTAssertGreaterThan(turns, 1)
+        if !selection.isCompleted {
+            XCTAssertTrue(viewModel.isSelectingRecommendedFuel)
+        }
+        XCTAssertTrue(sawSpinner || selection.isCompleted)
+        await selection.value
+        XCTAssertLessThan(Date().timeIntervalSince(started), 2)
+        XCTAssertFalse(viewModel.isSelectingRecommendedFuel)
+        XCTAssertGreaterThan(viewModel.waypoints.count, 2)
+    }
+
+    /// Select recommended finishes within about two seconds. Reading the
+    /// suggestion list and the fuel plan, which the sheet does once per row,
+    /// stays under a tenth of a second for 40 stations and 40 suggestions.
+    func testSelectRecommendedAndFuelListFinishWithinTwoSecondsOnALongRoute() async {
+        let made = makeLongFuelRoute()
+        let viewModel = made.viewModel
+        let stations = made.stations
+        let suggestions = made.suggestions
+        let line = made.line
+
+        let mile = AppSettings.metersPerMile
         let started = Date()
         await viewModel.toggleRecommendedFuelSelection()
         XCTAssertLessThan(Date().timeIntervalSince(started), 2)
