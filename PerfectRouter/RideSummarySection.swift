@@ -210,6 +210,8 @@ private struct FuelPlanRow: Identifiable {
 private struct FuelPlanRows: View {
     let viewModel: RoutePlannerViewModel
 
+    @Environment(\.planningUsesSidebar) private var planningUsesSidebar
+
     var body: some View {
         // Caller mounts this only when `planRows` is non-empty. Food is
         // flattened in so a stop with no nearby food is not an `if` whose
@@ -247,6 +249,7 @@ private struct FuelPlanRows: View {
             let title = stored?.title ?? "Fuel stop \(number): \(fuelStop.name)"
             let caption = stored?.caption ?? viewModel.fuelStopRidingCaption(for: fuelStop)
             Button {
+                focusFromSidebar(fuelStop)
                 viewModel.toggleBufferedGasStop(fuelStop)
             } label: {
                 HStack(alignment: .top, spacing: 8) {
@@ -275,8 +278,11 @@ private struct FuelPlanRows: View {
                     caption: caption
                 )
             )
+            .sidebarStopHighlight(selected: viewModel.highlightedStopID == fuelStop.id)
+            .id(fuelStop.id)
         case .food(let food):
             Button {
+                focusFromSidebar(food)
                 viewModel.addStop(from: food)
             } label: {
                 HStack {
@@ -290,6 +296,8 @@ private struct FuelPlanRows: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
+            .sidebarStopHighlight(selected: viewModel.highlightedStopID == food.id)
+            .id(food.id)
         case .gap(let gap):
             Label(gap.warning, systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
@@ -302,6 +310,7 @@ private struct FuelPlanRows: View {
                 ? RoutePlannerViewModel.pastFullTankNotice
                 : viewModel.fuelListNote(for: stop)
             Button {
+                focusFromSidebar(stop)
                 viewModel.toggleBufferedGasStop(stop)
             } label: {
                 HStack(alignment: .top, spacing: 8) {
@@ -324,7 +333,14 @@ private struct FuelPlanRows: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(stored?.accessibilityLabel ?? "\(title), \(caption), \(note ?? "")")
+            .sidebarStopHighlight(selected: viewModel.highlightedStopID == stop.id)
+            .id(stop.id)
         }
+    }
+
+    private func focusFromSidebar(_ stop: SuggestedStop) {
+        guard planningUsesSidebar else { return }
+        viewModel.focusListedStop(id: stop.id, coordinate: stop.coordinate)
     }
 
     private func bufferMark(_ buffered: Bool) -> some View {
