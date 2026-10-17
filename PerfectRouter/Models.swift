@@ -20,6 +20,9 @@ struct Waypoint: Identifiable, Equatable {
     /// True when the rider added this stop as a gas station (pin, list, or
     /// ride-summary row). Counts as a tank fill for `planFuelStops`.
     var isGasFill: Bool = false
+    /// An overnight hotel. Ends the riding day: the next morning's riding
+    /// time starts here, and the tank is treated as full.
+    var isOvernight: Bool = false
 
     static func == (lhs: Waypoint, rhs: Waypoint) -> Bool {
         lhs.id == rhs.id
@@ -33,8 +36,16 @@ enum StopCategory: String, CaseIterable, Identifiable {
     case coffee = "Coffee"
     case scenic = "Scenic"
     case attraction = "Sights"
+    /// Evening lodging. Not a map chip — hotels are suggested from the
+    /// riding-time window, then checked and applied like fuel.
+    case lodging = "Lodging"
 
     var id: String { rawValue }
+
+    /// Categories shown as map chips. Lodging stays off that row.
+    static var plannerCases: [StopCategory] {
+        allCases.filter { $0 != .lodging }
+    }
 
     /// Query string passed to MKLocalSearch.
     var searchQuery: String {
@@ -44,6 +55,7 @@ enum StopCategory: String, CaseIterable, Identifiable {
         case .coffee:     return "coffee"
         case .scenic:     return "scenic viewpoint"
         case .attraction: return "tourist attractions"
+        case .lodging:    return "hotel"
         }
     }
 
@@ -54,14 +66,16 @@ enum StopCategory: String, CaseIterable, Identifiable {
         case .coffee:     return "cup.and.saucer.fill"
         case .scenic:     return "binoculars.fill"
         case .attraction: return "star.fill"
+        case .lodging:    return "bed.double.fill"
         }
     }
 
-    /// Scenic viewpoints and sights. Those cards can show a description.
-    /// Gas, food, and coffee stay one-tap rows without one.
+    /// Scenic viewpoints, sights, and lodging. Those cards can show a
+    /// description Apple Maps already published. Gas, food, and coffee stay
+    /// one-tap rows without one.
     var showsPlaceDescription: Bool {
         switch self {
-        case .scenic, .attraction:
+        case .scenic, .attraction, .lodging:
             return true
         case .gas, .food, .coffee:
             return false

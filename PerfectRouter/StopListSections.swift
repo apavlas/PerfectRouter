@@ -263,9 +263,13 @@ struct WaypointsSection: View {
     @ViewBuilder
     private func waypointRow(index: Int, waypoint: Waypoint) -> some View {
         let pastRange = viewModel.waypointIsBeyondRemainingRange(at: index)
+        let dayTitle = viewModel.rideDayTitle(at: index)
         Label {
             if let caption = viewModel.waypointRidingCaption(at: index) {
                 VStack(alignment: .leading, spacing: 2) {
+                    if let dayTitle {
+                        dayHeading(dayTitle)
+                    }
                     waypointName(waypoint)
                     Text(caption)
                         .font(.caption)
@@ -276,19 +280,30 @@ struct WaypointsSection: View {
                         PastYourRangeLabel()
                     }
                 }
-            } else if pastRange {
+            } else if pastRange || dayTitle != nil {
                 VStack(alignment: .leading, spacing: 2) {
+                    if let dayTitle {
+                        dayHeading(dayTitle)
+                    }
                     waypointName(waypoint)
-                    PastYourRangeLabel()
+                    if pastRange {
+                        PastYourRangeLabel()
+                    }
                 }
             } else {
                 waypointName(waypoint)
             }
         } icon: {
-            Image(systemName: "mappin.circle.fill")
+            Image(systemName: waypoint.isOvernight ? "bed.double.fill" : "mappin.circle.fill")
                 .accessibilityHidden(true)
         }
         .id(waypoint.id)
+    }
+
+    private func dayHeading(_ title: String) -> some View {
+        Text(title)
+            .font(.subheadline.weight(.semibold))
+            .accessibilityIdentifier("rideDay.\(title)")
     }
 
     private func waypointName(_ waypoint: Waypoint) -> some View {
@@ -299,7 +314,11 @@ struct WaypointsSection: View {
     }
 
     private func waypointAccessibilityLabel(index: Int, waypoint: Waypoint) -> String {
-        var parts = [waypoint.name]
+        var parts: [String] = []
+        if let day = viewModel.rideDayTitle(at: index) {
+            parts.append(day)
+        }
+        parts.append(waypoint.name)
         if let caption = viewModel.waypointRidingCaption(at: index) {
             parts.append(caption)
         }

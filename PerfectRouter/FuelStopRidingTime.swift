@@ -75,6 +75,34 @@ enum FuelStopRidingTime {
         return elapsed
     }
 
+    /// Inverse of `ridingTime(atDistance:legs:)`. The distance at which
+    /// planned riding time reaches `target`, walking each leg at that leg's
+    /// own pace. A time past the end of the route clamps to the route length.
+    static func distance(atRidingTime target: TimeInterval, legs: [Leg]) -> CLLocationDistance {
+        guard target.isFinite, target > 0 else { return 0 }
+        var traveled: CLLocationDistance = 0
+        var elapsed: TimeInterval = 0
+        for leg in legs {
+            let length = finite(leg.distanceMeters)
+            let legTime = finite(leg.expectedTravelTime)
+            guard length > 0 else { continue }
+            if elapsed >= target { return traveled }
+            if legTime <= 0 {
+                traveled += length
+                continue
+            }
+            let legEndTime = elapsed + legTime
+            if target >= legEndTime {
+                elapsed = legEndTime
+                traveled += length
+                continue
+            }
+            let fraction = (target - elapsed) / legTime
+            return traveled + length * fraction
+        }
+        return traveled
+    }
+
     /// `anchors` are fuel-stop and applied-fill distances along the route.
     /// The previous stop is the farthest anchor still before `distance`.
     static func clock(
@@ -131,23 +159,41 @@ enum FuelStopRidingTime {
     /// destination, keep it: "344 mi · 5h 04m riding (2h 29m since last)".
     /// The destination's cumulative time is the whole trip: the sum of leg
     /// `expectedTravelTime` values, so time spent stopped is not included.
+    ///
+    /// `dayStartIndex` is the overnight stop the next morning leaves from.
+    /// Miles, riding time, and "since last" are measured from that row. The
+    /// first stop of the new day drops the since-last clause, same as the
+    /// first stop of the ride. The default, 0, is a one-day ride.
     static func waypointCaption(
         index: Int,
         legs: [Leg],
+        dayStartIndex: Int = 0,
         usesMetric: Bool = AppSettings.usesMetricUnits
     ) -> String? {
         guard index > 0, index <= legs.count else { return nil }
-        let distance = distanceThroughWaypoint(index, legs: legs)
-        let cumulative = ridingTime(atDistance: distance, legs: legs)
+        let origin = min(max(dayStartIndex, 0), index)
+        let endDistance = distanceThroughWaypoint(index, legs: legs)
+        let originDistance = distanceThroughWaypoint(origin, legs: legs)
+        let distance = max(0, endDistance - originDistance)
+        let cumulative = max(
+            0,
+            ridingTime(atDistance: endDistance, legs: legs)
+                - ridingTime(atDistance: originDistance, legs: legs)
+        )
         let miles = formatDistance(distance, usesMetric: usesMetric)
         let riding = formatDuration(cumulative)
-        // Index 1 is the first stop on the route list. "Since last" is the
-        // same duration as the cumulative time, so the cell leaves it off.
-        if index == 1 {
+        // The first stop of this morning. "Since last" would only repeat
+        // the time since the overnight stop.
+        if index == origin + 1 {
             return "\(miles) · \(riding) riding"
         }
         let previousDistance = distanceThroughWaypoint(index - 1, legs: legs)
-        let since = max(0, cumulative - ridingTime(atDistance: previousDistance, legs: legs))
+        let since = max(
+            0,
+            cumulative
+                - (ridingTime(atDistance: previousDistance, legs: legs)
+                    - ridingTime(atDistance: originDistance, legs: legs))
+        )
         return "\(miles) · \(riding) riding (\(formatDuration(since)) since last)"
     }
 
@@ -161,20 +207,41 @@ enum FuelStopRidingTime {
 
     /// First stop: "170 mi · 2h 35m riding". Later stops keep the time since
     /// the previous one: "344 mi · 5h 04m riding (2h 29m since last)".
+    ///
+    /// `dayStartMeters` is the overnight stop. Miles and both clocks start
+    /// over there; an anchor at or before that stop is the morning's
+    /// departure, not a previous fill. Zero keeps the one-day caption.
     static func caption(
         distanceMeters: CLLocationDistance,
         anchors: [CLLocationDistance],
         legs: [Leg],
+        dayStartMeters: CLLocationDistance = 0,
         usesMetric: Bool = AppSettings.usesMetricUnits
     ) -> String {
-        let reading = clock(at: distanceMeters, anchors: anchors, legs: legs)
-        let distance = formatDistance(distanceMeters, usesMetric: usesMetric)
-        let riding = formatDuration(reading.cumulative)
-        if reading.sinceDeparture {
-            return "\(distance) · \(riding) riding"
+        let distance = distanceMeters.isFinite ? max(0, distanceMeters) : 0
+        let origin = dayStartMeters.isFinite ? max(0, dayStartMeters) : 0
+        let relative = max(0, distance - origin)
+        let cumulative = max(
+            0,
+            ridingTime(atDistance: distance, legs: legs) - ridingTime(atDistance: origin, legs: legs)
+        )
+        let previous = anchors.filter { anchor in
+            guard anchor.isFinite, anchor < distance - sameStopToleranceMeters else { return false }
+            if origin > sameStopToleranceMeters, anchor <= origin + sameStopToleranceMeters {
+                return false
+            }
+            return true
+        }.max()
+        let miles = formatDistance(relative, usesMetric: usesMetric)
+        let riding = formatDuration(cumulative)
+        guard let previous else {
+            return "\(miles) · \(riding) riding"
         }
-        let since = formatDuration(reading.sincePrevious)
-        return "\(distance) · \(riding) riding (\(since) since last)"
+        let since = max(
+            0,
+            cumulative - (ridingTime(atDistance: previous, legs: legs) - ridingTime(atDistance: origin, legs: legs))
+        )
+        return "\(miles) · \(riding) riding (\(formatDuration(since)) since last)"
     }
 
     private static func finite(_ value: Double) -> Double {
