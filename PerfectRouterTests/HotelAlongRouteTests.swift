@@ -388,6 +388,174 @@ final class HotelAlongRouteTests: XCTestCase {
         XCTAssertEqual(viewModel.calculatingGeneration, before + 1)
     }
 
+    func testSelectingASecondHotelOnTheSameEveningReplacesTheFirst() {
+        var checked: [Int: String] = [:]
+        checked = HotelAlongRoute.checkedKeys(selecting: "Quality Inn", onDay: 1, current: checked)
+        checked = HotelAlongRoute.checkedKeys(selecting: "Holiday Inn Express", onDay: 1, current: checked)
+        XCTAssertEqual(checked, [1: "Holiday Inn Express"])
+        XCTAssertEqual(HotelAlongRoute.keysToApply(checked), ["Holiday Inn Express"])
+
+        checked = HotelAlongRoute.checkedKeys(selecting: "OKC Hotel", onDay: 2, current: checked)
+        XCTAssertEqual(
+            HotelAlongRoute.keysToApply(checked),
+            ["Holiday Inn Express", "OKC Hotel"]
+        )
+        // Checking the selected hotel again clears that evening only.
+        checked = HotelAlongRoute.checkedKeys(selecting: "Holiday Inn Express", onDay: 1, current: checked)
+        XCTAssertEqual(HotelAlongRoute.keysToApply(checked), ["OKC Hotel"])
+    }
+
+    func testTwoSameEveningHotelsApplyAsOneOvernight() {
+        let viewModel = RoutePlannerViewModel()
+        viewModel.waypoints = [
+            Waypoint(name: "Start", coordinate: CLLocationCoordinate2D(latitude: 33, longitude: -82)),
+            Waypoint(name: "End", coordinate: CLLocationCoordinate2D(latitude: 34, longitude: -81)),
+        ]
+        let quality = SuggestedStop(
+            name: "Quality Inn",
+            coordinate: CLLocationCoordinate2D(latitude: 33.40, longitude: -81.50),
+            category: .lodging,
+            distanceAlongRoute: 80_000,
+            detourMeters: 2 * mile
+        )
+        let holiday = SuggestedStop(
+            name: "Holiday Inn Express",
+            coordinate: CLLocationCoordinate2D(latitude: 33.41, longitude: -81.51),
+            category: .lodging,
+            distanceAlongRoute: 81_600,
+            detourMeters: mile
+        )
+        let pump = SuggestedStop(
+            name: "Pilot Madison",
+            coordinate: CLLocationCoordinate2D(latitude: 33.2, longitude: -82),
+            category: .gas,
+            distanceAlongRoute: 40_000
+        )
+        viewModel.fuelStops = [pump]
+        viewModel.gasStations = [pump]
+        viewModel.legs = [
+            StubMKRoute(
+                name: "Leg",
+                coordinates: [
+                    CLLocationCoordinate2D(latitude: 33, longitude: -82),
+                    CLLocationCoordinate2D(latitude: 34, longitude: -81),
+                ],
+                distance: 160_000,
+                expectedTravelTime: 3 * 3_600,
+                hasHighways: true
+            )
+        ]
+
+        viewModel.toggleBufferedHotelStop(quality, onEvening: 1)
+        viewModel.toggleBufferedHotelStop(holiday, onEvening: 1)
+        XCTAssertFalse(viewModel.isHotelBuffered(quality))
+        XCTAssertTrue(viewModel.isHotelBuffered(holiday))
+
+        viewModel.applyBufferedHotelStops()
+        XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "Holiday Inn Express", "End"])
+        XCTAssertEqual(viewModel.waypoints.filter(\.isOvernight).count, 1)
+        XCTAssertEqual(viewModel.rideDayTitle(at: 0), "Day 1")
+        XCTAssertNil(viewModel.rideDayTitle(at: 1))
+        XCTAssertEqual(viewModel.rideDayTitle(at: 2), "Day 2")
+        XCTAssertEqual(viewModel.fuelStops.map(\.name), ["Pilot Madison"])
+        XCTAssertEqual(viewModel.gasStations.map(\.name), ["Pilot Madison"])
+    }
+
+    func testRemainingEveningsAreOfferedAfterAnOvernight() {
+        // 1,800 miles in 36 hours. An overnight at mile 400 consumes day 1.
+        // Day 2 and day 3 still reach 6 PM, so both stay on the list.
+        let ride = [leg(miles: 1_800, hours: 36)]
+        let days = evenings(legs: ride, overnights: [400 * mile], departureHour: 8)
+        XCTAssertEqual(days.map(\.dayNumber), [2, 3])
+        XCTAssertEqual(days[0].dayStartDistance, 400 * mile, accuracy: 1)
+        XCTAssertEqual(days[0].targetDistance, 900 * mile, accuracy: 1)
+        XCTAssertEqual(days[1].dayStartDistance, 900 * mile, accuracy: 1)
+        XCTAssertEqual(days[1].targetDistance, 1_400 * mile, accuracy: 1)
+        XCTAssertEqual(days[0].departureMinutes, HotelAlongRoute.morningDepartureMinutes)
+        XCTAssertEqual(days[1].departureMinutes, HotelAlongRoute.morningDepartureMinutes)
+    }
+
+    func testArrivalUsesRouteETAAndDetourIsDistanceFromTheLine() {
+        let start = CLLocationCoordinate2D(latitude: 33, longitude: -82)
+        let end = CLLocationCoordinate2D(latitude: 34, longitude: -82)
+        let line = [start, end]
+        let length = RouteGeometry.length(of: line)
+        let mid = RouteGeometry.coordinate(atDistance: length / 2, alongPolylines: [line])
+        XCTAssertNotNil(mid)
+        let latitude = mid?.latitude ?? 33.5
+        let lonScale = 111_320 * cos(latitude * .pi / 180)
+        let east = CLLocationCoordinate2D(
+            latitude: latitude,
+            longitude: (mid?.longitude ?? -82) + (2 * mile) / lonScale
+        )
+        let legs = [FuelStopRidingTime.Leg(distanceMeters: length, expectedTravelTime: 2 * 3_600)]
+        let measured = HotelAlongRoute.measurement(
+            of: east,
+            alongPolylines: [line],
+            legs: legs,
+            dayStartDistance: 0,
+            departureMinutes: 8 * 60
+        )
+        XCTAssertNotNil(measured)
+        XCTAssertEqual(measured?.detourMeters ?? 0, 2 * mile, accuracy: mile * 0.2)
+        XCTAssertGreaterThan(measured?.detourMeters ?? 0, mile)
+        XCTAssertLessThanOrEqual(abs((measured?.arrivalMinutes ?? 0) - 9 * 60), 2)
+        let caption = HotelAlongRoute.arrivalCaption(
+            arrivalMinutes: measured?.arrivalMinutes ?? 0,
+            detourMeters: measured?.detourMeters ?? 0,
+            fartherOff: false,
+            usesMetric: false
+        )
+        XCTAssertFalse(caption.contains("6:00 PM"))
+        XCTAssertFalse(caption.contains("0 mi"))
+        XCTAssertTrue(caption.contains("AM"), caption)
+        XCTAssertEqual(
+            HotelAlongRoute.formatDetour(0.4 * mile, usesMetric: false),
+            "0.4 mi"
+        )
+        XCTAssertNil(HotelAlongRoute.measurement(
+            of: east,
+            alongPolylines: [],
+            legs: legs,
+            dayStartDistance: 0,
+            departureMinutes: 8 * 60
+        ))
+    }
+
+    func testOvernightReplanKeepsFuelStopsBeforeTheHotel() {
+        let stations = stride(from: 20_000.0, through: 480_000.0, by: 20_000.0).map { meters in
+            SuggestedStop(
+                name: "Gas @\(Int(meters))",
+                coordinate: CLLocationCoordinate2D(latitude: 0, longitude: 0),
+                category: .gas,
+                distanceAlongRoute: meters
+            )
+        }
+        let (stops, hasGap) = RoutePlannerViewModel.planFuelStopsPerLeg(
+            from: stations,
+            totalDistance: 500_000,
+            range: 100_000,
+            overnightDistances: [300_000]
+        )
+        XCTAssertFalse(hasGap)
+        let marks = stops.map { Int($0.distanceAlongRoute) }
+        XCTAssertTrue(marks.contains(80_000), "stops before the hotel were dropped: \(marks)")
+        XCTAssertTrue(marks.contains(160_000))
+        XCTAssertTrue(marks.contains(240_000))
+        XCTAssertTrue(marks.contains { $0 > 300_000 }, "no fuel was planned after the hotel: \(marks)")
+        let previous = marks.filter { $0 < 300_000 }.max() ?? 0
+        XCTAssertLessThanOrEqual(300_000 - previous, 100_000)
+
+        // Starting the whole ride at the hotel's mile mark is what hid those pumps.
+        let (afterOnly, _) = RoutePlannerViewModel.planFuelStops(
+            from: stations,
+            totalDistance: 500_000,
+            range: 100_000,
+            filledAt: [300_000]
+        )
+        XCTAssertFalse(afterOnly.contains { Int($0.distanceAlongRoute) < 300_000 })
+    }
+
     func testSharedRouteRoundTripsOvernightAndLegacyRidesStayOneDay() throws {
         var hotel = Waypoint(
             name: "Trail Inn",
