@@ -174,6 +174,28 @@ struct PlannedRouteNavigationView: View {
     }
 }
 
+/// Presents a session. Location starts when the screen appears and stops
+/// when it disappears. The off-route buttons are the only way to reroute.
+struct PlannedRouteNavigationScreen: View {
+    var session: PlannedRouteNavigationSession
+    var onEnd: () -> Void
+
+    var body: some View {
+        PlannedRouteNavigationView(
+            display: session.display,
+            routeCoordinates: session.routeCoordinates,
+            onBackToRoute: { session.chooseBackToMyRoute() },
+            onReroute: { Task { await session.chooseRerouteFromHere() } },
+            onEnd: {
+                session.stop()
+                onEnd()
+            }
+        )
+        .onAppear { session.start() }
+        .onDisappear { session.stop() }
+    }
+}
+
 #Preview {
     PlannedRouteNavigationView(
         display: PlannedNavigationDisplay(

@@ -48,6 +48,8 @@ struct ContentView: View {
     @State private var showingHistory = false
     @State private var showingShareRide = false
     @State private var showingRiderGroups = false
+    /// In-app turn-by-turn for the line currently on the map. Nil while planning.
+    @State private var navigationSession: PlannedRouteNavigationSession?
     /// Full place description. Held here, not on a list row: a `.sheet` inside
     /// a `List` section does not present when the row handles the tap.
     @State private var openPlaceDescription: OpenPlaceDescription?
@@ -65,6 +67,11 @@ struct ContentView: View {
             // doesn't cover. Without this a computed route can sit entirely
             // behind the sheet and look like it never appeared.
             .safeAreaPadding(.bottom, geo.size.height * sheetObscuredFraction)
+        }
+        .fullScreenCover(item: $navigationSession) { session in
+            PlannedRouteNavigationScreen(session: session) {
+                navigationSession = nil
+            }
         }
     }
 
@@ -389,7 +396,9 @@ struct ContentView: View {
                     onWaypointAdded: { recenter(on: $0.coordinate, spanDelta: 0.3) }
                 )
                 WaypointsSection(viewModel: viewModel, onUseMapCenterAsStart: addStartFromMapCenter)
-                RideSummarySection(viewModel: viewModel)
+                RideSummarySection(viewModel: viewModel) {
+                    navigationSession = viewModel.makeNavigationSession()
+                }
                 if !viewModel.rideHighlights.isEmpty {
                     RideHighlightsSection(
                         viewModel: viewModel,

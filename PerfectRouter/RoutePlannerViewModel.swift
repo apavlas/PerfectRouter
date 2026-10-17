@@ -5006,4 +5006,272 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         addWaypoint(waypoint)
         return waypoint
     }
+
+    // MARK: - Planned-line navigation
+
+    /// A guidance session locked to the polyline on screen. Nil when there
+    /// is no ride to follow. Does not open Apple Maps and does not recalculate.
+    func makeNavigationSession() -> PlannedRouteNavigationSession? {
+        let coordinates = suggestionRoutePolylines.flatMap { $0 }
+        guard coordinates.count >= 2, waypoints.count >= 2 else { return nil }
+
+        var stops: [PlannedRouteStop] = []
+        for (index, waypoint) in waypoints.enumerated() {
+            let kind: PlannedRouteStop.Kind
+            if index == 0 {
+                kind = .start
+            } else if index == waypoints.count - 1 {
+                kind = .destination
+            } else {
+                kind = .stop
+            }
+            stops.append(PlannedRouteStop(
+                id: waypoint.id,
+                name: waypoint.name,
+                latitude: waypoint.coordinate.latitude,
+                longitude: waypoint.coordinate.longitude,
+                distanceAlongRoute: 0,
+                kind: kind,
+                isFuel: waypoint.isGasFill
+            ))
+        }
+        for fuel in fuelStops {
+            if let index = stops.firstIndex(where: {
+                PlannedRouteNavigation.meters(from: $0.coordinate, to: fuel.coordinate) < 40
+            }) {
+                stops[index].isFuel = true
+            } else {
+                stops.append(PlannedRouteStop(
+                    id: fuel.id,
+                    name: fuel.name,
+                    latitude: fuel.latitude,
+                    longitude: fuel.longitude,
+                    distanceAlongRoute: 0,
+                    kind: .fuel,
+                    isFuel: true
+                ))
+            }
+        }
+
+        guard let line = PlannedRouteNavigation.makeLine(
+            coordinates: coordinates,
+            stops: stops,
+            routeStyleName: routeStyle.rawValue
+        ) else { return nil }
+
+        let hints = legs.flatMap { plannedStepHints(from: $0) }
+        let maneuvers = NavigationGuidance.maneuvers(
+            along: line.coordinates,
+            stops: line.stops,
+            steps: hints
+        )
+        return PlannedRouteNavigationSession(
+            line: line,
+            maneuvers: maneuvers,
+            usesMetric: AppSettings.usesMetricUnits,
+            reroute: { [weak self] origin, remaining, styleName in
+                guard let self else { return nil }
+                return await self.navigationReplacementLine(
+                    from: origin,
+                    through: remaining,
+                    styleName: styleName
+                )
+            }
+        )
+    }
+
+    /// Directions from `origin` through the remaining selected stops, using
+    /// the same route style. The planner's legs are left alone. Returns nil
+    /// when no line can be built that still visits those stops.
+    func navigationReplacementLine(
+        from origin: CLLocationCoordinate2D,
+        through remaining: [PlannedRouteStop],
+        styleName: String
+    ) async -> PlannedNavigationReplacement? {
+        let style = RouteStyle(rawValue: styleName) ?? routeStyle
+        let targets = remaining
+            .filter(\.isRequiredOnReroute)
+            .sorted { $0.distanceAlongRoute < $1.distanceAlongRoute }
+        guard !targets.isEmpty, origin.isValidLocation else { return nil }
+
+        var coordinates: [CLLocationCoordinate2D] = []
+        var hints: [PlannedStepHint] = []
+        var cursor = origin
+        var usedFastestFallback = false
+
+        for target in targets {
+            let leg: (routes: [MKRoute], fellBack: Bool)
+            do {
+                leg = try await navigationLeg(from: cursor, to: target.coordinate, style: style)
+            } catch {
+                return nil
+            }
+            guard !leg.routes.isEmpty else { return nil }
+            if leg.fellBack { usedFastestFallback = true }
+            for route in leg.routes {
+                appendNavigationCoordinates(RouteGeometry.coordinates(of: route.polyline), to: &coordinates)
+                hints.append(contentsOf: plannedStepHints(from: route))
+            }
+            cursor = target.coordinate
+        }
+
+        guard PlannedRouteNavigation.reroutePreservesStops(targets, on: coordinates) else { return nil }
+
+        var stops = targets
+        stops.insert(
+            PlannedRouteStop(
+                id: UUID(),
+                name: "Current Location",
+                latitude: origin.latitude,
+                longitude: origin.longitude,
+                distanceAlongRoute: 0,
+                kind: .start,
+                isFuel: false
+            ),
+            at: 0
+        )
+        for fuel in fuelStops {
+            if let index = stops.firstIndex(where: {
+                PlannedRouteNavigation.meters(from: $0.coordinate, to: fuel.coordinate) < 40
+            }) {
+                stops[index].isFuel = true
+                continue
+            }
+            let gap = RouteGeometry.distanceFromRoute(of: fuel.coordinate, alongPolylines: [coordinates])
+            guard gap <= PlannedRouteNavigation.rerouteStopToleranceMeters else { continue }
+            stops.append(PlannedRouteStop(
+                id: fuel.id,
+                name: fuel.name,
+                latitude: fuel.latitude,
+                longitude: fuel.longitude,
+                distanceAlongRoute: 0,
+                kind: .fuel,
+                isFuel: true
+            ))
+        }
+
+        guard let line = PlannedRouteNavigation.makeLine(
+            coordinates: coordinates,
+            stops: stops,
+            routeStyleName: style.rawValue
+        ) else { return nil }
+
+        let note = (style == .twisty && usedFastestFallback)
+            ? "MapKit had no curvier road from here. Your remaining stops are still on this line."
+            : nil
+        return PlannedNavigationReplacement(
+            line: line,
+            maneuvers: NavigationGuidance.maneuvers(along: line.coordinates, stops: line.stops, steps: hints),
+            note: note
+        )
+    }
+
+    /// One leg of an explicit reroute. Twisty picks a curvier MapKit alternate
+    /// when one qualifies; otherwise it says so instead of relabeling Fastest.
+    /// This does not run the planner's offset-via stitch.
+    private func navigationLeg(
+        from origin: CLLocationCoordinate2D,
+        to destination: CLLocationCoordinate2D,
+        style: RouteStyle
+    ) async throws -> (routes: [MKRoute], fellBack: Bool) {
+        if style == .twisty {
+            async let directTask = directionsProvider.calculateRoutes(
+                from: origin,
+                to: destination,
+                avoidsHighways: false,
+                avoidsTolls: false,
+                alternates: true,
+                departure: effectiveDeparture
+            )
+            async let avoidedTask = directionsProvider.calculateRoutes(
+                from: origin,
+                to: destination,
+                avoidsHighways: true,
+                avoidsTolls: false,
+                alternates: true,
+                departure: effectiveDeparture
+            )
+            let direct: [MKRoute]
+            do {
+                direct = try await directTask
+            } catch {
+                _ = try? await avoidedTask
+                throw error
+            }
+            let avoided = (try? await avoidedTask) ?? []
+            guard let baseline = direct.first else {
+                if let fallback = avoided.first { return ([fallback], true) }
+                return ([], true)
+            }
+
+            var routesByID: [Int: MKRoute] = [0: baseline]
+            var candidates = [
+                TwistyRouteCandidate(
+                    id: 0,
+                    coordinates: RouteGeometry.coordinates(of: baseline.polyline),
+                    distance: baseline.distance
+                ),
+            ]
+            var nextID = 1
+            for route in direct.dropFirst() {
+                routesByID[nextID] = route
+                candidates.append(TwistyRouteCandidate(
+                    id: nextID,
+                    coordinates: RouteGeometry.coordinates(of: route.polyline),
+                    distance: route.distance
+                ))
+                nextID += 1
+            }
+            for route in avoided {
+                routesByID[nextID] = route
+                candidates.append(TwistyRouteCandidate(
+                    id: nextID,
+                    coordinates: RouteGeometry.coordinates(of: route.polyline),
+                    distance: route.distance
+                ))
+                nextID += 1
+            }
+            if let selection = TwistyRouting.select(candidates: candidates, fastestID: 0),
+               let chosen = routesByID[selection.candidateID] {
+                return ([chosen], false)
+            }
+            return ([baseline], true)
+        }
+
+        let routes = try await directionsProvider.calculateRoutes(
+            from: origin,
+            to: destination,
+            avoidsHighways: style.avoidsHighways,
+            avoidsTolls: style.avoidsTolls,
+            alternates: style.prefersAlternates,
+            departure: effectiveDeparture
+        )
+        guard let preferred = Self.preferredRoute(from: routes, style: style) else {
+            return ([], false)
+        }
+        return ([preferred], false)
+    }
+
+    /// `MKRoute.Step.instructions` and `polyline` are the iOS 17 step fields.
+    /// Stub routes return an empty step list, and guidance then uses the vertices.
+    private func plannedStepHints(from route: MKRoute) -> [PlannedStepHint] {
+        route.steps.compactMap { step in
+            let instructions = step.instructions.trimmingCharacters(in: .whitespacesAndNewlines)
+            let coordinates = RouteGeometry.coordinates(of: step.polyline)
+            guard !instructions.isEmpty || coordinates.count >= 2 else { return nil }
+            return PlannedStepHint(instructions: instructions, coordinates: coordinates)
+        }
+    }
+
+    private func appendNavigationCoordinates(
+        _ next: [CLLocationCoordinate2D],
+        to coordinates: inout [CLLocationCoordinate2D]
+    ) {
+        guard let first = next.first else { return }
+        if let last = coordinates.last, PlannedRouteNavigation.meters(from: last, to: first) < 5 {
+            coordinates.append(contentsOf: next.dropFirst())
+        } else {
+            coordinates.append(contentsOf: next)
+        }
+    }
 }

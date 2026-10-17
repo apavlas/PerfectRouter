@@ -377,7 +377,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = PerfectRouter;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.travel";
-				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "PerfectRouter uses your location to plot routes from where you are and to recommend fuel and rest stops along the way.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "PerfectRouter uses your location to plot routes from where you are, follow your planned line while you ride, and recommend fuel and rest stops along the way.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -413,7 +413,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = PerfectRouter;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.travel";
-				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "PerfectRouter uses your location to plot routes from where you are and to recommend fuel and rest stops along the way.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "PerfectRouter uses your location to plot routes from where you are, follow your planned line while you ride, and recommend fuel and rest stops along the way.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

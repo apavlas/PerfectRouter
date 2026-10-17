@@ -6,6 +6,8 @@ import MapKit
 /// hand-off buttons.
 struct RideSummarySection: View {
     let viewModel: RoutePlannerViewModel
+    /// Starts in-app guidance on the planned line. Empty in previews.
+    var onStartNavigation: () -> Void = {}
 
     var body: some View {
         Section {
@@ -95,11 +97,12 @@ struct RideSummarySection: View {
                     Text(viewModel.routeStyle.rawValue)
                         .accessibilityIdentifier(AccessibilityID.activeRouteStyle)
                 }
-                // Primary, one-tap hand-off. Apple Maps is CarPlay-native, so
-                // its turn-by-turn guidance automatically continues on the car
-                // display once the rider connects to CarPlay.
+                // Primary action. Stays inside the app and follows the planned
+                // line, including selected stops. Apple Maps is an explicit
+                // alternative below — it recalculates and can leave a detour.
                 Button {
-                    launchAppleMaps()
+                    viewModel.logCurrentRide()
+                    onStartNavigation()
                 } label: {
                     // motorcycle.fill is SF Symbols 6 / iOS 18+; reuse the
                     // Splash rider glyph so this stays valid on iOS 17.
@@ -112,6 +115,13 @@ struct RideSummarySection: View {
                 .accessibilityLabel("Navigate")
                 .listRowInsets(EdgeInsets())
                 .listRowBackground(Color.clear)
+
+                Button {
+                    launchAppleMaps()
+                } label: {
+                    Label("Open in Apple Maps", systemImage: "map")
+                }
+                .accessibilityIdentifier(AccessibilityID.openInAppleMaps)
 
                 // Optional alternative, only when Google Maps is installed.
                 // (Google Maps drives its own CarPlay support in its app.)
