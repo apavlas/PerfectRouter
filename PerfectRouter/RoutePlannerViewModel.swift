@@ -338,9 +338,18 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         didSet { rebuildDistanceCache() }
     }
 
-    /// Planning list scrolls to this stop after the rider adds one.
-    /// Nil until a stop is inserted.
+    /// Planning list scrolls to this stop after the rider adds one, and when
+    /// a sidebar pin or row selects it. Nil until a stop is inserted or chosen.
     var scrollToWaypointID: UUID?
+
+    /// Row the sidebar paints as selected. Nil on iPhone and iPad portrait,
+    /// where taps do not call the focus helpers below.
+    var highlightedStopID: UUID?
+
+    /// Bumped when a sidebar row should center the map. `mapCenterCoordinate`
+    /// is the target. The phone and portrait layouts never read the token.
+    private(set) var mapCenterToken = 0
+    private(set) var mapCenterCoordinate: CLLocationCoordinate2D?
 
     /// Intermediate stops only. Start and destination are not stops
     /// (Apple/Google Maps). A ride of start + 5 mids + end is 5 stops.
@@ -355,6 +364,21 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         case 1: return "Route (1 stop)"
         default: return "Route (\(intermediateStopCount) stops)"
         }
+    }
+
+    /// Pin tap in the sidebar layout. Scrolls the row into view and paints it.
+    /// Does not move the camera — the pin is already on screen.
+    func highlightListedStop(id: UUID) {
+        highlightedStopID = id
+        scrollToWaypointID = id
+    }
+
+    /// Sidebar row tap. Highlights the row and asks the map to center on it.
+    func focusListedStop(id: UUID, coordinate: CLLocationCoordinate2D) {
+        highlightListedStop(id: id)
+        guard coordinate.isValidLocation else { return }
+        mapCenterCoordinate = coordinate
+        mapCenterToken += 1
     }
 
     /// The rider's most recent known coordinate, used to auto-seed the ride
