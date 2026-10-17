@@ -447,6 +447,9 @@ final class HotelAlongRouteTests: XCTestCase {
         ]
 
         viewModel.toggleBufferedHotelStop(quality, onEvening: 1)
+        // A list can deliver the tap twice. The second one stays checked.
+        viewModel.toggleBufferedHotelStop(quality, onEvening: 1)
+        XCTAssertTrue(viewModel.isHotelBuffered(quality))
         viewModel.toggleBufferedHotelStop(holiday, onEvening: 1)
         XCTAssertFalse(viewModel.isHotelBuffered(quality))
         XCTAssertTrue(viewModel.isHotelBuffered(holiday))

@@ -569,7 +569,10 @@ struct ContentView: View {
                     openDescription: $openPlaceDescription
                 )
                 GasStationsSectionGate(viewModel: viewModel)
-                if viewModel.showsHotelSection {
+                // The section is inserted with the route, same as gas. Waiting
+                // for the hotel task and swapping the placeholder then left
+                // iPad's focus update with a section that never joined the tree.
+                if !viewModel.legs.isEmpty || viewModel.showsHotelSection {
                     HotelsAlongRouteSection(viewModel: viewModel)
                 } else {
                     FocusPlaceholderRow()

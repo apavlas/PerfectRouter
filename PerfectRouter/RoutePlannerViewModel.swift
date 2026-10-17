@@ -638,6 +638,14 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         hotelGeneration += 1
         let generation = hotelGeneration
         hotelTask?.cancel()
+        // Stub rows publish on this turn. A follow-up task was a second list
+        // update, and iPad drops the new section when that update lands.
+        if UITestStubLaunch.isEnabled {
+            hotelEvenings = UITestFixture.stubHotelEvenings()
+            hotelLoadFailed = false
+            isSearchingHotels = false
+            return
+        }
         hotelTask = Task { await refreshHotels(generation: generation) }
     }
 
@@ -2095,8 +2103,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         toggleBufferedHotelStop(stop, onEvening: day)
     }
 
-    /// Radio for one evening: a second hotel replaces the first. Checking
-    /// the selected hotel again clears that evening. Other evenings stay.
+    /// Radio for one evening: a second hotel replaces the first. Tapping the
+    /// hotel already checked for that evening leaves it checked. A list row
+    /// can deliver the same tap twice, and the second delivery must not
+    /// clear the radio. Clear selection drops the evening. Other evenings stay.
     func toggleBufferedHotelStop(_ stop: SuggestedStop, onEvening dayNumber: Int) {
         guard stop.coordinate.isValidLocation, stop.category == .lodging else { return }
         guard dayNumber > 0 else { return }
@@ -2107,6 +2117,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             for day in days {
                 checkedHotelByDay.removeValue(forKey: day)
             }
+            return
+        }
+        if checkedHotelByDay[dayNumber] == key {
             return
         }
         let checked = HotelAlongRoute.checkedKeys(
