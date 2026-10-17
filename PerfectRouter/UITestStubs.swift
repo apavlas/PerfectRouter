@@ -120,6 +120,67 @@ enum UITestFixture {
         return stops.sorted { $0.distanceAlongRoute < $1.distanceAlongRoute }
     }
 
+    /// Two hotels for one evening, and a later evening with no lodging.
+    /// UI tests assert the radio check and the exact empty-window copy.
+    /// These are fixture rows, not MapKit results. Captions are real
+    /// offsets, not the 6:00 PM / 0 mi stand-in.
+    static let sameEveningHotelA = "Quality Inn"
+    static let sameEveningHotelB = "Holiday Inn Express"
+    static let noLodgingCopy = "No lodging found between 5 and 7 PM"
+
+    static func stubHotelEvenings() -> [HotelEveningPlan] {
+        let quality = SuggestedStop(
+            name: sameEveningHotelA,
+            coordinate: coordinate(milesNorth: 90, eastMeters: 2 * metersPerMile),
+            category: .lodging,
+            distanceAlongRoute: 90 * metersPerMile,
+            detourMeters: 2 * metersPerMile
+        )
+        let holiday = SuggestedStop(
+            name: sameEveningHotelB,
+            coordinate: coordinate(milesNorth: 92, eastMeters: 4 * metersPerMile),
+            category: .lodging,
+            distanceAlongRoute: 92 * metersPerMile,
+            detourMeters: 4 * metersPerMile
+        )
+        let captions = [
+            quality.id: HotelAlongRoute.arrivalCaption(
+                arrivalMinutes: 17 * 60 + 40,
+                detourMeters: quality.detourMeters,
+                fartherOff: false,
+                usesMetric: false
+            ),
+            holiday.id: HotelAlongRoute.arrivalCaption(
+                arrivalMinutes: 18 * 60 + 20,
+                detourMeters: holiday.detourMeters,
+                fartherOff: false,
+                usesMetric: false
+            ),
+        ]
+        return [
+            HotelEveningPlan(
+                dayNumber: 1,
+                dayStartDistance: 0,
+                departureMinutes: 8 * 60,
+                options: [quality, holiday],
+                captions: captions,
+                widened: false,
+                emptyMessage: nil
+            ),
+            HotelEveningPlan(
+                dayNumber: 2,
+                dayStartDistance: 100 * metersPerMile,
+                departureMinutes: HotelAlongRoute.morningDepartureMinutes,
+                options: [],
+                captions: [:],
+                widened: false,
+                emptyMessage: HotelAlongRoute.emptyMessage(
+                    targetMinutes: HotelAlongRoute.defaultTargetMinutes
+                )
+            ),
+        ]
+    }
+
     static func coordinate(milesNorth: Double, eastMeters: CLLocationDistance) -> CLLocationCoordinate2D {
         let northMeters = milesNorth * metersPerMile
         let latitude = origin.latitude + northMeters / 111_320

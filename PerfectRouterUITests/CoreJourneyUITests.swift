@@ -21,6 +21,49 @@ final class CoreJourneyUITests: XCTestCase {
         XCTAssertTrue(waitForPlaceSearch(in: app).exists)
     }
 
+    func testNoLodgingStateShowsTheWindowMessage() {
+        let app = launch()
+        planFixedRoute(in: app)
+        let message = reveal("noLodging", in: app)
+        XCTAssertTrue(message.exists, diagnosticTree(app))
+        XCTAssertEqual(
+            message.label,
+            "No lodging found between 5 and 7 PM",
+            diagnosticTree(app)
+        )
+    }
+
+    func testCheckingTwoHotelsOnTheSameEveningLeavesOneSelected() {
+        let app = launch()
+        planFixedRoute(in: app)
+
+        let first = reveal("hotelStop.Quality Inn.unchecked", in: app)
+        XCTAssertTrue(first.exists, diagnosticTree(app))
+        scrollUntilHittable(first, in: app)
+        first.tap()
+
+        let firstChecked = reveal("hotelStop.Quality Inn.checked", in: app)
+        XCTAssertTrue(firstChecked.exists, diagnosticTree(app))
+
+        let second = reveal("hotelStop.Holiday Inn Express.unchecked", in: app)
+        XCTAssertTrue(second.exists, diagnosticTree(app))
+        scrollUntilHittable(second, in: app)
+        second.tap()
+
+        XCTAssertTrue(
+            reveal("hotelStop.Holiday Inn Express.checked", in: app).exists,
+            diagnosticTree(app)
+        )
+        XCTAssertTrue(
+            reveal("hotelStop.Quality Inn.unchecked", in: app).exists,
+            diagnosticTree(app)
+        )
+        XCTAssertFalse(
+            identified("hotelStop.Quality Inn.checked", in: app).exists,
+            diagnosticTree(app)
+        )
+    }
+
     func testPlanRouteBetweenTwoFixedPointsShowsFuelStops() {
         let app = launch()
         planFixedRoute(in: app)
@@ -1064,7 +1107,8 @@ final class CoreJourneyUITests: XCTestCase {
             "Quick Stop", "Home Fuel", "selectRecommended", "tankRange",
             "leaveLater", "routeStyle", "waypoint.", "noGas", "replan",
             "Plan Ride", "gas station", "Navigate", "Apply", "placeSearch",
-            "rideHighlights", "Ride Highlights", "highlight.", "Tallulah", "Bare Overlook"
+            "rideHighlights", "Ride Highlights", "highlight.", "Tallulah", "Bare Overlook",
+            "noLodging", "hotelStop", "Quality Inn", "Holiday Inn", "No lodging"
         ]
         let highlights = full.split(separator: "\n").filter { line in
             keywords.contains { line.localizedCaseInsensitiveContains($0) }

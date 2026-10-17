@@ -48,6 +48,7 @@ struct HotelsAlongRouteSection: View {
                         Text(message)
                             .foregroundStyle(.secondary)
                             .accessibilityIdentifier(AccessibilityID.noLodging)
+                            .accessibilityLabel(message)
                             .focusable()
                     } else if !evening.options.isEmpty {
                         ForEach(evening.options) { stop in
@@ -83,18 +84,14 @@ struct HotelsAlongRouteSection: View {
     private func hotelRow(_ stop: SuggestedStop, in evening: HotelEveningPlan) -> some View {
         let onRoute = viewModel.isStopOnRoute(stop)
         let checked = viewModel.isHotelBuffered(stop)
-        let caption = evening.captions[stop.id] ?? HotelAlongRoute.arrivalCaption(
-            arrivalMinutes: viewModel.hotelTargetMinutes,
-            detourMeters: stop.detourMeters,
-            fartherOff: evening.widened && stop.detourMeters > HotelAlongRoute.nearRadiusMeters
-        )
+        let caption = viewModel.hotelCaption(for: stop, in: evening)
         let description = PlaceDescriptionDisplay.rowText(for: stop.placeDescription)
         let phone = HotelAlongRoute.telephoneURL(from: stop.mapItem.phoneNumber)
         let website = HotelAlongRoute.websiteURL(from: stop.mapItem.url)
         return HStack(alignment: .top, spacing: 8) {
             Button {
                 guard !onRoute else { return }
-                viewModel.toggleBufferedHotelStop(stop)
+                viewModel.toggleBufferedHotelStop(stop, onEvening: evening.dayNumber)
             } label: {
                 HStack(alignment: .top, spacing: 8) {
                     Image(systemName: "bed.double.fill")

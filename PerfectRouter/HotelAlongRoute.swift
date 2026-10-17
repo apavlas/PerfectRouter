@@ -192,8 +192,62 @@ enum HotelAlongRoute {
         return "\(startText) and \(endText)"
     }
 
+    /// Where a real place sits relative to one evening.
+    ///
+    /// `distanceAlongRoute` is the nearest point on the planned line.
+    /// `detourMeters` is the straight-line distance from the place to that
+    /// point (detour routing is not available). `arrivalMinutes` is the
+    /// morning's departure plus the route ETA to that point — never the
+    /// target clock copied onto every row.
+    struct Measurement: Equatable {
+        var distanceAlongRoute: CLLocationDistance
+        var detourMeters: CLLocationDistance
+        var arrivalMinutes: Int
+    }
+
+    /// Nil only when the route has no segment to measure against. A place
+    /// that cannot be measured is not given a 6:00 PM / 0 mi stand-in.
+    static func measurement(
+        of coordinate: CLLocationCoordinate2D,
+        alongPolylines polylines: [[CLLocationCoordinate2D]],
+        legs: [FuelStopRidingTime.Leg],
+        dayStartDistance: CLLocationDistance,
+        departureMinutes: Int
+    ) -> Measurement? {
+        guard coordinate.isValidLocation else { return nil }
+        guard polylines.contains(where: { $0.count > 1 }) else { return nil }
+        let along = RouteGeometry.distanceAlongRoute(of: coordinate, alongPolylines: polylines)
+        let detour = RouteGeometry.distanceFromRoute(of: coordinate, alongPolylines: polylines)
+        guard along.isFinite, detour.isFinite else { return nil }
+        return Measurement(
+            distanceAlongRoute: max(0, along),
+            detourMeters: max(0, detour),
+            arrivalMinutes: arrivalMinutes(
+                atDistance: along,
+                legs: legs,
+                dayStartDistance: dayStartDistance,
+                departureMinutes: departureMinutes
+            )
+        )
+    }
+
+    /// Planned departure plus riding time from that morning to `distance`.
+    static func arrivalMinutes(
+        atDistance distance: CLLocationDistance,
+        legs: [FuelStopRidingTime.Leg],
+        dayStartDistance: CLLocationDistance,
+        departureMinutes: Int
+    ) -> Int {
+        let origin = dayStartDistance.isFinite ? max(0, dayStartDistance) : 0
+        let startTime = FuelStopRidingTime.ridingTime(atDistance: origin, legs: legs)
+        let riding = FuelStopRidingTime.ridingTime(atDistance: max(0, distance), legs: legs) - startTime
+        let minutes = Int((max(0, riding) / 60).rounded())
+        return departureMinutes + max(0, minutes)
+    }
+
     /// "arrive ~6:20 PM · 2 mi off route". Wider-radius options add
-    /// "· farther off".
+    /// "· farther off". A real offset under a mile keeps a tenth so it
+    /// does not collapse to "0 mi".
     static func arrivalCaption(
         arrivalMinutes: Int,
         detourMeters: CLLocationDistance,
@@ -201,12 +255,55 @@ enum HotelAlongRoute {
         usesMetric: Bool = AppSettings.usesMetricUnits
     ) -> String {
         let clock = clockText(minutes: arrivalMinutes, includePeriod: true, omitZeroMinutes: false)
-        let distance = FuelStopRidingTime.formatDistance(max(0, detourMeters), usesMetric: usesMetric)
+        let distance = formatDetour(max(0, detourMeters), usesMetric: usesMetric)
         var text = "arrive ~\(clock) · \(distance) off route"
         if fartherOff {
             text += " · farther off"
         }
         return text
+    }
+
+    /// Whole miles at 2 mi and above a tenth under 10 mi. "2 mi" stays
+    /// whole. "0.4 mi" does not round down to "0 mi".
+    static func formatDetour(_ meters: CLLocationDistance, usesMetric: Bool) -> String {
+        guard meters.isFinite else { return usesMetric ? "0 km" : "0 mi" }
+        let unit: CLLocationDistance = usesMetric ? 1_000 : AppSettings.metersPerMile
+        let unitName = usesMetric ? "km" : "mi"
+        let value = max(0, meters) / unit
+        if value >= 10 {
+            return FuelStopRidingTime.formatDistance(meters, usesMetric: usesMetric)
+        }
+        let tenths = (value * 10).rounded() / 10
+        if tenths < 0.05 {
+            return "0 \(unitName)"
+        }
+        if abs(tenths - tenths.rounded()) < 0.001 {
+            return "\(Int(tenths.rounded())) \(unitName)"
+        }
+        return String(format: "%.1f \(unitName)", tenths)
+    }
+
+    /// One checked hotel per evening. Selecting the same place again removes
+    /// it. Selecting a different place on that evening replaces the first.
+    /// Other evenings are left alone.
+    static func checkedKeys(
+        selecting key: String,
+        onDay day: Int,
+        current: [Int: String]
+    ) -> [Int: String] {
+        var next = current
+        if next[day] == key {
+            next.removeValue(forKey: day)
+        } else {
+            next[day] = key
+        }
+        return next
+    }
+
+    /// The hotels Apply may insert, one per evening, in day order. A second
+    /// hotel for an evening already in `checked` does not become another day.
+    static func keysToApply(_ checked: [Int: String]) -> [String] {
+        checked.keys.sorted().compactMap { checked[$0] }
     }
 
     /// Stable identity for a real place. Rounded to three decimals, same as
@@ -339,14 +436,18 @@ enum HotelAlongRoute {
 /// One evening's lodging rows. Options are places a search returned.
 struct HotelEveningPlan: Identifiable {
     var dayNumber: Int
+    /// Meters from the route origin to this morning's start.
+    var dayStartDistance: CLLocationDistance = 0
+    /// Local minutes from midnight when this morning's riding clock starts.
+    var departureMinutes: Int = HotelAlongRoute.morningDepartureMinutes
     var options: [SuggestedStop]
     /// "arrive ~6:20 PM · 2 mi off route", keyed by the option's id.
     var captions: [UUID: String] = [:]
     /// True when these options came from the 15-mile widen.
     var widened: Bool
-    /// "No lodging found between 5 and 7 PM" when the search succeeded and
-    /// the window was empty. Nil while options are showing, and nil when the
-    /// lookup itself failed.
+    /// "No lodging found between 5 and 7 PM" when this evening has no
+    /// options. Every evening the ride reaches is published with either
+    /// options or this message.
     var emptyMessage: String?
     var id: Int { dayNumber }
 }
