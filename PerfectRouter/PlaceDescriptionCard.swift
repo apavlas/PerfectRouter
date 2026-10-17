@@ -35,6 +35,9 @@ struct PlaceDescriptionCard: View {
     var rowIdentifier: String = ""
     var alignment: VerticalAlignment = .top
     var spacing: CGFloat = 8
+    /// Sidebar row tap when the place has no description to open. Empty for
+    /// every other card, so iPhone and iPad portrait keep the same actions.
+    var onSelect: () -> Void = {}
     let onOpen: () -> Void
     let onAdd: () -> Void
 
@@ -62,6 +65,7 @@ struct PlaceDescriptionCard: View {
             textColumn
         } else {
             Button {
+                onSelect()
                 if placeDescription != nil {
                     onOpen()
                 }
