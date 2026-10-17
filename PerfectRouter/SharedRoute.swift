@@ -7,22 +7,25 @@ struct SharedRoute: Codable, Equatable {
 
     /// One shared stop: a name plus its coordinate. Stored as plain
     /// `Double`s because `CLLocationCoordinate2D` is not `Codable`.
-    /// `isGasFill` is optional on decode so older saved/shared rides
-    /// (name + lat/lon only) still import, defaulting to not-a-fill.
+    /// `isGasFill` and `isOvernight` are optional on decode so older
+    /// saved/shared rides (name + lat/lon only) still import.
     struct Stop: Codable, Equatable {
         var name: String
         var latitude: CLLocationDegrees
         var longitude: CLLocationDegrees
         var isGasFill: Bool
+        var isOvernight: Bool
 
         init(name: String,
              latitude: CLLocationDegrees,
              longitude: CLLocationDegrees,
-             isGasFill: Bool = false) {
+             isGasFill: Bool = false,
+             isOvernight: Bool = false) {
             self.name = name
             self.latitude = latitude
             self.longitude = longitude
             self.isGasFill = isGasFill
+            self.isOvernight = isOvernight
         }
 
         init(from decoder: Decoder) throws {
@@ -31,6 +34,7 @@ struct SharedRoute: Codable, Equatable {
             latitude = try container.decode(CLLocationDegrees.self, forKey: .latitude)
             longitude = try container.decode(CLLocationDegrees.self, forKey: .longitude)
             isGasFill = try container.decodeIfPresent(Bool.self, forKey: .isGasFill) ?? false
+            isOvernight = try container.decodeIfPresent(Bool.self, forKey: .isOvernight) ?? false
         }
     }
 
@@ -55,7 +59,8 @@ struct SharedRoute: Codable, Equatable {
             Stop(name: $0.name,
                  latitude: $0.coordinate.latitude,
                  longitude: $0.coordinate.longitude,
-                 isGasFill: $0.isGasFill)
+                 isGasFill: $0.isGasFill,
+                 isOvernight: $0.isOvernight)
         }
         suggestions = suggestedStops.map {
             Suggestion(name: $0.name,
@@ -71,7 +76,8 @@ struct SharedRoute: Codable, Equatable {
             Waypoint(name: $0.name,
                      coordinate: CLLocationCoordinate2D(latitude: $0.latitude,
                                                         longitude: $0.longitude),
-                     isGasFill: $0.isGasFill)
+                     isGasFill: $0.isGasFill,
+                     isOvernight: $0.isOvernight)
         }
     }
 

@@ -346,6 +346,23 @@ struct ContentView: View {
             }
             }
 
+            if !hotelPins.isEmpty {
+                ForEach(hotelPins) { stop in
+                    Annotation(stop.name, coordinate: stop.coordinate) {
+                        Button {
+                            viewModel.toggleBufferedHotelStop(stop)
+                        } label: {
+                            Image(systemName: viewModel.isHotelBuffered(stop) ? "checkmark" : "bed.double.fill")
+                                .font(.caption)
+                                .padding(6)
+                                .background(viewModel.isHotelBuffered(stop) ? Color.indigo : Color.indigo.opacity(0.85), in: Circle())
+                                .foregroundStyle(.white)
+                        }
+                    }
+                    .tag(stop.id)
+                }
+            }
+
             // Recommended fuel stops (one per tank) — drawn last so they sit on
             // top, and highlighted (larger, ringed green pump) so they're easy
             // to pick out in any category. Exactly one marker per recommended
@@ -462,7 +479,7 @@ struct ContentView: View {
     private var categoryPicker: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack {
-                ForEach(StopCategory.allCases) { category in
+                ForEach(StopCategory.plannerCases) { category in
                     Button {
                         viewModel.selectCategory(category)
                     } label: {
@@ -513,6 +530,11 @@ struct ContentView: View {
                     openDescription: $openPlaceDescription
                 )
                 GasStationsSectionGate(viewModel: viewModel)
+                if viewModel.showsHotelSection {
+                    HotelsAlongRouteSection(viewModel: viewModel)
+                } else {
+                    FocusPlaceholderRow()
+                }
                 FuelRangeSection(viewModel: viewModel)
                 DepartureSection(viewModel: viewModel)
                 RouteStyleSection(viewModel: viewModel)
@@ -703,6 +725,15 @@ struct ContentView: View {
         }
     }
 
+    private var hotelPins: [SuggestedStop] {
+        var seen = Set<String>()
+        return viewModel.hotelEvenings.flatMap(\.options).filter { stop in
+            guard !viewModel.isStopOnRoute(stop) else { return false }
+            let key = "\(stop.latitude)|\(stop.longitude)"
+            return seen.insert(key).inserted
+        }
+    }
+
     private var extraGasPins: [SuggestedStop] {
         viewModel.gasStations.filter {
             !viewModel.isRecommendedFuelStop($0) && !viewModel.isStopOnRoute($0)
@@ -727,6 +758,7 @@ struct ContentView: View {
 
     private func markerIcon(for index: Int) -> String {
         if index == 0 { return "flag.fill" }
+        if viewModel.waypoints[index].isOvernight { return "bed.double.fill" }
         if index == viewModel.waypoints.count - 1 { return "flag.checkered" }
         return "mappin"
     }
