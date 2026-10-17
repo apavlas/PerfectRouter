@@ -10,6 +10,8 @@ struct RideHighlightsSection: View {
     /// this section never presents: the row's cell swallows the presentation.
     @Binding var openDescription: OpenPlaceDescription?
 
+    @Environment(\.planningUsesSidebar) private var planningUsesSidebar
+
     var body: some View {
         Section {
             ForEach(viewModel.rideHighlights) { stop in
@@ -26,9 +28,18 @@ struct RideHighlightsSection: View {
                     descriptionIdentifier: AccessibilityID.rideHighlightDescription(stop.name),
                     rowIdentifier: AccessibilityID.rideHighlightRow(stop.name),
                     alignment: .center,
-                    onOpen: { present(stop) },
-                    onAdd: { viewModel.addStop(from: stop) }
+                    onSelect: { focusFromSidebar(stop) },
+                    onOpen: {
+                        focusFromSidebar(stop)
+                        present(stop)
+                    },
+                    onAdd: {
+                        focusFromSidebar(stop)
+                        viewModel.addStop(from: stop)
+                    }
                 )
+                .sidebarStopHighlight(selected: viewModel.highlightedStopID == stop.id)
+                .id(stop.id)
             }
         } header: {
             Text("Ride Highlights")
@@ -36,6 +47,11 @@ struct RideHighlightsSection: View {
         } footer: {
             Text("Places of interest right along your route, spread across the ride.")
         }
+    }
+
+    private func focusFromSidebar(_ stop: SuggestedStop) {
+        guard planningUsesSidebar else { return }
+        viewModel.focusListedStop(id: stop.id, coordinate: stop.coordinate)
     }
 
     private func present(_ stop: SuggestedStop) {

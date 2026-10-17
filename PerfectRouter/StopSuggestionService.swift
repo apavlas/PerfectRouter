@@ -479,6 +479,64 @@ struct StopSuggestionService {
             .map { $0.stop }
     }
 
+    /// Lodging around one coordinate (the evening's clock point), not a
+    /// sweep of the whole route. Nil when the lookup was cancelled or
+    /// MapKit returned an error — that is not an empty road. An empty array
+    /// is a finished search with no places inside `radiusMeters`.
+    ///
+    /// A result with no name is dropped. A place Apple tagged as something
+    /// other than a hotel is dropped. Phone, URL, and description stay on
+    /// the map item; nothing is filled in here.
+    func findLodging(
+        near coordinate: CLLocationCoordinate2D,
+        radiusMeters: CLLocationDistance,
+        alongPolylines legPolylines: [[CLLocationCoordinate2D]]
+    ) async -> [SuggestedStop]? {
+        guard coordinate.isValidLocation, radiusMeters > 0 else { return [] }
+        if Task.isCancelled { return nil }
+        let paced = await MapSearchGate.shared.prepare()
+        if !paced || Task.isCancelled { return nil }
+
+        let request = MKLocalSearch.Request()
+        request.naturalLanguageQuery = StopCategory.lodging.searchQuery
+        request.pointOfInterestFilter = MKPointOfInterestFilter(including: [.hotel])
+        request.resultTypes = .pointOfInterest
+        request.region = MKCoordinateRegion(
+            center: coordinate,
+            latitudinalMeters: radiusMeters * 2,
+            longitudinalMeters: radiusMeters * 2
+        )
+
+        let response: MKLocalSearch.Response
+        do {
+            response = try await MKLocalSearch(request: request).start()
+        } catch is CancellationError {
+            return nil
+        } catch {
+            return nil
+        }
+        if Task.isCancelled { return nil }
+
+        return response.mapItems.compactMap { item -> SuggestedStop? in
+            guard let name = item.name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else {
+                return nil
+            }
+            if let category = item.pointOfInterestCategory, category != .hotel {
+                return nil
+            }
+            let coord = item.placemark.coordinate
+            guard coord.isValidLocation else { return nil }
+            let detour = RouteGeometry.distanceFromRoute(of: coord, alongPolylines: legPolylines)
+            guard detour <= radiusMeters else { return nil }
+            return SuggestedStop(
+                mapItem: item,
+                category: .lodging,
+                distanceAlongRoute: RouteGeometry.distanceAlongRoute(of: coord, alongPolylines: legPolylines),
+                detourMeters: detour
+            )
+        }
+    }
+
     // MARK: - Polyline sampling
 
     private struct RouteSample {

@@ -14,6 +14,9 @@ enum AccessibilityID {
     static let tankRangeSlider = "tankRangeSlider"
     static let leaveLaterToggle = "leaveLaterToggle"
     static let noGasStations = "noGasStations"
+    static let noLodging = "noLodging"
+    static let hotelTarget = "hotelTarget"
+    static let applyHotels = "applyHotels"
     static let navigate = "navigate"
     static let rideHighlights = "rideHighlights"
 
@@ -25,6 +28,11 @@ enum AccessibilityID {
     /// Fuel-plan row. The suffix flips when the rider checks the stop.
     static func fuelStop(_ name: String, checked: Bool) -> String {
         "fuelStop.\(name).\(checked ? "checked" : "unchecked")"
+    }
+
+    /// Hotel row. The suffix flips when the rider checks the stop.
+    static func hotelStop(_ name: String, checked: Bool) -> String {
+        "hotelStop.\(name).\(checked ? "checked" : "unchecked")"
     }
 
     /// The highlight row, excluding the Add button. Tapping it opens the

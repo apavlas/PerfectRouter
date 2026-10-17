@@ -23,6 +23,8 @@ struct GasStationsSectionGate: View {
 struct GasStationsSection: View {
     let viewModel: RoutePlannerViewModel
 
+    @Environment(\.planningUsesSidebar) private var planningUsesSidebar
+
     /// False when the section would have no rows. Callers omit the view
     /// entirely; an empty section aborts iPad focus updates.
     static func hasContent(_ viewModel: RoutePlannerViewModel) -> Bool {
@@ -137,6 +139,7 @@ struct GasStationsSection: View {
         )
         let button = Button {
             guard !onRoute else { return }
+            focusFromSidebar(stop)
             viewModel.toggleBufferedGasStop(stop)
         } label: {
             HStack(alignment: .top, spacing: 8) {
@@ -174,12 +177,23 @@ struct GasStationsSection: View {
         .disabled(onRoute)
 
         if let accessibility {
-            button.fuelRowAccessibility(accessibility)
+            listedStop(button.fuelRowAccessibility(accessibility), stop: stop)
         } else if let pastFullTank {
-            button.accessibilityLabel("\(title), \(caption), \(pastFullTank)")
+            listedStop(button.accessibilityLabel("\(title), \(caption), \(pastFullTank)"), stop: stop)
         } else {
-            button
+            listedStop(button, stop: stop)
         }
+    }
+
+    /// Centers the map when this list is the sidebar. The gas disclosure can
+    /// repeat a fuel-plan row, so this copy is not a scroll target.
+    private func listedStop<V: View>(_ row: V, stop: SuggestedStop) -> some View {
+        row.sidebarStopHighlight(selected: viewModel.highlightedStopID == stop.id)
+    }
+
+    private func focusFromSidebar(_ stop: SuggestedStop) {
+        guard planningUsesSidebar else { return }
+        viewModel.focusListedStop(id: stop.id, coordinate: stop.coordinate)
     }
 
     /// The note is folded into the accessibility value before the row is
@@ -197,6 +211,24 @@ struct GasStationsSection: View {
     }
 }
 
+/// The representation is the element XCUITest queries. Combining the name
+/// and the riding-time caption left the identifier on a child the query
+/// does not return. Applied to the outermost row view in either layout.
+private struct WaypointAccessibility: ViewModifier {
+    var label: String
+    var name: String
+
+    func body(content: Content) -> some View {
+        content
+            .accessibilityLabel(label)
+            .accessibilityIdentifier(AccessibilityID.waypoint(name))
+            .accessibilityRepresentation {
+                Text(label)
+                    .accessibilityIdentifier(AccessibilityID.waypoint(name))
+            }
+    }
+}
+
 /// The ordered ride: start, stops, and destination. Supports swipe-to-delete
 /// and drag-to-reorder, plus a fallback for setting a start when there's no
 /// location fix.
@@ -205,6 +237,8 @@ struct WaypointsSection: View {
     /// Drops a start point at the center of the visible map, used when
     /// there's no location fix to route from.
     let onUseMapCenterAsStart: () -> Void
+
+    @Environment(\.planningUsesSidebar) private var planningUsesSidebar
 
     var body: some View {
         Section {
@@ -233,16 +267,7 @@ struct WaypointsSection: View {
             if !viewModel.waypoints.isEmpty {
                 ForEach(Array(viewModel.waypoints.enumerated()), id: \.element.id) { index, waypoint in
                     let label = waypointAccessibilityLabel(index: index, waypoint: waypoint)
-                    waypointRow(index: index, waypoint: waypoint)
-                        // The representation is the element XCUITest queries.
-                        // Combining the name and the riding-time caption left
-                        // the identifier on a child the query does not return.
-                        .accessibilityLabel(label)
-                        .accessibilityIdentifier(AccessibilityID.waypoint(waypoint.name))
-                        .accessibilityRepresentation {
-                            Text(label)
-                                .accessibilityIdentifier(AccessibilityID.waypoint(waypoint.name))
-                        }
+                    waypointCell(index: index, waypoint: waypoint, label: label)
                 }
                 .onDelete { viewModel.removeWaypoint(at: $0) }
                 .onMove { viewModel.moveWaypoint(from: $0, to: $1) }
@@ -255,6 +280,26 @@ struct WaypointsSection: View {
         }
     }
 
+    /// Phone and portrait keep a plain row. The sidebar wraps the same row in
+    /// a button so a tap centers the map. Both branches carry the identifier
+    /// XCUITest queries; it is not on an inner text, which the query misses.
+    @ViewBuilder
+    private func waypointCell(index: Int, waypoint: Waypoint, label: String) -> some View {
+        if planningUsesSidebar {
+            Button {
+                viewModel.focusListedStop(id: waypoint.id, coordinate: waypoint.coordinate)
+            } label: {
+                waypointRow(index: index, waypoint: waypoint)
+            }
+            .buttonStyle(.plain)
+            .sidebarStopHighlight(selected: viewModel.highlightedStopID == waypoint.id)
+            .modifier(WaypointAccessibility(label: label, name: waypoint.name))
+        } else {
+            waypointRow(index: index, waypoint: waypoint)
+                .modifier(WaypointAccessibility(label: label, name: waypoint.name))
+        }
+    }
+
     /// Pin plus name. The caption is `waypointRidingCaption` (not the fuel
     /// sheet's `fuelStopRidingCaption`). The first stop has no since-last
     /// clause; later stops keep it. The caption is a second text only inside
@@ -263,9 +308,13 @@ struct WaypointsSection: View {
     @ViewBuilder
     private func waypointRow(index: Int, waypoint: Waypoint) -> some View {
         let pastRange = viewModel.waypointIsBeyondRemainingRange(at: index)
+        let dayTitle = viewModel.rideDayTitle(at: index)
         Label {
             if let caption = viewModel.waypointRidingCaption(at: index) {
                 VStack(alignment: .leading, spacing: 2) {
+                    if let dayTitle {
+                        dayHeading(dayTitle)
+                    }
                     waypointName(waypoint)
                     Text(caption)
                         .font(.caption)
@@ -276,19 +325,30 @@ struct WaypointsSection: View {
                         PastYourRangeLabel()
                     }
                 }
-            } else if pastRange {
+            } else if pastRange || dayTitle != nil {
                 VStack(alignment: .leading, spacing: 2) {
+                    if let dayTitle {
+                        dayHeading(dayTitle)
+                    }
                     waypointName(waypoint)
-                    PastYourRangeLabel()
+                    if pastRange {
+                        PastYourRangeLabel()
+                    }
                 }
             } else {
                 waypointName(waypoint)
             }
         } icon: {
-            Image(systemName: "mappin.circle.fill")
+            Image(systemName: waypoint.isOvernight ? "bed.double.fill" : "mappin.circle.fill")
                 .accessibilityHidden(true)
         }
         .id(waypoint.id)
+    }
+
+    private func dayHeading(_ title: String) -> some View {
+        Text(title)
+            .font(.subheadline.weight(.semibold))
+            .accessibilityIdentifier("rideDay.\(title)")
     }
 
     private func waypointName(_ waypoint: Waypoint) -> some View {
@@ -299,7 +359,11 @@ struct WaypointsSection: View {
     }
 
     private func waypointAccessibilityLabel(index: Int, waypoint: Waypoint) -> String {
-        var parts = [waypoint.name]
+        var parts: [String] = []
+        if let day = viewModel.rideDayTitle(at: index) {
+            parts.append(day)
+        }
+        parts.append(waypoint.name)
         if let caption = viewModel.waypointRidingCaption(at: index) {
             parts.append(caption)
         }
@@ -332,6 +396,8 @@ struct SuggestionsSection: View {
     /// Same binding as ride highlights. The sheet is presented by the
     /// planning sheet, not by this list section.
     @Binding var openDescription: OpenPlaceDescription?
+
+    @Environment(\.planningUsesSidebar) private var planningUsesSidebar
 
     var body: some View {
         Section("Suggested \(viewModel.selectedCategory.rawValue) Stops") {
@@ -467,14 +533,31 @@ struct SuggestionsSection: View {
             showsPastRange: pastRange,
             systemImage: stop.category.systemImage,
             titleIdentifier: accessibility?.identifier ?? "",
-            onOpen: { present(stop, title: title) },
-            onAdd: { viewModel.addStop(from: stop) }
+            onOpen: {
+                focusFromSidebar(stop)
+                present(stop, title: title)
+            },
+            onAdd: {
+                focusFromSidebar(stop)
+                viewModel.addStop(from: stop)
+            }
         )
         if let accessibility {
-            card.fuelRowAccessibility(accessibility)
+            listedStop(card.fuelRowAccessibility(accessibility), stop: stop)
         } else {
-            card
+            listedStop(card, stop: stop)
         }
+    }
+
+    private func listedStop<V: View>(_ row: V, stop: SuggestedStop) -> some View {
+        row
+            .sidebarStopHighlight(selected: viewModel.highlightedStopID == stop.id)
+            .id(stop.id)
+    }
+
+    private func focusFromSidebar(_ stop: SuggestedStop) {
+        guard planningUsesSidebar else { return }
+        viewModel.focusListedStop(id: stop.id, coordinate: stop.coordinate)
     }
 
     private func present(_ stop: SuggestedStop, title: String) {
@@ -491,6 +574,7 @@ struct SuggestionsSection: View {
         accessibility: RecommendedFuelAccessibility?
     ) -> some View {
         let button = Button {
+            focusFromSidebar(stop)
             if stop.category == .gas {
                 viewModel.toggleBufferedGasStop(stop)
             } else {
@@ -518,9 +602,9 @@ struct SuggestionsSection: View {
         .buttonStyle(.plain)
 
         if let accessibility {
-            button.fuelRowAccessibility(accessibility)
+            listedStop(button.fuelRowAccessibility(accessibility), stop: stop)
         } else {
-            button
+            listedStop(button, stop: stop)
         }
     }
 }

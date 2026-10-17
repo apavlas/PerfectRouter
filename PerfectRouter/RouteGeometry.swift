@@ -120,6 +120,40 @@ enum RouteGeometry {
         return total
     }
 
+    /// The coordinate `distance` meters along `polylines`, using the same
+    /// segment lengths as `length(of:)`. The hotel search centers on this
+    /// point. Nil only when the route has no coordinate at all.
+    static func coordinate(
+        atDistance distance: CLLocationDistance,
+        alongPolylines polylines: [[CLLocationCoordinate2D]]
+    ) -> CLLocationCoordinate2D? {
+        guard distance.isFinite else { return nil }
+        var remaining = max(0, distance)
+        var fallback: CLLocationCoordinate2D?
+        for line in polylines {
+            guard let first = line.first else { continue }
+            fallback = first
+            guard line.count > 1 else { continue }
+            for index in 1..<line.count {
+                let start = line[index - 1]
+                let end = line[index]
+                fallback = end
+                let span = CLLocation(latitude: start.latitude, longitude: start.longitude)
+                    .distance(from: CLLocation(latitude: end.latitude, longitude: end.longitude))
+                if span <= 0 { continue }
+                if remaining <= span {
+                    let fraction = remaining / span
+                    return CLLocationCoordinate2D(
+                        latitude: start.latitude + (end.latitude - start.latitude) * fraction,
+                        longitude: start.longitude + (end.longitude - start.longitude) * fraction
+                    )
+                }
+                remaining -= span
+            }
+        }
+        return fallback
+    }
+
     // MARK: - Nearest-segment scan (shared core)
 
     /// Everything about the route point nearest to a coordinate. Produced by

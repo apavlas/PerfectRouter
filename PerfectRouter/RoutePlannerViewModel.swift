@@ -121,6 +121,7 @@ private struct FuelSelectionWaypoint: Sendable {
     var latitude: Double
     var longitude: Double
     var isGasFill: Bool
+    var isOvernight: Bool
     var key: String
 }
 
@@ -337,9 +338,18 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         didSet { rebuildDistanceCache() }
     }
 
-    /// Planning list scrolls to this stop after the rider adds one.
-    /// Nil until a stop is inserted.
+    /// Planning list scrolls to this stop after the rider adds one, and when
+    /// a sidebar pin or row selects it. Nil until a stop is inserted or chosen.
     var scrollToWaypointID: UUID?
+
+    /// Row the sidebar paints as selected. Nil on iPhone and iPad portrait,
+    /// where taps do not call the focus helpers below.
+    var highlightedStopID: UUID?
+
+    /// Bumped when a sidebar row should center the map. `mapCenterCoordinate`
+    /// is the target. The phone and portrait layouts never read the token.
+    private(set) var mapCenterToken = 0
+    private(set) var mapCenterCoordinate: CLLocationCoordinate2D?
 
     /// Intermediate stops only. Start and destination are not stops
     /// (Apple/Google Maps). A ride of start + 5 mids + end is 5 stops.
@@ -354,6 +364,21 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         case 1: return "Route (1 stop)"
         default: return "Route (\(intermediateStopCount) stops)"
         }
+    }
+
+    /// Pin tap in the sidebar layout. Scrolls the row into view and paints it.
+    /// Does not move the camera — the pin is already on screen.
+    func highlightListedStop(id: UUID) {
+        highlightedStopID = id
+        scrollToWaypointID = id
+    }
+
+    /// Sidebar row tap. Highlights the row and asks the map to center on it.
+    func focusListedStop(id: UUID, coordinate: CLLocationCoordinate2D) {
+        highlightListedStop(id: id)
+        guard coordinate.isValidLocation else { return }
+        mapCenterCoordinate = coordinate
+        mapCenterToken += 1
     }
 
     /// The rider's most recent known coordinate, used to auto-seed the ride
@@ -487,6 +512,11 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     private var suggestionTask: Task<Void, Never>?
     private var suggestionGeneration = 0
 
+    /// Lodging search for the evening window. Cancelled with the route so a
+    /// replaced line cannot publish hotels for the line it replaced.
+    private var hotelTask: Task<Void, Never>?
+    private var hotelGeneration = 0
+
     /// Bumped whenever a route plan is replaced. A superseded calculation
     /// must not clear `isCalculating` or publish legs. Readable so a test
     /// can prove Apply schedules one replan.
@@ -514,6 +544,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         gasTask?.cancel()
         routeTask?.cancel()
         suggestionTask?.cancel()
+        hotelTask?.cancel()
+        hotelGeneration += 1
+        isSearchingHotels = false
         isCalculating = true
         // The cancelled search's defer will not clear this flag (its
         // generation no longer matches), so clear it here. Geometry is
@@ -533,6 +566,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             twistyLimitationNote = nil
             fuelFoodStops = []
             pairedFuelStopIDs = []
+            hotelEvenings = []
+            hotelLoadFailed = false
             mutateFuelList {
                 fuelStops = []
                 fuelPlanEntries = []
@@ -572,6 +607,181 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     func retryGasSearch() {
         guard !legs.isEmpty, !isCalculating else { return }
         scheduleGasSearch()
+    }
+
+    /// One lodging lookup for the line already drawn. A newer route or a
+    /// newer target time bumps `hotelGeneration` and this run publishes nothing.
+    private func scheduleHotelSearch() {
+        hotelGeneration += 1
+        let generation = hotelGeneration
+        hotelTask?.cancel()
+        hotelTask = Task { await refreshHotels(generation: generation) }
+    }
+
+    /// Suggests hotels at each evening's clock point. Five miles off the
+    /// route first; one widen to fifteen when that window is empty. UI tests
+    /// publish nothing so the stub ride does not call MapKit.
+    private func refreshHotels(generation: Int) async {
+        guard generation == hotelGeneration, !Task.isCancelled else { return }
+        if UITestStubLaunch.isEnabled {
+            hotelEvenings = []
+            hotelLoadFailed = false
+            isSearchingHotels = false
+            return
+        }
+        let driveLegs = cachedDriveLegs
+        let polylines = plannedCorridor
+        let target = hotelTargetMinutes
+        let departureMinutes = HotelAlongRoute.minutes(from: effectiveDeparture)
+        let evenings = HotelAlongRoute.evenings(
+            legs: driveLegs,
+            overnightDistances: overnightDistancesAlongRoute(),
+            departureMinutes: departureMinutes,
+            targetMinutes: target
+        )
+        guard generation == hotelGeneration, !Task.isCancelled else { return }
+        guard !evenings.isEmpty, !polylines.isEmpty else {
+            hotelEvenings = []
+            hotelLoadFailed = false
+            isSearchingHotels = false
+            return
+        }
+
+        isSearchingHotels = true
+        hotelLoadFailed = false
+        defer {
+            if generation == hotelGeneration {
+                isSearchingHotels = false
+            }
+        }
+
+        var published: [HotelEveningPlan] = []
+        var anyFailure = false
+        for evening in evenings {
+            guard generation == hotelGeneration, !Task.isCancelled else { return }
+            guard let center = RouteGeometry.coordinate(
+                atDistance: evening.targetDistance,
+                alongPolylines: polylines
+            ) else { continue }
+
+            let nearStops = await suggestionService.findLodging(
+                near: center,
+                radiusMeters: HotelAlongRoute.nearRadiusMeters,
+                alongPolylines: polylines
+            )
+            guard generation == hotelGeneration, !Task.isCancelled else { return }
+            let nearCandidates = hotelCandidates(from: nearStops ?? [], evening: evening, legs: driveLegs)
+            var selection = HotelAlongRoute.select(near: nearCandidates, far: [], targetMinutes: target)
+            var pool = nearStops ?? []
+            var farCandidates: [HotelAlongRoute.Candidate] = []
+            var lookedUp = nearStops != nil
+            if selection.keys.isEmpty {
+                let farStops = await suggestionService.findLodging(
+                    near: center,
+                    radiusMeters: HotelAlongRoute.farRadiusMeters,
+                    alongPolylines: polylines
+                )
+                guard generation == hotelGeneration, !Task.isCancelled else { return }
+                lookedUp = lookedUp || farStops != nil
+                farCandidates = hotelCandidates(from: farStops ?? [], evening: evening, legs: driveLegs)
+                selection = HotelAlongRoute.select(near: [], far: farCandidates, targetMinutes: target)
+                pool = farStops ?? []
+            }
+            if !lookedUp {
+                anyFailure = true
+                continue
+            }
+            var byKey: [String: SuggestedStop] = [:]
+            for stop in pool {
+                let key = HotelAlongRoute.placeKey(
+                    name: stop.name,
+                    latitude: stop.latitude,
+                    longitude: stop.longitude
+                )
+                if byKey[key] == nil {
+                    byKey[key] = stop
+                }
+            }
+            let chosen = describedLodging(selection.keys.compactMap { byKey[$0] })
+            let ranked = selection.widened ? farCandidates : nearCandidates
+            var captions: [UUID: String] = [:]
+            for stop in chosen {
+                let key = HotelAlongRoute.placeKey(
+                    name: stop.name,
+                    latitude: stop.latitude,
+                    longitude: stop.longitude
+                )
+                guard let candidate = ranked.first(where: { $0.key == key }) else { continue }
+                captions[stop.id] = HotelAlongRoute.arrivalCaption(
+                    arrivalMinutes: candidate.arrivalMinutes,
+                    detourMeters: stop.detourMeters,
+                    fartherOff: selection.widened && stop.detourMeters > HotelAlongRoute.nearRadiusMeters
+                )
+            }
+            published.append(HotelEveningPlan(
+                dayNumber: evening.dayNumber,
+                options: chosen,
+                captions: captions,
+                widened: selection.widened,
+                emptyMessage: chosen.isEmpty ? selection.emptyMessage : nil
+            ))
+        }
+
+        guard generation == hotelGeneration, !Task.isCancelled else { return }
+        hotelEvenings = published
+        hotelLoadFailed = published.isEmpty && anyFailure
+    }
+
+    /// Arrival minutes are riding time from that morning's clock, not a
+    /// clock invented for the place.
+    private func hotelCandidates(
+        from stops: [SuggestedStop],
+        evening: HotelAlongRoute.Evening,
+        legs: [FuelStopRidingTime.Leg]
+    ) -> [HotelAlongRoute.Candidate] {
+        let startTime = FuelStopRidingTime.ridingTime(atDistance: evening.dayStartDistance, legs: legs)
+        return stops.compactMap { stop in
+            guard stop.distanceAlongRoute.isFinite, stop.detourMeters.isFinite else { return nil }
+            let riding = FuelStopRidingTime.ridingTime(atDistance: stop.distanceAlongRoute, legs: legs) - startTime
+            guard riding.isFinite, riding >= 0 else { return nil }
+            let arrival = evening.departureMinutes + Int((riding / 60).rounded())
+            return HotelAlongRoute.Candidate(
+                key: HotelAlongRoute.placeKey(
+                    name: stop.name,
+                    latitude: stop.latitude,
+                    longitude: stop.longitude
+                ),
+                name: stop.name,
+                arrivalMinutes: arrival,
+                detourMeters: stop.detourMeters,
+                distanceAlongRoute: stop.distanceAlongRoute
+            )
+        }
+    }
+
+    /// Apple Maps prose only. A hotel with no published sentence stays blank.
+    private func describedLodging(_ stops: [SuggestedStop]) -> [SuggestedStop] {
+        stops.map { stop in
+            guard stop.placeDescription == nil else { return stop }
+            guard let text = PlaceDescriptionReader.appleMapsText(from: stop.mapItem) else { return stop }
+            return stop.withPlaceDescription(text)
+        }
+    }
+
+    /// Polyline length from the origin to each overnight stop. Matches the
+    /// riding-time legs, so the next morning starts where the caption does.
+    private func overnightDistancesAlongRoute() -> [CLLocationDistance] {
+        waypoints.enumerated().compactMap { index, waypoint in
+            guard waypoint.isOvernight else { return nil }
+            if cachedDriveLegs.count + 1 == waypoints.count {
+                return cachedDriveLegs.prefix(index).reduce(0) { $0 + max(0, $1.distanceMeters) }
+            }
+            let cache = distanceAlongRouteCache
+            if cache.generation == routeGeometryGeneration, let distance = cache.distances[waypoint.id] {
+                return distance
+            }
+            return nil
+        }
     }
 
     /// Fuel-range drag ended. One cancel, one restart: the route if it is
@@ -816,6 +1026,29 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         didSet { rebuildDistanceCache() }
     }
 
+    /// Lodging for each evening that reaches the hotel window. Empty when
+    /// the ride ends before that clock — that is not the "none found" copy.
+    var hotelEvenings: [HotelEveningPlan] = []
+
+    /// Hotels the rider checked. Apply inserts the set in one replan.
+    private(set) var bufferedHotelStops: [SuggestedStop] = []
+
+    /// True while the evening lookup is in flight.
+    private(set) var isSearchingHotels = false
+
+    /// The lookup failed. Not the same as an empty window.
+    private(set) var hotelLoadFailed = false
+
+    /// Local minutes from midnight for the evening target. 6:00 PM until
+    /// the rider changes it. The window stays an hour either side.
+    var hotelTargetMinutes = HotelAlongRoute.defaultTargetMinutes
+
+    /// The hotels section is on the sheet when there is something to show:
+    /// a search, a result, a checked hotel, or a failed lookup.
+    var showsHotelSection: Bool {
+        isSearchingHotels || hotelLoadFailed || !hotelEvenings.isEmpty || !bufferedHotelStops.isEmpty
+    }
+
     /// Recommended stops, inline gap warnings, and past-range stations, in
     /// ride order. The sheet shows gap and past-range rows only when the
     /// coverage that produced them is trusted.
@@ -894,7 +1127,11 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         return FuelStopRidingTime.caption(
             distanceMeters: distance,
             anchors: fuelRidingAnchorDistances(including: distance),
-            legs: driveLegTimings()
+            legs: driveLegTimings(),
+            dayStartMeters: HotelAlongRoute.dayStartDistance(
+                for: distance,
+                overnightDistances: overnightDistancesAlongRoute()
+            )
         )
     }
 
@@ -922,7 +1159,26 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// match the list.
     func waypointRidingCaption(at index: Int) -> String? {
         guard legs.count + 1 == waypoints.count else { return nil }
-        return FuelStopRidingTime.waypointCaption(index: index, legs: driveLegTimings())
+        return FuelStopRidingTime.waypointCaption(
+            index: index,
+            legs: driveLegTimings(),
+            dayStartIndex: HotelAlongRoute.dayStartIndex(
+                for: index,
+                overnightIndices: overnightWaypointIndices
+            )
+        )
+    }
+
+    /// "Day 1" / "Day 2" on the route list. Nil on a one-day ride and on
+    /// rows that stay in the same day.
+    func rideDayTitle(at index: Int) -> String? {
+        HotelAlongRoute.dayTitle(at: index, overnightIndices: overnightWaypointIndices)
+    }
+
+    private var overnightWaypointIndices: [Int] {
+        waypoints.enumerated().compactMap { index, waypoint in
+            waypoint.isOvernight ? index : nil
+        }
     }
 
     /// Polyline length and `expectedTravelTime` for each current leg.
@@ -1194,10 +1450,12 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         case .gas:
             scheduleGasSearch()
             scheduleWeatherRefresh()
+            scheduleHotelSearch()
         case .local:
             guard !legs.isEmpty else { return }
             replanFuelStops()
             scheduleWeatherRefresh()
+            scheduleHotelSearch()
         }
     }
 
@@ -1305,6 +1563,12 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         // insert immediately.
         if suggestion.category == .gas {
             toggleBufferedGasStop(suggestion)
+            return
+        }
+        // Lodging is buffered the same way. Checking a hotel must not
+        // re-route; Apply inserts the overnight stop once.
+        if suggestion.category == .lodging {
+            toggleBufferedHotelStop(suggestion)
             return
         }
         insertStop(suggestion)
@@ -1471,6 +1735,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                     latitude: waypoint.coordinate.latitude,
                     longitude: waypoint.coordinate.longitude,
                     isGasFill: waypoint.isGasFill,
+                    isOvernight: waypoint.isOvernight,
                     key: Self.coordinateKey(waypoint.coordinate)
                 )
             },
@@ -1720,6 +1985,75 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         scheduleRecalculation()
     }
 
+    /// Checks or unchecks a hotel. Does not change waypoints or legs.
+    func toggleBufferedHotelStop(_ stop: SuggestedStop) {
+        guard stop.coordinate.isValidLocation, stop.category == .lodging else { return }
+        guard !isStopOnRoute(stop) else {
+            bufferedHotelStops.removeAll { Self.sameCoordinate($0.coordinate, stop.coordinate) }
+            return
+        }
+        if let index = bufferedHotelStops.firstIndex(where: { Self.sameCoordinate($0.coordinate, stop.coordinate) }) {
+            bufferedHotelStops.remove(at: index)
+        } else {
+            bufferedHotelStops.append(stop)
+        }
+    }
+
+    func isHotelBuffered(_ stop: SuggestedStop) -> Bool {
+        bufferedHotelStops.contains { Self.sameCoordinate($0.coordinate, stop.coordinate) }
+    }
+
+    func clearBufferedHotelStops() {
+        bufferedHotelStops = []
+    }
+
+    /// Inserts every checked hotel in ride order, then routes once.
+    /// Each inserted stop is an overnight: the next morning's riding clock
+    /// and the next tank both start there.
+    func applyBufferedHotelStops() {
+        var seen = Set<String>()
+        let stops = bufferedHotelStops
+            .sorted { $0.distanceAlongRoute < $1.distanceAlongRoute }
+            .filter { stop in
+                guard stop.category == .lodging, !isStopOnRoute(stop) else { return false }
+                return seen.insert(Self.coordinateKey(stop.coordinate)).inserted
+            }
+        bufferedHotelStops = []
+        guard !stops.isEmpty else { return }
+        let existingIDs = Set(waypoints.map(\.id))
+        let polylines = plannedCorridor
+        if waypoints.count >= 2, !polylines.isEmpty {
+            waypoints = Self.waypoints(
+                waypoints,
+                inserting: stops,
+                along: polylines,
+                totalDistance: totalDistanceMeters
+            )
+        } else {
+            for stop in stops {
+                insertStop(stop)
+            }
+        }
+        if let added = waypoints.first(where: { !existingIDs.contains($0.id) }) {
+            scrollToWaypointID = added.id
+        }
+        scheduleRecalculation()
+    }
+
+    /// The rider's evening target. Does not redraw the route; the 6 PM
+    /// point moves along the line already drawn.
+    func setHotelTarget(minutes: Int) {
+        let clamped = min(max(minutes, 0), 24 * 60 - 1)
+        guard clamped != hotelTargetMinutes else { return }
+        hotelTargetMinutes = clamped
+        scheduleHotelSearch()
+    }
+
+    func retryHotelSearch() {
+        guard !legs.isEmpty, !isCalculating else { return }
+        scheduleHotelSearch()
+    }
+
     /// Places `stops` among existing waypoints by distance along `polylines`.
     /// The destination stays last.
     nonisolated static func waypoints(
@@ -1787,8 +2121,15 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         Waypoint(
             name: suggestion.name,
             coordinate: suggestion.coordinate,
-            isGasFill: suggestion.category == .gas
+            isGasFill: suggestion.category == .gas,
+            isOvernight: suggestion.category == .lodging
         )
+    }
+
+    /// A gas stop or an overnight hotel. The hotel is not a pump; the tank
+    /// is full because the next morning starts there.
+    nonisolated static func isTankFill(isGasFill: Bool, isOvernight: Bool) -> Bool {
+        isGasFill || isOvernight
     }
 
     nonisolated static func samePlace(_ lhs: SuggestedStop, _ rhs: SuggestedStop) -> Bool {
@@ -2000,6 +2341,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         applyFuelCandidatePool()
         await refreshHighlights()
         guard gasGen == gasGeneration, !Task.isCancelled else { return }
+        scheduleHotelSearch()
         let weatherGen = beginWeatherRefresh()
         await refreshWeather(generation: weatherGen)
     }
@@ -2470,6 +2812,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         pairedFuelStopIDs = []
         highlightGeneration += 1
         rideHighlights = []
+        hotelEvenings = []
+        hotelLoadFailed = false
+        isSearchingHotels = false
         isShowingAllGasOnRoute = false
         // A cleared route did not finish a gas search. Leaving `.empty` would
         // say "no gas stations" for a route that never got one, and a leftover
@@ -2957,6 +3302,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         ))
         let visibleIDs = clearFuel ? [] : snapshot.visibleEntryIDs
         let labelIDs = clearFuel ? [] : snapshot.labelEntryIDs
+        let overnightDistances = input.waypoints.compactMap { waypoint -> CLLocationDistance? in
+            guard waypoint.isOvernight else { return nil }
+            return distances[waypoint.id] ?? 0
+        }
         let labels = Self.fuelLabels(
             for: labelIDs,
             rows: rows,
@@ -2965,7 +3314,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             anchors: anchors,
             legs: input.driveLegs,
             checkedIDs: Set(kept),
-            usesMetric: input.usesMetric
+            usesMetric: input.usesMetric,
+            overnightDistances: overnightDistances
         )
         return FuelSelectionOutput(
             didReplan: input.replan,
@@ -2997,7 +3347,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         anchors: [CLLocationDistance],
         legs: [FuelStopRidingTime.Leg],
         checkedIDs: Set<UUID>,
-        usesMetric: Bool
+        usesMetric: Bool,
+        overnightDistances: [CLLocationDistance]
     ) -> FuelRowLabelSet {
         var byEntry: [String: FuelPlanRow] = [:]
         for row in rows {
@@ -3024,7 +3375,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             anchors: anchors,
             legs: legs,
             checkedIDs: checkedIDs,
-            usesMetric: usesMetric
+            usesMetric: usesMetric,
+            overnightDistances: overnightDistances
         )
     }
 
@@ -3050,7 +3402,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     ) -> [CLLocationDistance] {
         guard input.countsGasFills else { return [] }
         return input.waypoints.compactMap { waypoint in
-            guard waypoint.isGasFill else { return nil }
+            guard Self.isTankFill(isGasFill: waypoint.isGasFill, isOvernight: waypoint.isOvernight) else {
+                return nil
+            }
             return distances[waypoint.id] ?? 0
         }
     }
@@ -3313,7 +3667,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             anchors: anchors,
             legs: cachedDriveLegs,
             checkedIDs: checked,
-            usesMetric: AppSettings.usesMetricUnits
+            usesMetric: AppSettings.usesMetricUnits,
+            overnightDistances: overnightDistancesAlongRoute()
         )
     }
 
@@ -3326,7 +3681,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         anchors: [CLLocationDistance],
         legs: [FuelStopRidingTime.Leg],
         checkedIDs: Set<UUID>,
-        usesMetric: Bool
+        usesMetric: Bool,
+        overnightDistances: [CLLocationDistance] = []
     ) -> FuelRowLabelSet {
         var set = FuelRowLabelSet()
         func store(_ label: FuelRowLabel, id: UUID, key: String) {
@@ -3341,6 +3697,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 distanceMeters: stop.distance,
                 anchors: anchors,
                 legs: legs,
+                dayStartMeters: HotelAlongRoute.dayStartDistance(
+                    for: stop.distance,
+                    overnightDistances: overnightDistances
+                ),
                 usesMetric: usesMetric
             )
             let checked = checkedIDs.contains(stop.id)
@@ -3361,6 +3721,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 distanceMeters: stop.distance,
                 anchors: anchors,
                 legs: legs,
+                dayStartMeters: HotelAlongRoute.dayStartDistance(
+                    for: stop.distance,
+                    overnightDistances: overnightDistances
+                ),
                 usesMetric: usesMetric
             )
             let checked = checkedIDs.contains(stop.id)
@@ -3806,20 +4170,25 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         return ids
     }
 
-    /// Distances along the current route of rider-added gas waypoints, each
-    /// treated as a fill so later recommendations start from that point.
-    /// The values were measured when the waypoints or the route changed.
+    /// Distances along the current route of rider-added gas waypoints and
+    /// overnight hotels. Each is a full tank, so later recommendations start
+    /// from that point. The values were measured when the waypoints or the
+    /// route changed.
     private var gasFillDistances: [CLLocationDistance] {
         guard !legs.isEmpty || plannedCorridor.contains(where: { $0.count > 1 }) else { return [] }
         let cache = distanceAlongRouteCache
         guard cache.generation == routeGeometryGeneration else {
             return waypoints.compactMap { waypoint in
-                guard waypoint.isGasFill else { return nil }
+                guard Self.isTankFill(isGasFill: waypoint.isGasFill, isOvernight: waypoint.isOvernight) else {
+                    return nil
+                }
                 return 0
             }
         }
         return waypoints.compactMap { waypoint in
-            guard waypoint.isGasFill else { return nil }
+            guard Self.isTankFill(isGasFill: waypoint.isGasFill, isOvernight: waypoint.isOvernight) else {
+                return nil
+            }
             return cache.distances[waypoint.id] ?? 0
         }
     }

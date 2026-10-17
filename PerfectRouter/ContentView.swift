@@ -1,5 +1,6 @@
 import SwiftUI
 import MapKit
+import UIKit
 
 /// Nav-bar copy of the replan sentence. A large iPad sheet covers the map
 /// chip, and the in-list row is gone once that section scrolls away. The
@@ -32,7 +33,13 @@ struct ContentView: View {
     var planningSheetEnabled = true
 
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var viewModel = RoutePlannerViewModel()
+    /// Map selection for waypoint and stop pins. Only the sidebar map reads it.
+    @State private var selectedPinID: UUID?
+    /// Kept at `.all` so iPad landscape and Mac show the list and the map
+    /// together. Not written during focus changes.
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var cameraPosition: MapCameraPosition = .userLocation(
         fallback: .region(MKCoordinateRegion(
             center: CLLocationCoordinate2D(latitude: 33.4735, longitude: -82.0105), // Augusta, GA fallback
@@ -54,17 +61,83 @@ struct ContentView: View {
 
     var body: some View {
         GeometryReader { geo in
-            // MapReader exposes a proxy that converts a pressed screen point
-            // into a map coordinate, so a long press can drop a start point.
-            MapReader { proxy in
-                mapView
-                    .gesture(dropStartGesture(proxy: proxy))
+            // One branch per layout. It flips when the window crosses from
+            // portrait to landscape (or onto a Mac), not when a text field
+            // resigns — that swap is what left iPad's focus system with an
+            // empty container.
+            let sidebar = PlanningChrome.resolve(
+                container: geo.size,
+                horizontalSizeClass: horizontalSizeClass,
+                idiom: UIDevice.current.userInterfaceIdiom,
+                runsOnMac: PlanningChrome.runsOnMac
+            ) == .sidebar
+            Group {
+                if sidebar {
+                    NavigationSplitView(columnVisibility: $columnVisibility) {
+                        planningSheet
+                            .environment(\.planningUsesSidebar, true)
+                            .navigationSplitViewColumnWidth(min: 300, ideal: 380, max: 480)
+                            .accessibilityIdentifier("routeSidebar")
+                    } detail: {
+                        mapColumn(usesSidebar: true)
+                            // The detail column's own bar would sit on top of
+                            // the map. The route list keeps "Plan Ride".
+                            .toolbar(.hidden, for: .navigationBar)
+                    }
+                    .navigationSplitViewStyle(.balanced)
+                } else {
+                    mapColumn(usesSidebar: false)
+                        // Mirror the planning sheet as a bottom safe-area inset
+                        // so the map centers content — and frames routes — in
+                        // the area the sheet doesn't cover. Without this a
+                        // computed route can sit entirely behind the sheet and
+                        // look like it never appeared.
+                        .safeAreaPadding(.bottom, geo.size.height * sheetObscuredFraction)
+                        .sheet(isPresented: Binding(
+                            get: { showSheet && planningSheetEnabled },
+                            set: { showSheet = $0 }
+                        )) {
+                            planningSheet
+                                .environment(\.planningUsesSidebar, false)
+                                .presentationDetents(
+                                    // The first detent is what the system uses if it ignores the
+                                    // selection binding. UI tests need the large one so list rows
+                                    // are in the accessibility tree; riders still open at medium.
+                                    UITestStubLaunch.isEnabled
+                                        ? [.large, .medium, .fraction(0.15)]
+                                        : [.fraction(0.15), .medium, .large],
+                                    selection: $sheetDetent
+                                )
+                                // A downward drag at the top of the list otherwise shrinks the
+                                // sheet, which drops the fuel rows out of the accessibility tree.
+                                .presentationContentInteraction(UITestStubLaunch.isEnabled ? .scrolls : .automatic)
+                                .presentationBackgroundInteraction(.enabled(upThrough: .medium))
+                                .interactiveDismissDisabled()
+                        }
+                }
             }
-            // Mirror the planning sheet as a bottom safe-area inset so the
-            // map centers content — and frames routes — in the area the sheet
-            // doesn't cover. Without this a computed route can sit entirely
-            // behind the sheet and look like it never appeared.
-            .safeAreaPadding(.bottom, geo.size.height * sheetObscuredFraction)
+            .onChange(of: viewModel.mapCenterToken) { _, _ in
+                guard sidebar, let coordinate = viewModel.mapCenterCoordinate else { return }
+                withAnimation(.easeInOut(duration: 0.35)) {
+                    recenter(on: coordinate, spanDelta: 0.35)
+                }
+            }
+            .onChange(of: viewModel.highlightedStopID) { _, id in
+                guard sidebar, selectedPinID != id else { return }
+                selectedPinID = id
+            }
+            // GeometryReader does not always pass a bounded size through to
+            // NavigationSplitView. Pin the column to the window.
+            .frame(width: geo.size.width, height: geo.size.height)
+        }
+    }
+
+    /// MapReader exposes a proxy that converts a pressed screen point into a
+    /// map coordinate, so a long press can drop a start point.
+    private func mapColumn(usesSidebar: Bool) -> some View {
+        MapReader { proxy in
+            map(usesSidebar: usesSidebar)
+                .gesture(dropStartGesture(proxy: proxy))
         }
     }
 
@@ -74,114 +147,24 @@ struct ContentView: View {
         sheetDetent == .fraction(0.15) ? 0.15 : 0.5
     }
 
-    private var mapView: some View {
-        Map(position: $cameraPosition) {
-            UserAnnotation()
-
-            // Waypoint markers. An empty ForEach is omitted: during a replan
-            // it is a focus container with no children.
-            if !viewModel.waypoints.isEmpty {
-                ForEach(Array(viewModel.waypoints.enumerated()), id: \.element.id) { index, waypoint in
-                    Marker(waypoint.name, systemImage: markerIcon(for: index), coordinate: waypoint.coordinate)
-                        .tint(index == 0 ? .green : (index == viewModel.waypoints.count - 1 ? .red : .orange))
-                }
-            }
-
-            // Route polylines, one per leg
-            if !viewModel.legs.isEmpty {
-                ForEach(viewModel.legs, id: \.self) { leg in
-                    MapPolyline(leg.polyline)
-                        .stroke(
-                            viewModel.dimsRouteLine ? Color.blue.opacity(0.35) : Color.blue,
-                            lineWidth: 5
-                        )
-                }
-            }
-
-
-            // Non-recommended gas stations — only while the sheet's
-            // "All gas on route" list is open. Recommended pumps and the
-            // selected-category pins stay regardless. Hidden in Gas, where
-            // the suggestions layer already covers stations.
-            if viewModel.showsAllGasPins, !extraGasPins.isEmpty {
-                ForEach(extraGasPins) { stop in
-                    Annotation(stop.name, coordinate: stop.coordinate) {
-                        Button {
-                            viewModel.toggleBufferedGasStop(stop)
-                        } label: {
-                            Image(systemName: viewModel.isGasBuffered(stop) ? "checkmark" : "fuelpump.fill")
-                                .font(.caption)
-                                .padding(6)
-                                .background(viewModel.isGasBuffered(stop) ? Color.blue : Color.gray, in: Circle())
-                                .foregroundStyle(.white)
-                        }
-                    }
-                }
-            }
-
-            // Suggested stops for the selected category — tap a pin to add it.
-            // Recommended fuel stops and ride highlights are excluded here so
-            // they aren't drawn twice (their own highlighted layers cover them).
-            if !categoryPins.isEmpty {
-            ForEach(categoryPins) { stop in
-                Annotation(stop.name, coordinate: stop.coordinate) {
-                    Button {
-                        viewModel.addStop(from: stop)
-                    } label: {
-                        Image(systemName: stop.category == .gas && viewModel.isGasBuffered(stop)
-                              ? "checkmark"
-                              : stop.category.systemImage)
-                            .padding(6)
-                            .background(.thinMaterial, in: Circle())
-                    }
-                }
-            }
-            }
-
-            // Recommended ride highlights — purple star pins so places worth
-            // a stop stand out from ordinary suggestions.
-            if !highlightPins.isEmpty {
-            ForEach(highlightPins) { stop in
-                Annotation(stop.name, coordinate: stop.coordinate) {
-                    Button {
-                        viewModel.addStop(from: stop)
-                    } label: {
-                        Image(systemName: "star.fill")
-                            .font(.headline)
-                            .foregroundStyle(.white)
-                            .padding(9)
-                            .background(.purple, in: Circle())
-                            .padding(2.5)
-                            .background(.white, in: Circle())
-                            .shadow(radius: 3)
-                    }
-                }
-            }
-            }
-
-            // Recommended fuel stops (one per tank) — drawn last so they sit on
-            // top, and highlighted (larger, ringed green pump) so they're easy
-            // to pick out in any category. Exactly one marker per recommended
-            // stop, across all the layers above.
-            if !fuelPins.isEmpty {
-            ForEach(fuelPins) { stop in
-                Annotation(stop.name, coordinate: stop.coordinate) {
-                    Button {
-                        viewModel.toggleBufferedGasStop(stop)
-                    } label: {
-                        Image(systemName: viewModel.isGasBuffered(stop) ? "checkmark" : "fuelpump.fill")
-                            .font(.headline)
-                            .foregroundStyle(.white)
-                            .padding(9)
-                            .background(viewModel.isGasBuffered(stop) ? Color.blue : Color.green, in: Circle())
-                            .padding(2.5)
-                            .background(.white, in: Circle())
-                            .shadow(radius: 3)
-                    }
-                }
-            }
-            }
+    /// Phone and portrait use the original map. The sidebar map adds
+    /// selection so a pin tap can point at a row. Two initializers keep the
+    /// phone map from growing a selection binding.
+    @ViewBuilder
+    private func map(usesSidebar: Bool) -> some View {
+        if usesSidebar {
+            decoratedMap(Map(position: $cameraPosition, selection: $selectedPinID) {
+                mapContents(usesSidebar: true)
+            }, usesSidebar: true)
+        } else {
+            decoratedMap(Map(position: $cameraPosition) {
+                mapContents(usesSidebar: false)
+            }, usesSidebar: false)
         }
+    }
+
+    private func decoratedMap<V: View>(_ map: V, usesSidebar: Bool) -> some View {
+        map
         .onMapCameraChange { context in
             visibleRegion = context.region
         }
@@ -214,6 +197,19 @@ struct ContentView: View {
                 frameRoute(legs)
             }
         }
+        .onChange(of: selectedPinID) { _, id in
+            // Marker taps set the binding. Annotation buttons set it too.
+            // Phone and portrait have no selection binding, so this stays nil.
+            guard usesSidebar else { return }
+            guard let id else {
+                if viewModel.highlightedStopID != nil {
+                    viewModel.highlightedStopID = nil
+                }
+                return
+            }
+            guard viewModel.highlightedStopID != id else { return }
+            viewModel.highlightListedStop(id: id)
+        }
         .task {
             // Debug harness: when launched with --auto-route-test (e.g. via
             // `simctl launch <udid> <bundle-id> --auto-route-test`), add a
@@ -241,26 +237,157 @@ struct ContentView: View {
             // when a replan starts and ends.
             mapTopChrome
         }
-        .sheet(isPresented: Binding(
-            get: { showSheet && planningSheetEnabled },
-            set: { showSheet = $0 }
-        )) {
-            planningSheet
-                .presentationDetents(
-                    // The first detent is what the system uses if it ignores the
-                    // selection binding. UI tests need the large one so list rows
-                    // are in the accessibility tree; riders still open at medium.
-                    UITestStubLaunch.isEnabled
-                        ? [.large, .medium, .fraction(0.15)]
-                        : [.fraction(0.15), .medium, .large],
-                    selection: $sheetDetent
-                )
-                // A downward drag at the top of the list otherwise shrinks the
-                // sheet, which drops the fuel rows out of the accessibility tree.
-                .presentationContentInteraction(UITestStubLaunch.isEnabled ? .scrolls : .automatic)
-                .presentationBackgroundInteraction(.enabled(upThrough: .medium))
-                .interactiveDismissDisabled()
+    }
+
+    /// Sidebar pin tap highlights the matching row. Phone and portrait keep
+    /// the add / toggle action.
+    private func handlePinTap(id: UUID, usesSidebar: Bool, action: () -> Void) {
+        if usesSidebar {
+            selectedPinID = id
+            viewModel.highlightListedStop(id: id)
+        } else {
+            action()
         }
+    }
+
+    @MapContentBuilder
+    private func mapContents(usesSidebar: Bool) -> some MapContent {
+            UserAnnotation()
+
+            // Waypoint markers. An empty ForEach is omitted: during a replan
+            // it is a focus container with no children. Tags are inert on the
+            // phone map, which has no selection binding.
+            if !viewModel.waypoints.isEmpty {
+                ForEach(Array(viewModel.waypoints.enumerated()), id: \.element.id) { index, waypoint in
+                    Marker(waypoint.name, systemImage: markerIcon(for: index), coordinate: waypoint.coordinate)
+                        .tint(index == 0 ? .green : (index == viewModel.waypoints.count - 1 ? .red : .orange))
+                        .tag(waypoint.id)
+                }
+            }
+
+            // Route polylines, one per leg
+            if !viewModel.legs.isEmpty {
+                ForEach(viewModel.legs, id: \.self) { leg in
+                    MapPolyline(leg.polyline)
+                        .stroke(
+                            viewModel.dimsRouteLine ? Color.blue.opacity(0.35) : Color.blue,
+                            lineWidth: 5
+                        )
+                }
+            }
+
+
+            // Non-recommended gas stations — only while the sheet's
+            // "All gas on route" list is open. Recommended pumps and the
+            // selected-category pins stay regardless. Hidden in Gas, where
+            // the suggestions layer already covers stations.
+            if viewModel.showsAllGasPins, !extraGasPins.isEmpty {
+                ForEach(extraGasPins) { stop in
+                    Annotation(stop.name, coordinate: stop.coordinate) {
+                        Button {
+                            handlePinTap(id: stop.id, usesSidebar: usesSidebar) {
+                                viewModel.toggleBufferedGasStop(stop)
+                            }
+                        } label: {
+                            Image(systemName: viewModel.isGasBuffered(stop) ? "checkmark" : "fuelpump.fill")
+                                .font(.caption)
+                                .padding(6)
+                                .background(viewModel.isGasBuffered(stop) ? Color.blue : Color.gray, in: Circle())
+                                .foregroundStyle(.white)
+                        }
+                    }
+                    .tag(stop.id)
+                }
+            }
+
+            // Suggested stops for the selected category — tap a pin to add it.
+            // Recommended fuel stops and ride highlights are excluded here so
+            // they aren't drawn twice (their own highlighted layers cover them).
+            if !categoryPins.isEmpty {
+            ForEach(categoryPins) { stop in
+                Annotation(stop.name, coordinate: stop.coordinate) {
+                    Button {
+                        handlePinTap(id: stop.id, usesSidebar: usesSidebar) {
+                            viewModel.addStop(from: stop)
+                        }
+                    } label: {
+                        Image(systemName: stop.category == .gas && viewModel.isGasBuffered(stop)
+                              ? "checkmark"
+                              : stop.category.systemImage)
+                            .padding(6)
+                            .background(.thinMaterial, in: Circle())
+                    }
+                }
+                .tag(stop.id)
+            }
+            }
+
+            // Recommended ride highlights — purple star pins so places worth
+            // a stop stand out from ordinary suggestions.
+            if !highlightPins.isEmpty {
+            ForEach(highlightPins) { stop in
+                Annotation(stop.name, coordinate: stop.coordinate) {
+                    Button {
+                        handlePinTap(id: stop.id, usesSidebar: usesSidebar) {
+                            viewModel.addStop(from: stop)
+                        }
+                    } label: {
+                        Image(systemName: "star.fill")
+                            .font(.headline)
+                            .foregroundStyle(.white)
+                            .padding(9)
+                            .background(.purple, in: Circle())
+                            .padding(2.5)
+                            .background(.white, in: Circle())
+                            .shadow(radius: 3)
+                    }
+                }
+                .tag(stop.id)
+            }
+            }
+
+            if !hotelPins.isEmpty {
+                ForEach(hotelPins) { stop in
+                    Annotation(stop.name, coordinate: stop.coordinate) {
+                        Button {
+                            viewModel.toggleBufferedHotelStop(stop)
+                        } label: {
+                            Image(systemName: viewModel.isHotelBuffered(stop) ? "checkmark" : "bed.double.fill")
+                                .font(.caption)
+                                .padding(6)
+                                .background(viewModel.isHotelBuffered(stop) ? Color.indigo : Color.indigo.opacity(0.85), in: Circle())
+                                .foregroundStyle(.white)
+                        }
+                    }
+                    .tag(stop.id)
+                }
+            }
+
+            // Recommended fuel stops (one per tank) — drawn last so they sit on
+            // top, and highlighted (larger, ringed green pump) so they're easy
+            // to pick out in any category. Exactly one marker per recommended
+            // stop, across all the layers above.
+            if !fuelPins.isEmpty {
+            ForEach(fuelPins) { stop in
+                Annotation(stop.name, coordinate: stop.coordinate) {
+                    Button {
+                        handlePinTap(id: stop.id, usesSidebar: usesSidebar) {
+                            viewModel.toggleBufferedGasStop(stop)
+                        }
+                    } label: {
+                        Image(systemName: viewModel.isGasBuffered(stop) ? "checkmark" : "fuelpump.fill")
+                            .font(.headline)
+                            .foregroundStyle(.white)
+                            .padding(9)
+                            .background(viewModel.isGasBuffered(stop) ? Color.blue : Color.green, in: Circle())
+                            .padding(2.5)
+                            .background(.white, in: Circle())
+                            .shadow(radius: 3)
+                    }
+                }
+                .tag(stop.id)
+            }
+            }
     }
 
     private var showsMapReplanBanner: Bool {
@@ -352,7 +479,7 @@ struct ContentView: View {
     private var categoryPicker: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack {
-                ForEach(StopCategory.allCases) { category in
+                ForEach(StopCategory.plannerCases) { category in
                     Button {
                         viewModel.selectCategory(category)
                     } label: {
@@ -403,6 +530,11 @@ struct ContentView: View {
                     openDescription: $openPlaceDescription
                 )
                 GasStationsSectionGate(viewModel: viewModel)
+                if viewModel.showsHotelSection {
+                    HotelsAlongRouteSection(viewModel: viewModel)
+                } else {
+                    FocusPlaceholderRow()
+                }
                 FuelRangeSection(viewModel: viewModel)
                 DepartureSection(viewModel: viewModel)
                 RouteStyleSection(viewModel: viewModel)
@@ -593,6 +725,15 @@ struct ContentView: View {
         }
     }
 
+    private var hotelPins: [SuggestedStop] {
+        var seen = Set<String>()
+        return viewModel.hotelEvenings.flatMap(\.options).filter { stop in
+            guard !viewModel.isStopOnRoute(stop) else { return false }
+            let key = "\(stop.latitude)|\(stop.longitude)"
+            return seen.insert(key).inserted
+        }
+    }
+
     private var extraGasPins: [SuggestedStop] {
         viewModel.gasStations.filter {
             !viewModel.isRecommendedFuelStop($0) && !viewModel.isStopOnRoute($0)
@@ -617,6 +758,7 @@ struct ContentView: View {
 
     private func markerIcon(for index: Int) -> String {
         if index == 0 { return "flag.fill" }
+        if viewModel.waypoints[index].isOvernight { return "bed.double.fill" }
         if index == viewModel.waypoints.count - 1 { return "flag.checkered" }
         return "mappin"
     }
