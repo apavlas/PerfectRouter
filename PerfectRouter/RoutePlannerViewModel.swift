@@ -638,14 +638,6 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         hotelGeneration += 1
         let generation = hotelGeneration
         hotelTask?.cancel()
-        // Stub rows publish on this turn. A follow-up task was a second list
-        // update, and iPad drops the new section when that update lands.
-        if UITestStubLaunch.isEnabled {
-            hotelEvenings = UITestFixture.stubHotelEvenings()
-            hotelLoadFailed = false
-            isSearchingHotels = false
-            return
-        }
         hotelTask = Task { await refreshHotels(generation: generation) }
     }
 

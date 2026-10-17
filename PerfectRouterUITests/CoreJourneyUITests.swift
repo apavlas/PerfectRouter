@@ -40,9 +40,7 @@ final class CoreJourneyUITests: XCTestCase {
         let first = reveal("hotelStop.Quality Inn.unchecked", in: app)
         XCTAssertTrue(first.exists, diagnosticTree(app))
         scrollUntilHittable(first, in: app)
-        // The identifier sits on the title text. A text tap does not fire the
-        // row button; a touch in the row does.
-        tapRow(first, in: app)
+        first.tap()
 
         let firstChecked = reveal("hotelStop.Quality Inn.checked", in: app)
         XCTAssertTrue(firstChecked.exists, diagnosticTree(app))
@@ -50,7 +48,7 @@ final class CoreJourneyUITests: XCTestCase {
         let second = reveal("hotelStop.Holiday Inn Express.unchecked", in: app)
         XCTAssertTrue(second.exists, diagnosticTree(app))
         scrollUntilHittable(second, in: app)
-        tapRow(second, in: app)
+        second.tap()
 
         XCTAssertTrue(
             reveal("hotelStop.Holiday Inn Express.checked", in: app).exists,
@@ -503,14 +501,16 @@ final class CoreJourneyUITests: XCTestCase {
     /// A short, slow drag. The planning-list swipe is half the sheet and
     /// keeps going after the finger lifts, which skips the Navigate row.
     private func nudgePlanningList(in app: XCUIApplication, up: Bool) {
-        let startY: CGFloat = up ? 0.72 : 0.40
-        let endY: CGFloat = up ? 0.40 : 0.72
-        dragPlanningList(in: app, from: startY, to: endY, slow: true)
-    }
-
-    /// Touches the row. `element.tap()` on the title text does not check it.
-    private func tapRow(_ element: XCUIElement, in app: XCUIApplication) {
-        element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        let list = planningList(in: app)
+        guard list.elementType != .application, list.exists, list.frame.width > 40, list.frame.height > 40 else {
+            swipePlanningList(in: app, up: up)
+            return
+        }
+        let startY: CGFloat = up ? 0.58 : 0.42
+        let endY: CGFloat = up ? 0.42 : 0.58
+        let start = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: startY))
+        let end = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: endY))
+        start.press(forDuration: 0.25, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2)
     }
 
     private func tapApply(in app: XCUIApplication) {
@@ -1084,38 +1084,26 @@ final class CoreJourneyUITests: XCTestCase {
 
     private func revealEither(_ ids: [String], in app: XCUIApplication, timeout: TimeInterval) -> XCUIElement {
         expandPlanningSheet(app)
-        // Leave later sits under the tank slider. Walking from the top first
-        // hid it, and the hotel rows made the walk back miss the timeout.
-        if let found = existing(ids, in: app) { return found }
-        for _ in 0..<8 {
-            nudgePlanningList(in: app, up: true)
-            if let found = existing(ids, in: app) { return found }
-        }
         scrollToTop(app)
         let deadline = Date().addingTimeInterval(timeout)
         var down = 0
         while Date() < deadline {
-            if let found = existing(ids, in: app) { return found }
+            for id in ids {
+                let element = identified(id, in: app)
+                if element.exists { return element }
+            }
             // A half-list swipe jumps over the highlight rows. They are short,
             // and the poll only sees the list between drags.
-            if down >= 48 {
+            if down >= 40 {
                 scrollToTop(app)
                 down = 0
             } else {
                 nudgePlanningList(in: app, up: true)
                 down += 1
             }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.08))
+            RunLoop.current.run(until: Date().addingTimeInterval(0.12))
         }
         return identified(ids[0], in: app)
-    }
-
-    private func existing(_ ids: [String], in app: XCUIApplication) -> XCUIElement? {
-        for id in ids {
-            let element = identified(id, in: app)
-            if element.exists { return element }
-        }
-        return nil
     }
 
     private struct FuelScan: CustomStringConvertible {
@@ -1279,81 +1267,32 @@ final class CoreJourneyUITests: XCTestCase {
     /// A full-screen swipe can skip a row, and a window swipe hits the map
     /// beside the sheet on a regular-width iPad.
     private func swipePlanningList(in app: XCUIApplication, up: Bool) {
-        let startY: CGFloat = up ? 0.78 : 0.34
-        let endY: CGFloat = up ? 0.34 : 0.78
-        dragPlanningList(in: app, from: startY, to: endY, slow: false)
-    }
-
-    /// Drags the sidebar column when the list is beside the map. The list's
-    /// own frame can be the whole split view, and a drag at its center lands
-    /// on the map, so the hotel rows never enter the tree.
-    private func dragPlanningList(
-        in app: XCUIApplication,
-        from startY: CGFloat,
-        to endY: CGFloat,
-        slow: Bool
-    ) {
         let list = planningList(in: app)
-        let sidebar = app.descendants(matching: .any)["routeSidebar"]
-        var frame = CGRect.null
-        if sidebar.exists, sidebar.frame.width > 40, sidebar.frame.height > 40 {
-            frame = sidebar.frame
-            // The identifier can land on the split view. A drag at that
-            // midpoint hits the map and the sidebar list never moves.
-            if frame.width > app.frame.width * 0.55 {
-                frame.origin.x = app.frame.minX
-                frame.size.width = min(420, app.frame.width * 0.4)
-            }
-        } else if list.elementType != .application, list.exists, list.frame.width > 40, list.frame.height > 40 {
-            frame = list.frame
-        }
-        guard frame.width > 40, frame.height > 40 else {
-            let bar = app.navigationBars["Plan Ride"]
-            guard bar.exists else {
-                if startY > endY { app.swipeUp() } else { app.swipeDown() }
-                return
-            }
-            let start = bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: startY > endY ? 8 : 3))
-            let end = bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: startY > endY ? 3 : 8))
+        // iPad can report the sheet list as not hittable while a drag inside
+        // its frame still scrolls it. Require a real frame, not isHittable.
+        if list.elementType != .application, list.exists, list.frame.width > 40, list.frame.height > 40 {
+            let startY: CGFloat = up ? 0.8 : 0.3
+            let endY: CGFloat = up ? 0.3 : 0.8
+            let start = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: startY))
+            let end = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: endY))
             start.press(forDuration: 0.05, thenDragTo: end)
             return
         }
-        let dx = (frame.midX - app.frame.minX) / max(app.frame.width, 1)
-        let start = app.coordinate(withNormalizedOffset: CGVector(
-            dx: min(max(dx, 0.02), 0.98),
-            dy: unitY(frame.minY + frame.height * startY, in: app)
-        ))
-        let end = app.coordinate(withNormalizedOffset: CGVector(
-            dx: min(max(dx, 0.02), 0.98),
-            dy: unitY(frame.minY + frame.height * endY, in: app)
-        ))
-        if slow {
-            start.press(forDuration: 0.2, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.15)
-        } else {
-            start.press(forDuration: 0.05, thenDragTo: end)
+        // No list query yet. Drag under the sheet's navigation bar so the
+        // gesture stays in the sheet on a wide iPad.
+        let bar = app.navigationBars["Plan Ride"]
+        guard bar.exists else {
+            if up { app.swipeUp() } else { app.swipeDown() }
+            return
         }
-    }
-
-    private func unitY(_ y: CGFloat, in app: XCUIApplication) -> CGFloat {
-        let normalized = (y - app.frame.minY) / max(app.frame.height, 1)
-        return min(max(normalized, 0.02), 0.98)
+        let start = bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: up ? 8 : 3))
+        let end = bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: up ? 3 : 8))
+        start.press(forDuration: 0.05, thenDragTo: end)
     }
 
     /// The sheet's list contains the search field. On iOS 17 that list is a
     /// table; later systems use a collection view. Either way it is not the map.
     private func planningList(in app: XCUIApplication) -> XCUIElement {
-        let sidebar = app.descendants(matching: .any)["routeSidebar"]
-        if sidebar.exists {
-            if let list = namedPlanningList(in: sidebar) {
-                return list
-            }
-            if sidebar.frame.width > 40, sidebar.frame.height > 40 {
-                return sidebar
-            }
-        }
-        if let list = namedPlanningList(in: app) {
-            return list
-        }
         for candidate in [
             app.collectionViews["planningList"],
             app.tables["planningList"],
@@ -1382,18 +1321,5 @@ final class CoreJourneyUITests: XCTestCase {
             return scrolls.element(boundBy: scrolls.count - 1)
         }
         return app
-    }
-
-    /// The list stamped `planningList` under `root`, when that root is on screen.
-    private func namedPlanningList(in root: XCUIElement) -> XCUIElement? {
-        guard root.exists else { return nil }
-        for candidate in [
-            root.collectionViews["planningList"],
-            root.tables["planningList"],
-            root.scrollViews["planningList"]
-        ] where candidate.exists && candidate.frame.width > 40 && candidate.frame.height > 40 {
-            return candidate
-        }
-        return nil
     }
 }

@@ -5,8 +5,6 @@ import SwiftUI
 struct HotelsAlongRouteSection: View {
     let viewModel: RoutePlannerViewModel
 
-    @Environment(\.planningUsesSidebar) private var planningUsesSidebar
-
     var body: some View {
         if FeatureFlags.hotelsAlongRoute {
             hotelSection
@@ -60,8 +58,8 @@ struct HotelsAlongRouteSection: View {
                             .focusable()
                     } else if !evening.options.isEmpty {
                         ForEach(evening.options) { stop in
-                            hotelRow(stop, in: evening)
-                            hotelLinks(stop)
+                            HotelCheckRow(viewModel: viewModel, stop: stop, evening: evening)
+                            HotelLinkRow(stop: stop)
                         }
                     } else {
                         FocusPlaceholderRow()
@@ -86,21 +84,25 @@ struct HotelsAlongRouteSection: View {
         )
     }
 
-    /// Same shape as a fuel row. The title text carries the identifier: a
-    /// list cell on iPhone exposes that text and drops an identifier that
-    /// lives only on the button, so the checked suffix never appeared after
-    /// the tap. An accessibility label on the button hid the row entirely.
-    private func hotelRow(_ stop: SuggestedStop, in evening: HotelEveningPlan) -> some View {
+}
+
+/// One hotel, checked or not. Its body reads the buffer, so the identifier
+/// flips to `.checked` on the tap instead of staying on the first render.
+/// The title text carries the identifier, same as a fuel row: a list cell
+/// exposes that text and drops an identifier that lives only on the button.
+private struct HotelCheckRow: View {
+    let viewModel: RoutePlannerViewModel
+    let stop: SuggestedStop
+    let evening: HotelEveningPlan
+
+    var body: some View {
         let onRoute = viewModel.isStopOnRoute(stop)
         let checked = viewModel.isHotelBuffered(stop)
         let caption = viewModel.hotelCaption(for: stop, in: evening)
         let identifier = AccessibilityID.hotelStop(stop.name, checked: checked)
         let description = PlaceDescriptionDisplay.rowText(for: stop.placeDescription)
-        return Button {
+        Button {
             guard !onRoute else { return }
-            if planningUsesSidebar {
-                viewModel.focusListedStop(id: stop.id, coordinate: stop.coordinate)
-            }
             viewModel.toggleBufferedHotelStop(stop, onEvening: evening.dayNumber)
         } label: {
             HStack(alignment: .top, spacing: 8) {
@@ -137,13 +139,16 @@ struct HotelsAlongRouteSection: View {
         .disabled(onRoute)
         .accessibilityIdentifier(identifier)
         .sidebarStopHighlight(selected: viewModel.highlightedStopID == stop.id)
-        .id("\(stop.id.uuidString)-\(checked)")
     }
+}
 
-    /// Call and Website stay off the check button. A second control in that
-    /// row is what kept iPad from exposing the hotel identifier.
-    @ViewBuilder
-    private func hotelLinks(_ stop: SuggestedStop) -> some View {
+/// Call and Website stay on their own row so the check button is the only
+/// control in the hotel row. Absent links stay a one-point placeholder so
+/// the list's focus children do not drop to zero.
+private struct HotelLinkRow: View {
+    let stop: SuggestedStop
+
+    var body: some View {
         let phone = HotelAlongRoute.telephoneURL(from: stop.mapItem.phoneNumber)
         let website = HotelAlongRoute.websiteURL(from: stop.mapItem.url)
         if phone != nil || website != nil {
