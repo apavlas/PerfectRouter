@@ -473,6 +473,177 @@ final class PlaceDescriptionTests: XCTestCase {
         )
     }
 
+    /// The Big Texan Steak Ranch publishes this meta description. It must not
+    /// appear on Slug Bug Ranch, a different Conway landmark.
+    private let bigTexanDescription =
+        "The Big Texan Steak Ranch, world famous for of the free 72oz steak challenge. Historic Route 66 landmark and Texas icon. Only located in Amarillo, Texas."
+
+    private let bigTexanShown =
+        "The Big Texan Steak Ranch, world famous for of the free 72oz steak challenge. Historic Route 66 landmark and Texas icon."
+
+    func testSlugBugRanchDoesNotShowBigTexanDescription() {
+        XCTAssertNil(PlaceDescriptionDisplay.text(for: bigTexanDescription, name: "Slug Bug Ranch"))
+        XCTAssertNil(PlaceDescriptionDisplay.rowText(for: bigTexanDescription, name: "Slug Bug Ranch"))
+        XCTAssertNil(PlaceDescriptionReader.acceptedAppleMapsText(
+            bigTexanDescription,
+            name: "Slug Bug Ranch",
+            rejectIfEqual: []
+        ))
+        XCTAssertNil(PlaceDescriptionReader.acceptedPlaceText(bigTexanDescription, name: "Slug Bug Ranch"))
+
+        let stop = SuggestedStop(
+            name: "Slug Bug Ranch",
+            coordinate: CLLocationCoordinate2D(latitude: 35.212, longitude: -101.389),
+            category: .attraction,
+            distanceAlongRoute: 100_000,
+            detourMeters: 200
+        ).withPlaceDescription(bigTexanDescription)
+        XCTAssertNil(stop.placeDescription)
+        XCTAssertNil(PlaceDescriptionReader.knownPlaceDescription(name: "Slug Bug Ranch"))
+    }
+
+    func testBigTexanKeepsItsOwnDescriptionAfterStripping() {
+        XCTAssertEqual(
+            PlaceDescriptionDisplay.text(for: bigTexanDescription, name: "The Big Texan Steak Ranch"),
+            bigTexanShown
+        )
+        XCTAssertEqual(
+            PlaceDescriptionDisplay.text(for: bigTexanDescription, name: "Big Texan Steak Ranch"),
+            bigTexanShown
+        )
+        XCTAssertEqual(
+            PlaceDescriptionReader.acceptedAppleMapsText(
+                bigTexanDescription,
+                name: "The Big Texan Steak Ranch",
+                rejectIfEqual: ["The Big Texan Steak Ranch"]
+            ),
+            bigTexanShown
+        )
+    }
+
+    func testCadillacRanchDescriptionIsUnchanged() {
+        let sentence = "Ten vintage Cadillacs stand buried nose-down in a wheat field west of Amarillo."
+        XCTAssertEqual(PlaceDescriptionReader.cadillacRanchDescription, sentence)
+        XCTAssertEqual(
+            PlaceDescriptionDisplay.text(for: sentence, name: "Cadillac Ranch"),
+            sentence
+        )
+        XCTAssertEqual(
+            PlaceDescriptionReader.knownPlaceDescription(name: "Cadillac Ranch"),
+            sentence
+        )
+        XCTAssertEqual(
+            PlaceDescriptionReader.knownPlaceDescription(name: "The Cadillac Ranch"),
+            sentence
+        )
+        XCTAssertNil(PlaceDescriptionReader.knownPlaceDescription(name: "Slug Bug Ranch"))
+    }
+
+    func testFillingStationNameAndCityCasesStillPass() {
+        let real = "The restored 1930s gas station now serves as a Route 66 visitor center."
+        XCTAssertNil(PlaceDescriptionDisplay.text(for: "Filling Station, Amarillo", name: "Filling Station"))
+        XCTAssertNil(PlaceDescriptionDisplay.text(
+            for: "The Filling Station El Reno, Oklahoma, El Reno.",
+            name: "The Filling Station"
+        ))
+        XCTAssertNil(PlaceDescriptionDisplay.text(
+            for: "The Filling Station, El Reno.",
+            name: "Filling Station"
+        ))
+        XCTAssertNil(PlaceDescriptionDisplay.text(
+            for: "Filling Station, El Reno.",
+            name: "The Filling Station"
+        ))
+        XCTAssertEqual(
+            PlaceDescriptionDisplay.text(
+                for: "The Filling Station El Reno, Oklahoma, El Reno. \(real)",
+                name: "Filling Station"
+            ),
+            real
+        )
+        XCTAssertEqual(
+            PlaceDescriptionDisplay.text(
+                for: "Filling Station, Amarillo. \(real)",
+                name: "The Filling Station"
+            ),
+            real
+        )
+    }
+
+    func testPlaceNameVariantsMatch() {
+        let real = "The restored 1930s gas station now serves as a Route 66 visitor center."
+        let filling = """
+        <script type="application/ld+json">
+        {"name":"The Filling Station","description":"\(real)"}
+        </script>
+        """
+        XCTAssertEqual(PlaceDescriptionReader.placeText(from: filling, name: "Filling Station"), real)
+        XCTAssertEqual(PlaceDescriptionReader.placeText(from: filling, name: "The Filling Station"), real)
+        XCTAssertTrue(PlaceDescriptionReader.placeNamesMatch("The Filling Station", "Filling Station"))
+        XCTAssertTrue(PlaceDescriptionReader.placeNamesMatch("Ben & Jerry's", "Ben and Jerry's"))
+
+        let scoop = "A scoop shop on the town square since opening day."
+        let ampersand = """
+        <script type="application/ld+json">
+        {"name":"Ben & Jerry's","description":"\(scoop)"}
+        </script>
+        """
+        XCTAssertEqual(PlaceDescriptionReader.placeText(from: ampersand, name: "Ben and Jerry's"), scoop)
+    }
+
+    func testJSONLDDoesNotUseADifferentPlacesDescription() {
+        let html = """
+        <script type="application/ld+json">
+        {"@type":"Restaurant","name":"The Big Texan Steak Ranch","description":"\(bigTexanDescription)"}
+        </script>
+        """
+        XCTAssertNil(PlaceDescriptionReader.placeText(from: html, name: "Slug Bug Ranch"))
+        XCTAssertEqual(
+            PlaceDescriptionReader.placeText(from: html, name: "Big Texan Steak Ranch"),
+            bigTexanShown
+        )
+    }
+
+    func testBigTexanWebsiteIsNotSlugBugRanchsDescription() async {
+        let fragment = "World famous for of the free 72oz steak challenge. Historic Route 66 landmark and Texas icon."
+        let html = """
+        <html><head>
+        <title>Big Texan Steak Ranch – The Big Texan</title>
+        <meta name="description" content="\(fragment)">
+        </head></html>
+        """
+        let slug = PlaceDescriptionQuery(
+            id: UUID(),
+            name: "Slug Bug Ranch",
+            appleMapsCandidate: nil,
+            rejectIfEqual: ["Slug Bug Ranch"],
+            websiteURL: URL(string: "https://www.bigtexan.com/")
+        )
+        let stolen = await PlaceDescriptionLoader.text(for: slug) { _ in html }
+        XCTAssertNil(stolen)
+
+        let own = PlaceDescriptionQuery(
+            id: UUID(),
+            name: "The Big Texan Steak Ranch",
+            appleMapsCandidate: "Tourist Attraction",
+            rejectIfEqual: ["The Big Texan Steak Ranch"],
+            websiteURL: URL(string: "https://bigtexan.com/")
+        )
+        let kept = await PlaceDescriptionLoader.text(for: own) { _ in html }
+        XCTAssertEqual(kept, fragment)
+
+        let named = """
+        <html><head>
+        <title>Big Texan Steak Ranch – The Big Texan</title>
+        <meta name="description" content="\(bigTexanDescription)">
+        </head></html>
+        """
+        let fromMeta = await PlaceDescriptionLoader.text(for: slug) { _ in named }
+        XCTAssertNil(fromMeta)
+        let ownMeta = await PlaceDescriptionLoader.text(for: own) { _ in named }
+        XCTAssertEqual(ownMeta, bigTexanShown)
+    }
+
     private func placeQuery(url: String) -> PlaceDescriptionQuery {
         PlaceDescriptionQuery(
             id: UUID(),

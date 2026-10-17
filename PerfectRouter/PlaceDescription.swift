@@ -11,13 +11,17 @@ import MapKit
 /// own page is read. Engagement-stat sentences are removed; the prose around
 /// them stays. Cadillac Ranch is the one landmark with a known sentence when
 /// the published text is only a name or those stats.
+///
+/// A description is shown only when it is about that exact place. Text whose
+/// source record, page title, or domain names a different place is dropped.
 enum PlaceDescriptionDisplay {
     static let collapsedLineLimit = 2
     static let rowSentenceLimit = 2
 
     /// The description the row and the sheet share: normalized, then cut
     /// after the second sentence. "St." and "Mt." are not endings. Blank
-    /// input and a shorter source stay nil or whole.
+    /// input and a shorter source stay nil or whole. A name-and-city
+    /// restatement is removed first; text about a different place is not shown.
     static func text(for description: String?, name: String? = nil) -> String? {
         guard let text = PlaceDescriptionReader.normalize(description) else { return nil }
         guard let social = PlaceDescriptionReader.droppingSocialEngagementSentences(in: text) else {
@@ -26,6 +30,7 @@ enum PlaceDescriptionDisplay {
         guard let prose = PlaceDescriptionReader.strippingRestatedNameAndLocality(in: social, name: name) else {
             return nil
         }
+        if PlaceDescriptionReader.namesADifferentPlace(prose, placeName: name) { return nil }
         if PlaceDescriptionReader.isNameAndLocality(prose) { return nil }
         return PlaceDescriptionReader.firstSentences(in: prose, limit: rowSentenceLimit)
     }
@@ -117,6 +122,7 @@ enum PlaceDescriptionReader {
         if isOnlyPhoneNumber(text) || isBareCategory(text) || isOnlyAddress(text) { return nil }
         guard let social = droppingSocialEngagementSentences(in: text) else { return nil }
         guard let prose = strippingRestatedNameAndLocality(in: social, name: name) else { return nil }
+        if namesADifferentPlace(prose, placeName: name) { return nil }
         if let name, same(prose, name) { return nil }
         if isNameAndLocality(prose, name: name) { return nil }
         if rejects.contains(where: { candidate in
@@ -133,7 +139,21 @@ enum PlaceDescriptionReader {
     /// them: meta description, then Open Graph, then JSON-LD. Pure calls to
     /// action are removed before the two-sentence cap. Nil when nothing
     /// descriptive is left.
-    static func placeText(from document: String, name: String?) -> String? {
+    ///
+    /// When `pageURL` or a page title is present, the page has to identify
+    /// this place (domain or title). A title that names a different landmark
+    /// contributes nothing. Callers that only have a document and a name skip
+    /// that check; JSON-LD still requires the record's name to match.
+    static func placeText(from document: String, name: String?, pageURL: URL? = nil) -> String? {
+        let titles = pageTitles(in: document)
+        if titles.contains(where: { namesADifferentPlace($0, placeName: name) }) {
+            return nil
+        }
+        if pageURL != nil || !titles.isEmpty {
+            guard websiteIdentifiesPlace(url: pageURL, titles: titles, placeName: name) else {
+                return nil
+            }
+        }
         if let meta = metaContent(in: document, attribute: "name", equals: "description"),
            let text = acceptedPlaceText(meta, name: name) {
             return text
@@ -186,6 +206,7 @@ enum PlaceDescriptionReader {
         guard let text = normalize(raw) else { return nil }
         guard let social = droppingSocialEngagementSentences(in: text) else { return nil }
         guard let prose = strippingRestatedNameAndLocality(in: social, name: name) else { return nil }
+        if namesADifferentPlace(prose, placeName: name) { return nil }
         if let name, same(prose, name) { return nil }
         if isNameAndLocality(prose, name: name) { return nil }
         let kept = sentences(in: prose).filter { !isPureCallToAction($0) }
@@ -305,10 +326,83 @@ enum PlaceDescriptionReader {
     )
 
     /// The known sentence for a landmark, or nil for every other place.
+    /// "The Cadillac Ranch" is the same place. No other ranch borrows this sentence.
     static func knownPlaceDescription(name: String?) -> String? {
-        guard let name else { return nil }
-        guard matchKey(name) == "cadillac ranch" else { return nil }
+        guard placeNamesMatch(name, "Cadillac Ranch") else { return nil }
         return cadillacRanchDescription
+    }
+
+    /// Landmarks whose names are distinctive enough to reject a mismatched card.
+    /// Slug Bug Ranch and The Big Texan Steak Ranch share nothing but a region;
+    /// a sentence that names one is not a description of the other.
+    static let distinctivePlaceNames = [
+        "Cadillac Ranch",
+        "The Big Texan Steak Ranch",
+        "Slug Bug Ranch",
+    ]
+
+    /// True when `text` names a known landmark that is not `placeName`.
+    /// Comparison ignores case, punctuation, a leading "The", and "&" versus "and".
+    /// Text that also names this place is kept.
+    static func namesADifferentPlace(_ text: String, placeName: String?) -> Bool {
+        let place = canonicalPlaceName(placeName)
+        let haystack = " " + matchPhrase(text) + " "
+        if !place.isEmpty, haystack.contains(" " + place + " ") { return false }
+        for known in distinctivePlaceNames {
+            let key = canonicalPlaceName(known)
+            guard !key.isEmpty, key != place else { continue }
+            if haystack.contains(" " + key + " ") { return true }
+        }
+        return false
+    }
+
+    /// Same place after normalization. "The Filling Station" matches
+    /// "Filling Station", and "Ben & Jerry's" matches "Ben and Jerry's".
+    static func placeNamesMatch(_ lhs: String?, _ rhs: String?) -> Bool {
+        let left = canonicalPlaceName(lhs)
+        let right = canonicalPlaceName(rhs)
+        return !left.isEmpty && left == right
+    }
+
+    /// Lowercased words with punctuation removed, a leading "The" dropped,
+    /// and "&" read as "and".
+    static func canonicalPlaceName(_ raw: String?) -> String {
+        var words = matchPhrase(raw).split(separator: " ").map(String.init)
+        if words.first == "the" { words.removeFirst() }
+        return words.joined(separator: " ")
+    }
+
+    /// The page is this place's own page when its title or domain names the place.
+    static func websiteIdentifiesPlace(url: URL?, titles: [String], placeName: String?) -> Bool {
+        guard !canonicalPlaceName(placeName).isEmpty else { return false }
+        if titles.contains(where: { containsPlaceName($0, placeName: placeName) }) {
+            return true
+        }
+        if let url, domainMatchesPlace(url, placeName: placeName) {
+            return true
+        }
+        return false
+    }
+
+    static func containsPlaceName(_ text: String, placeName: String?) -> Bool {
+        let place = canonicalPlaceName(placeName)
+        guard !place.isEmpty else { return false }
+        return (" " + matchPhrase(text) + " ").contains(" " + place + " ")
+    }
+
+    /// Host labels such as `bigtexan` or `tallulahgorge` match the place when
+    /// they equal the name, or a leading run of its words, with or without "the".
+    static func domainMatchesPlace(_ url: URL, placeName: String?) -> Bool {
+        guard let host = url.host?.lowercased(), !host.isEmpty else { return false }
+        let words = canonicalPlaceName(placeName).split(separator: " ").map(String.init)
+        guard !words.isEmpty else { return false }
+        let skipped: Set<String> = ["www", "com", "org", "net", "edu", "gov", "io", "co", "uk"]
+        for part in host.split(separator: ".") {
+            let label = String(part).replacingOccurrences(of: "-", with: "")
+            guard label.count >= 4, !skipped.contains(label) else { continue }
+            if domainLabel(label, matches: words) { return true }
+        }
+        return false
     }
 
     private static let placeLabelFunctionWords: Set<String> = [
@@ -454,16 +548,30 @@ enum PlaceDescriptionReader {
         return nil
     }
 
+    /// JSON-LD description only when that object's name is this place.
+    /// A different object's description is not a fallback.
     static func jsonLDDescription(in html: String, placeName: String?) -> String? {
-        var fallback: String?
         for block in jsonLDBlocks(in: html) {
             guard let data = block.data(using: .utf8),
                   let json = try? JSONSerialization.jsonObject(with: data) else { continue }
-            let found = descriptions(in: json, placeName: placeName)
-            if let matched = found.matched { return matched }
-            if fallback == nil { fallback = found.any }
+            if let matched = descriptions(in: json, placeName: placeName) {
+                return matched
+            }
         }
-        return fallback
+        return nil
+    }
+
+    /// `<title>` and `og:title`, normalized. Empty when the page names nothing.
+    static func pageTitles(in html: String) -> [String] {
+        var titles: [String] = []
+        if let openGraph = metaContent(in: html, attribute: "property", equals: "og:title"),
+           let text = normalize(openGraph) {
+            titles.append(text)
+        }
+        if let text = titleElement(in: html) {
+            titles.append(text)
+        }
+        return titles
     }
 
     // MARK: - Private
@@ -767,35 +875,85 @@ enum PlaceDescriptionReader {
         return blocks
     }
 
-    private static func descriptions(in value: Any, placeName: String?) -> (matched: String?, any: String?) {
+    /// Description from a JSON-LD object whose name is this place. An object
+    /// named for somewhere else is skipped, including the first one on the page.
+    private static func descriptions(in value: Any, placeName: String?) -> String? {
         switch value {
         case let array as [Any]:
-            var matched: String?
-            var any: String?
             for item in array {
-                let found = descriptions(in: item, placeName: placeName)
-                if matched == nil { matched = found.matched }
-                if any == nil { any = found.any }
+                if let found = descriptions(in: item, placeName: placeName) {
+                    return found
+                }
             }
-            return (matched, any)
+            return nil
         case let object as [String: Any]:
-            let objectName = object["name"] as? String
-            let raw = object["description"] as? String
-            let accepted = acceptedPlaceText(raw, name: placeName)
-            var matched: String?
-            if let accepted, let placeName, let objectName, same(objectName, placeName) {
-                matched = accepted
+            if let placeName,
+               let objectName = object["name"] as? String,
+               placeNamesMatch(objectName, placeName),
+               let raw = object["description"] as? String,
+               let accepted = acceptedPlaceText(raw, name: placeName) {
+                return accepted
             }
-            var any = accepted
             if let graph = object["@graph"] {
-                let nested = descriptions(in: graph, placeName: placeName)
-                if matched == nil { matched = nested.matched }
-                if any == nil { any = nested.any }
+                return descriptions(in: graph, placeName: placeName)
             }
-            return (matched, any)
+            return nil
         default:
-            return (nil, nil)
+            return nil
         }
+    }
+
+    /// Letters, numbers, and whitespace. "&" becomes "and". Apostrophes are
+    /// removed so "Jerry's" and "Jerrys" share a key. Other punctuation becomes space.
+    private static func matchPhrase(_ raw: String?) -> String {
+        guard let raw, !raw.isEmpty else { return "" }
+        var expanded = ""
+        expanded.reserveCapacity(raw.count)
+        for character in raw.lowercased() {
+            if character == "&" {
+                expanded.append(" and ")
+            } else if isApostrophe(character) {
+                continue
+            } else if character.isLetter || character.isNumber || character.isWhitespace {
+                expanded.append(character)
+            } else {
+                expanded.append(" ")
+            }
+        }
+        return expanded.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
+    private static func isApostrophe(_ character: Character) -> Bool {
+        character == "'" || character == "\u{2019}" || character == "\u{02BC}"
+    }
+
+    /// `bigtexan` matches "The Big Texan Steak Ranch" because "big" + "texan"
+    /// is a leading run of the place's words. A label for a different place does not.
+    private static func domainLabel(_ label: String, matches words: [String]) -> Bool {
+        let collapsed = words.joined()
+        if label == collapsed || label == "the" + collapsed { return true }
+        var built = ""
+        var withThe = "the"
+        for word in words {
+            built += word
+            withThe += word
+            if built == label || withThe == label { return true }
+            if built.count > label.count && withThe.count > label.count { break }
+        }
+        return false
+    }
+
+    private static func titleElement(in html: String) -> String? {
+        guard let open = html.range(of: "<title", options: [.caseInsensitive]) else { return nil }
+        guard let start = html[open.upperBound...].firstIndex(of: ">") else { return nil }
+        let contentStart = html.index(after: start)
+        guard contentStart < html.endIndex,
+              let close = html.range(
+                of: "</title",
+                options: [.caseInsensitive],
+                range: contentStart..<html.endIndex
+              ) else { return nil }
+        return normalize(String(html[contentStart..<close.lowerBound]))
     }
 
     private static func decodeHTML(_ raw: String) -> String {
@@ -910,9 +1068,10 @@ extension SuggestedStop {
     }
 }
 
-/// Resolves one description per place. Apple Maps prose wins when it exists.
-/// Otherwise the place's own HTTPS page is read. Neither source yields text
-/// → nil. This type does not write copy.
+/// Resolves one description per place. Apple Maps prose wins when it exists
+/// and it is about this place. Otherwise the place's own HTTPS page is read,
+/// and only when that page's domain or title names the place. Neither source
+/// yields text → nil. This type does not write copy.
 enum PlaceDescriptionLoader {
     static func resolve(_ queries: [PlaceDescriptionQuery]) async -> [UUID: String] {
         await withTaskGroup(of: (UUID, String?).self) { group in
@@ -953,7 +1112,7 @@ enum PlaceDescriptionLoader {
         }
         guard let url = query.websiteURL, PlaceDescriptionReader.isPlaceWebsite(url) else { return nil }
         guard let document = await page(url) else { return nil }
-        return PlaceDescriptionReader.placeText(from: document, name: query.name)
+        return PlaceDescriptionReader.placeText(from: document, name: query.name, pageURL: url)
     }
 }
 
