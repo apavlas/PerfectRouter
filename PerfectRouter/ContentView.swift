@@ -46,6 +46,9 @@ struct ContentView: View {
             span: MKCoordinateSpan(latitudeDelta: 0.5, longitudeDelta: 0.5)
         ))
     )
+    /// Set when a route is framed. The label is the camera center so a UI
+    /// test can tell the ride from the device location.
+    @State private var framedRoute: RouteMapFrame?
     @State private var visibleRegion: MKCoordinateRegion?
     @State private var showSheet = true
     @State private var sheetDetent: PresentationDetent = UITestStubLaunch.isEnabled ? .large : .medium
@@ -79,14 +82,14 @@ struct ContentView: View {
                             .navigationSplitViewColumnWidth(min: 300, ideal: 380, max: 480)
                             .accessibilityIdentifier("routeSidebar")
                     } detail: {
-                        mapColumn(usesSidebar: true)
+                        mapColumn(usesSidebar: true, containerSize: geo.size)
                             // The detail column's own bar would sit on top of
                             // the map. The route list keeps "Plan Ride".
                             .toolbar(.hidden, for: .navigationBar)
                     }
                     .navigationSplitViewStyle(.balanced)
                 } else {
-                    mapColumn(usesSidebar: false)
+                    mapColumn(usesSidebar: false, containerSize: geo.size)
                         // Mirror the planning sheet as a bottom safe-area inset
                         // so the map centers content — and frames routes — in
                         // the area the sheet doesn't cover. Without this a
@@ -134,9 +137,9 @@ struct ContentView: View {
 
     /// MapReader exposes a proxy that converts a pressed screen point into a
     /// map coordinate, so a long press can drop a start point.
-    private func mapColumn(usesSidebar: Bool) -> some View {
+    private func mapColumn(usesSidebar: Bool, containerSize: CGSize) -> some View {
         MapReader { proxy in
-            map(usesSidebar: usesSidebar)
+            map(usesSidebar: usesSidebar, containerSize: containerSize)
                 .gesture(dropStartGesture(proxy: proxy))
         }
     }
@@ -151,19 +154,19 @@ struct ContentView: View {
     /// selection so a pin tap can point at a row. Two initializers keep the
     /// phone map from growing a selection binding.
     @ViewBuilder
-    private func map(usesSidebar: Bool) -> some View {
+    private func map(usesSidebar: Bool, containerSize: CGSize) -> some View {
         if usesSidebar {
             decoratedMap(Map(position: $cameraPosition, selection: $selectedPinID) {
                 mapContents(usesSidebar: true)
-            }, usesSidebar: true)
+            }, usesSidebar: true, containerSize: containerSize)
         } else {
             decoratedMap(Map(position: $cameraPosition) {
                 mapContents(usesSidebar: false)
-            }, usesSidebar: false)
+            }, usesSidebar: false, containerSize: containerSize)
         }
     }
 
-    private func decoratedMap<V: View>(_ map: V, usesSidebar: Bool) -> some View {
+    private func decoratedMap<V: View>(_ map: V, usesSidebar: Bool, containerSize: CGSize) -> some View {
         map
         .onMapCameraChange { context in
             visibleRegion = context.region
@@ -190,12 +193,30 @@ struct ContentView: View {
         }
         .onChange(of: viewModel.legs) { _, legs in
             // Whenever a route lands, frame the whole ride on screen. Without
-            // this the camera stays wherever the rider left it (or centered on
-            // the destination), and the polyline can sit entirely behind the
-            // planning sheet — "the route doesn't show".
-            if !legs.isEmpty {
-                frameRoute(legs)
-            }
+            // this the camera stays on the device location (user tracking),
+            // and the polyline is nowhere near the map.
+            guard !legs.isEmpty else { return }
+            frameRoute(legs, bottomObscuredFraction: mapBottomObscuredFraction(usesSidebar: usesSidebar))
+        }
+        .onChange(of: containerSize) { _, _ in
+            // Rotation rebuilds the map. A resize of the same map does not
+            // change `legs`, so frame again for the layout that is on screen.
+            guard !viewModel.legs.isEmpty else { return }
+            frameRoute(
+                viewModel.legs,
+                bottomObscuredFraction: mapBottomObscuredFraction(usesSidebar: usesSidebar)
+            )
+        }
+        .onChange(of: sheetDetent) { _, _ in
+            guard !usesSidebar, !viewModel.legs.isEmpty else { return }
+            frameRoute(viewModel.legs, bottomObscuredFraction: mapBottomObscuredFraction(usesSidebar: false))
+        }
+        .onAppear {
+            guard !viewModel.legs.isEmpty else { return }
+            frameRoute(
+                viewModel.legs,
+                bottomObscuredFraction: mapBottomObscuredFraction(usesSidebar: usesSidebar)
+            )
         }
         .onChange(of: selectedPinID) { _, id in
             // Marker taps set the binding. Annotation buttons set it too.
@@ -237,6 +258,24 @@ struct ContentView: View {
             // when a replan starts and ends.
             mapTopChrome
         }
+        .overlay(alignment: .topLeading) {
+            // Always in the tree. Hidden until a route is framed, then the
+            // label is the camera center ("lat,lon").
+            Text(verbatim: framedRoute?.accessibilityLabel ?? "")
+                .font(.system(size: 1))
+                .foregroundStyle(.clear)
+                .frame(width: 8, height: 8)
+                .accessibilityIdentifier(AccessibilityID.routeMapFrame)
+                .accessibilityLabel(framedRoute?.accessibilityLabel ?? "")
+                .accessibilityHidden(framedRoute == nil)
+                .allowsHitTesting(false)
+        }
+    }
+
+    /// Sheet layouts cover the bottom of the map. The sidebar (iPad
+    /// landscape and Mac) does not: the list is the other column.
+    private func mapBottomObscuredFraction(usesSidebar: Bool) -> Double {
+        usesSidebar ? 0 : Double(sheetObscuredFraction)
     }
 
     /// Sidebar pin tap highlights the matching row. Phone and portrait keep
@@ -654,18 +693,20 @@ struct ContentView: View {
         )
     }
 
-    /// Frames the full route in the map's visible (safe) area. The bottom
-    /// safe-area inset applied in `body` keeps the framing clear of the
-    /// planning sheet.
-    private func frameRoute(_ legs: [MKRoute]) {
-        var rect = MKMapRect.null
-        for leg in legs {
-            rect = rect.union(leg.polyline.boundingMapRect)
-        }
-        guard !rect.isNull else { return }
-        let padded = rect.insetBy(dx: -rect.width * 0.15, dy: -rect.height * 0.15)
+    /// Frames the full route in the map's visible area. `.region` replaces
+    /// user tracking, which is what left the camera on the device location
+    /// with no route line. `bottomObscuredFraction` is the planning sheet
+    /// on iPhone and iPad portrait, and 0 when the list is a sidebar.
+    private func frameRoute(_ legs: [MKRoute], bottomObscuredFraction: Double) {
+        let coordinates = legs.flatMap { RouteGeometry.coordinates(of: $0.polyline) }
+        guard let frame = RouteMapFraming.region(
+            containing: coordinates,
+            bottomObscuredFraction: bottomObscuredFraction
+        ) else { return }
+        guard frame.center.isValidLocation else { return }
+        framedRoute = frame
         withAnimation(.easeInOut(duration: 0.6)) {
-            cameraPosition = .rect(padded)
+            cameraPosition = .region(MKCoordinateRegion(center: frame.center, span: frame.span))
         }
     }
 

@@ -110,6 +110,25 @@ final class CoreJourneyUITests: XCTestCase {
         attachScreenshot("Ride highlight description expanded", of: app)
     }
 
+    /// The camera leaves the device location and fits the stub ride. The
+    /// label is the framed center ("lat,lon"). Ontario is north of 42°.
+    func testRouteMapFramesTheStubRide() {
+        let app = launch()
+        planFixedRoute(in: app)
+
+        let marker = app.descendants(matching: .any)["routeMapFrame"]
+        XCTAssertTrue(
+            marker.waitForExistence(timeout: 8),
+            "The map did not publish a framed camera.\n\(diagnosticTree(app))"
+        )
+        let parts = marker.label.split(separator: ",").compactMap { Double(String($0)) }
+        XCTAssertEqual(parts.count, 2, marker.label)
+        XCTAssertGreaterThan(parts[0], 30, "Camera latitude was not the stub ride: \(marker.label)")
+        XCTAssertLessThan(parts[0], 42, "Camera latitude was not the stub ride: \(marker.label)")
+        XCTAssertGreaterThan(parts[1], -84, "Camera longitude was not the stub ride: \(marker.label)")
+        XCTAssertLessThan(parts[1], -80, "Camera longitude was not the stub ride: \(marker.label)")
+    }
+
     func testSelectRecommendedChecksInRangeStopsAndSkipsOnRoute() {
         let app = launch()
         planFixedRoute(in: app)
@@ -1064,7 +1083,8 @@ final class CoreJourneyUITests: XCTestCase {
             "Quick Stop", "Home Fuel", "selectRecommended", "tankRange",
             "leaveLater", "routeStyle", "waypoint.", "noGas", "replan",
             "Plan Ride", "gas station", "Navigate", "Apply", "placeSearch",
-            "rideHighlights", "Ride Highlights", "highlight.", "Tallulah", "Bare Overlook"
+            "rideHighlights", "Ride Highlights", "highlight.", "Tallulah", "Bare Overlook",
+            "routeMapFrame"
         ]
         let highlights = full.split(separator: "\n").filter { line in
             keywords.contains { line.localizedCaseInsensitiveContains($0) }

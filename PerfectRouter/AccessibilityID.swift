@@ -19,6 +19,8 @@ enum AccessibilityID {
     static let applyHotels = "applyHotels"
     static let navigate = "navigate"
     static let rideHighlights = "rideHighlights"
+    /// Camera center after a route is framed, as "latitude,longitude".
+    static let routeMapFrame = "routeMapFrame"
 
     static func searchResult(_ name: String) -> String { "searchResult.\(name)" }
     static func waypoint(_ name: String) -> String { "waypoint.\(name)" }

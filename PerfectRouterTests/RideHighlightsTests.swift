@@ -146,6 +146,95 @@ final class RideHighlightsTests: XCTestCase {
         XCTAssertTrue(missed.isEmpty)
     }
 
+    /// Oklahoma City → downtown Amarillo ends about 15 km short of the ranch.
+    /// The row still appears, with the stored sentence, instead of an empty list.
+    func testCadillacRanchShowsOnOklahomaCityToAmarillo() {
+        let line = [
+            CLLocationCoordinate2D(latitude: 35.4676, longitude: -97.5164),
+            CLLocationCoordinate2D(latitude: 35.2220, longitude: -101.8313),
+        ]
+        let total = RouteGeometry.length(of: line)
+        let found = RoutePlannerViewModel.landmarkHighlights(
+            alongPolylines: [line],
+            totalDistance: total
+        )
+        XCTAssertEqual(found.map(\.name), ["Cadillac Ranch"])
+        XCTAssertEqual(
+            found.first?.placeDescription,
+            PlaceDescriptionReader.cadillacRanchDescription
+        )
+        XCTAssertGreaterThan(found.first?.detourMeters ?? 0, 8_000)
+        XCTAssertLessThanOrEqual(found.first?.detourMeters ?? 21_000, 20_000)
+
+        let picked = RoutePlannerViewModel.selectHighlights(from: found, totalDistance: total)
+        XCTAssertEqual(picked.map(\.name), ["Cadillac Ranch"])
+        XCTAssertEqual(
+            picked.first?.placeDescription,
+            PlaceDescriptionReader.cadillacRanchDescription
+        )
+        XCTAssertLessThan(picked.first?.distanceAlongRoute ?? total, total)
+    }
+
+    /// A MapKit hit projected onto the Amarillo endpoint is still a highlight.
+    /// The real detour is kept. The mile mark moves just inside the end window.
+    func testCadillacRanchAtTheDestinationIsStillSelected() {
+        let total: CLLocationDistance = 392_000
+        let stop = SuggestedStop(
+            name: "The Cadillac Ranch",
+            coordinate: PlaceDescriptionReader.cadillacRanchCoordinate,
+            category: .attraction,
+            distanceAlongRoute: total,
+            detourMeters: 14_700
+        )
+        let picked = RoutePlannerViewModel.selectHighlights(from: [stop], totalDistance: total)
+        XCTAssertEqual(picked.map(\.name), ["The Cadillac Ranch"])
+        XCTAssertEqual(picked.first?.detourMeters ?? 0, 14_700, accuracy: 0.1)
+        XCTAssertLessThan(picked.first?.distanceAlongRoute ?? total, total - 5_000)
+        let described = picked[0].withPlaceDescription(
+            PlaceDescriptionReader.knownPlaceDescription(name: picked[0].name)
+        )
+        XCTAssertEqual(described.placeDescription, PlaceDescriptionReader.cadillacRanchDescription)
+        XCTAssertEqual(described.name, "The Cadillac Ranch")
+    }
+
+    func testCadillacRanchFarFromTheRouteIsNotAHighlight() {
+        let stop = sight("Cadillac Ranch", along: 100_000, detour: 25_000)
+        let picked = RoutePlannerViewModel.selectHighlights(
+            from: [stop], totalDistance: totalDistance
+        )
+        XCTAssertTrue(picked.isEmpty)
+    }
+
+    func testOrdinarySightPastEightKilometersIsStillDropped() {
+        let far = sight("Museum", along: 100_000, detour: 14_000)
+        let picked = RoutePlannerViewModel.selectHighlights(
+            from: [far], totalDistance: totalDistance
+        )
+        XCTAssertTrue(picked.isEmpty)
+    }
+
+    /// Rejecting a description blanks the text. The highlight stays in the list.
+    func testRejectedDescriptionStillListsTheHighlight() {
+        let wrongPlace = "The Big Texan Steak Ranch, world famous for of the free 72oz steak challenge. Historic Route 66 landmark and Texas icon."
+        let slug = SuggestedStop(
+            name: "Slug Bug Ranch",
+            coordinate: CLLocationCoordinate2D(latitude: 35.212, longitude: -101.389),
+            category: .attraction,
+            distanceAlongRoute: 100_000,
+            detourMeters: 200
+        ).withPlaceDescription(wrongPlace)
+        XCTAssertNil(slug.placeDescription)
+        XCTAssertEqual(slug.name, "Slug Bug Ranch")
+
+        let picked = RoutePlannerViewModel.selectHighlights(
+            from: [slug],
+            totalDistance: totalDistance
+        )
+        XCTAssertEqual(picked.map(\.name), ["Slug Bug Ranch"])
+        XCTAssertNil(picked.first?.placeDescription)
+        XCTAssertEqual(picked.first?.id, slug.id)
+    }
+
     func testZeroDistanceRouteYieldsNothing() {
         let picked = RoutePlannerViewModel.selectHighlights(
             from: [sight("Anything", along: 0)], totalDistance: 0
