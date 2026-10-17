@@ -15,6 +15,15 @@ enum AccessibilityID {
     static let leaveLaterToggle = "leaveLaterToggle"
     static let noGasStations = "noGasStations"
     static let navigate = "navigate"
+    static let openInAppleMaps = "openInAppleMaps"
+    static let plannedNavigation = "plannedNavigation"
+    static let nextTurnArrow = "nextTurnArrow"
+    static let nextTurnDistance = "nextTurnDistance"
+    static let nextTurnStreet = "nextTurnStreet"
+    static let nextFuelDistance = "nextFuelDistance"
+    static let backToMyRoute = "backToMyRoute"
+    static let rerouteFromHere = "rerouteFromHere"
+    static let endNavigation = "endNavigation"
     static let rideHighlights = "rideHighlights"
 
     static func searchResult(_ name: String) -> String { "searchResult.\(name)" }
