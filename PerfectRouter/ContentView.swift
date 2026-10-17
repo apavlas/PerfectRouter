@@ -359,6 +359,7 @@ struct ContentView: View {
                                 .foregroundStyle(.white)
                         }
                     }
+                    .tag(stop.id)
                 }
             }
 
