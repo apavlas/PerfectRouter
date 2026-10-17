@@ -434,6 +434,45 @@ final class PlaceDescriptionTests: XCTestCase {
         XCTAssertEqual(picked[0].id, stop.id)
     }
 
+    func testDescriptionThatOnlyRestatesNameAndCityIsDropped() {
+        XCTAssertNil(PlaceDescriptionDisplay.text(for: "Filling Station, Amarillo", name: "Filling Station"))
+        XCTAssertNil(PlaceDescriptionDisplay.text(
+            for: "The Filling Station El Reno, Oklahoma, El Reno.",
+            name: "The Filling Station"
+        ))
+    }
+
+    func testRestatedNameAndCityIsStrippedAndRealTextKept() {
+        let real = "The restored 1930s gas station now serves as a Route 66 visitor center."
+        XCTAssertEqual(
+            PlaceDescriptionDisplay.text(
+                for: "The Filling Station El Reno, Oklahoma, El Reno. \(real)",
+                name: "The Filling Station"
+            ),
+            real
+        )
+        let stop = SuggestedStop(
+            name: "The Filling Station",
+            coordinate: CLLocationCoordinate2D(latitude: 35.53, longitude: -97.95),
+            category: .attraction,
+            distanceAlongRoute: 100_000,
+            detourMeters: 100
+        ).withPlaceDescription("The Filling Station, El Reno. \(real)")
+        XCTAssertEqual(stop.placeDescription, real)
+    }
+
+    func testNormalDescriptionIsUnchangedByStripping() {
+        let gorge = "A two-mile-long canyon with waterfalls and a suspension bridge."
+        XCTAssertEqual(PlaceDescriptionDisplay.text(for: gorge, name: "Tallulah Gorge"), gorge)
+        XCTAssertEqual(
+            PlaceDescriptionDisplay.text(
+                for: PlaceDescriptionReader.cadillacRanchDescription,
+                name: "Cadillac Ranch"
+            ),
+            PlaceDescriptionReader.cadillacRanchDescription
+        )
+    }
+
     private func placeQuery(url: String) -> PlaceDescriptionQuery {
         PlaceDescriptionQuery(
             id: UUID(),
