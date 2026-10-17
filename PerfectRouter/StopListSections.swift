@@ -308,7 +308,7 @@ struct WaypointsSection: View {
     @ViewBuilder
     private func waypointRow(index: Int, waypoint: Waypoint) -> some View {
         let pastRange = viewModel.waypointIsBeyondRemainingRange(at: index)
-        let dayTitle = viewModel.rideDayTitle(at: index)
+        let dayTitle = FeatureFlags.hotelsAlongRoute ? viewModel.rideDayTitle(at: index) : nil
         Label {
             if let caption = viewModel.waypointRidingCaption(at: index) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -339,7 +339,7 @@ struct WaypointsSection: View {
                 waypointName(waypoint)
             }
         } icon: {
-            Image(systemName: waypoint.isOvernight ? "bed.double.fill" : "mappin.circle.fill")
+            Image(systemName: FeatureFlags.hotelsAlongRoute && waypoint.isOvernight ? "bed.double.fill" : "mappin.circle.fill")
                 .accessibilityHidden(true)
         }
         .id(waypoint.id)
@@ -360,7 +360,7 @@ struct WaypointsSection: View {
 
     private func waypointAccessibilityLabel(index: Int, waypoint: Waypoint) -> String {
         var parts: [String] = []
-        if let day = viewModel.rideDayTitle(at: index) {
+        if FeatureFlags.hotelsAlongRoute, let day = viewModel.rideDayTitle(at: index) {
             parts.append(day)
         }
         parts.append(waypoint.name)
