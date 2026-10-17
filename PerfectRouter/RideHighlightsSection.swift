@@ -15,7 +15,7 @@ struct RideHighlightsSection: View {
             ForEach(viewModel.rideHighlights) { stop in
                 PlaceDescriptionCard(
                     name: stop.name,
-                    placeDescription: PlaceDescriptionDisplay.rowText(for: stop.placeDescription),
+                    placeDescription: PlaceDescriptionDisplay.rowText(for: stop.placeDescription, name: stop.name),
                     detail: detailText(for: stop),
                     showsPastRange: viewModel.isBeyondRemainingRange(
                         distanceAlongRoute: stop.distanceAlongRoute
@@ -39,7 +39,7 @@ struct RideHighlightsSection: View {
     }
 
     private func present(_ stop: SuggestedStop) {
-        guard let text = PlaceDescriptionDisplay.text(for: stop.placeDescription) else { return }
+        guard let text = PlaceDescriptionDisplay.text(for: stop.placeDescription, name: stop.name) else { return }
         openDescription = OpenPlaceDescription(
             id: stop.id,
             name: stop.name,

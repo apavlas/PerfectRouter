@@ -18,9 +18,12 @@ enum PlaceDescriptionDisplay {
     /// The description the row and the sheet share: normalized, then cut
     /// after the second sentence. "St." and "Mt." are not endings. Blank
     /// input and a shorter source stay nil or whole.
-    static func text(for description: String?) -> String? {
+    static func text(for description: String?, name: String? = nil) -> String? {
         guard let text = PlaceDescriptionReader.normalize(description) else { return nil }
-        guard let prose = PlaceDescriptionReader.droppingSocialEngagementSentences(in: text) else {
+        guard let social = PlaceDescriptionReader.droppingSocialEngagementSentences(in: text) else {
+            return nil
+        }
+        guard let prose = PlaceDescriptionReader.strippingRestatedNameAndLocality(in: social, name: name) else {
             return nil
         }
         if PlaceDescriptionReader.isNameAndLocality(prose) { return nil }
@@ -28,8 +31,8 @@ enum PlaceDescriptionDisplay {
     }
 
     /// Same string as `text(for:)`. The row applies `collapsedLineLimit` on top.
-    static func rowText(for description: String?) -> String? {
-        text(for: description)
+    static func rowText(for description: String?, name: String? = nil) -> String? {
+        text(for: description, name: name)
     }
 }
 
@@ -112,7 +115,8 @@ enum PlaceDescriptionReader {
         if let raw, isOnlyPhoneNumber(raw) { return nil }
         guard let text = normalize(raw) else { return nil }
         if isOnlyPhoneNumber(text) || isBareCategory(text) || isOnlyAddress(text) { return nil }
-        guard let prose = droppingSocialEngagementSentences(in: text) else { return nil }
+        guard let social = droppingSocialEngagementSentences(in: text) else { return nil }
+        guard let prose = strippingRestatedNameAndLocality(in: social, name: name) else { return nil }
         if let name, same(prose, name) { return nil }
         if isNameAndLocality(prose, name: name) { return nil }
         if rejects.contains(where: { candidate in
@@ -180,7 +184,8 @@ enum PlaceDescriptionReader {
     /// three words or only the place name.
     static func acceptedPlaceText(_ raw: String?, name: String?) -> String? {
         guard let text = normalize(raw) else { return nil }
-        guard let prose = droppingSocialEngagementSentences(in: text) else { return nil }
+        guard let social = droppingSocialEngagementSentences(in: text) else { return nil }
+        guard let prose = strippingRestatedNameAndLocality(in: social, name: name) else { return nil }
         if let name, same(prose, name) { return nil }
         if isNameAndLocality(prose, name: name) { return nil }
         let kept = sentences(in: prose).filter { !isPureCallToAction($0) }
@@ -227,6 +232,34 @@ enum PlaceDescriptionReader {
         guard !kept.isEmpty else { return nil }
         if kept.count == parts.count { return text }
         return normalize(kept.joined(separator: " "))
+    }
+
+    /// Drops sentences that only restate the place name and/or its city
+    /// ("The Filling Station El Reno, Oklahoma.") and keeps the real prose
+    /// around them. Nil only when nothing is left after stripping.
+    static func strippingRestatedNameAndLocality(in text: String, name: String?) -> String? {
+        let parts = sentences(in: text)
+        guard !parts.isEmpty else { return nil }
+        let kept = parts.filter { !isRestatedLabel($0, name: name) }
+        guard !kept.isEmpty else { return nil }
+        if kept.count == parts.count { return text }
+        return normalize(kept.joined(separator: " "))
+    }
+
+    private static func isRestatedLabel(_ sentence: String, name: String?) -> Bool {
+        if isNameAndLocality(sentence, name: name) { return true }
+        guard let name else { return false }
+        let nameKey = matchKey(name)
+        guard !nameKey.isEmpty else { return false }
+        let key = " " + matchKey(sentence) + " "
+        guard key.contains(" \(nameKey) ") else { return false }
+        let rest = key.replacingOccurrences(of: " \(nameKey) ", with: " ")
+            .split(whereSeparator: \.isWhitespace)
+            .map(String.init)
+            .filter { $0 != "the" }
+        if rest.isEmpty { return true }
+        guard rest.count <= 6 else { return false }
+        return !rest.contains { proseVerbs.contains($0) || placeLabelFunctionWords.contains($0) }
     }
 
     /// "Cadillac Ranch, Amarillo." is a place label, not a description.
@@ -860,7 +893,7 @@ extension SuggestedStop {
     /// The id stays put so the list row does not jump.
     func withPlaceDescription(_ text: String?) -> SuggestedStop {
         var copy = self
-        copy.placeDescription = PlaceDescriptionDisplay.text(for: text)
+        copy.placeDescription = PlaceDescriptionDisplay.text(for: text, name: name)
         return copy
     }
 
