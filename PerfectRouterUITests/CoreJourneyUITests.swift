@@ -241,8 +241,11 @@ final class CoreJourneyUITests: XCTestCase {
         slider.adjust(toNormalizedSliderPosition: 0.55)
         assertReplanDoesNotClaimTheRoadIsEmpty(in: app)
 
-        _ = reveal("leaveLaterToggle", in: app)
-        let leaveLater = app.switches["leaveLaterToggle"]
+        // The slider is already on screen. Leave later is the next section,
+        // and a tall iPad list does not create that switch until it is
+        // scrolled into view. reveal() goes back to the top and nudges, which
+        // runs out before the row exists.
+        let leaveLater = scrollPlanningListUntilExists("leaveLaterToggle", in: app, maxSwipes: 16)
         XCTAssertTrue(leaveLater.waitForExistence(timeout: 3), diagnosticTree(app))
         scrollUntilHittable(leaveLater, in: app)
         leaveLater.tap()
@@ -973,6 +976,62 @@ final class CoreJourneyUITests: XCTestCase {
             file: file,
             line: line
         )
+    }
+
+    /// Scrolls `planningList` from its current offset until `identifier` exists.
+    /// Swipes down first (Leave later sits below the tank slider), then back
+    /// up in case a drag passed the row. The count is bounded.
+    private func scrollPlanningListUntilExists(
+        _ identifier: String,
+        in app: XCUIApplication,
+        maxSwipes: Int
+    ) -> XCUIElement {
+        expandPlanningSheet(app)
+        if let found = control(identifier, in: app) { return found }
+        for pass in 0..<2 {
+            let up = pass == 0
+            for _ in 0..<maxSwipes {
+                dragPlanningList(in: app, up: up)
+                if let found = waitForControl(identifier, in: app, timeout: 0.6) { return found }
+            }
+        }
+        return identified(identifier, in: app)
+    }
+
+    private func control(_ identifier: String, in app: XCUIApplication) -> XCUIElement? {
+        let any = identified(identifier, in: app)
+        if any.exists { return any }
+        let toggle = app.switches[identifier]
+        if toggle.exists { return toggle }
+        return nil
+    }
+
+    private func waitForControl(
+        _ identifier: String,
+        in app: XCUIApplication,
+        timeout: TimeInterval
+    ) -> XCUIElement? {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if let found = control(identifier, in: app) { return found }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        return control(identifier, in: app)
+    }
+
+    /// A planning-list drag of about a third of the sheet. Slow, and held at
+    /// the end, so the lazy row is created instead of flung past the poll.
+    private func dragPlanningList(in app: XCUIApplication, up: Bool) {
+        let list = planningList(in: app)
+        guard list.elementType != .application, list.exists, list.frame.width > 40, list.frame.height > 40 else {
+            swipePlanningList(in: app, up: up)
+            return
+        }
+        let startY: CGFloat = up ? 0.78 : 0.32
+        let endY: CGFloat = up ? 0.42 : 0.68
+        let start = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: startY))
+        let end = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: endY))
+        start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.15)
     }
 
     /// Brings `id` on screen. Does not fail; callers assert and attach the tree.
