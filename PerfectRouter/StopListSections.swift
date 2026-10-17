@@ -462,7 +462,7 @@ struct SuggestionsSection: View {
     ) -> some View {
         let card = PlaceDescriptionCard(
             name: title,
-            placeDescription: PlaceDescriptionDisplay.rowText(for: stop.placeDescription),
+            placeDescription: PlaceDescriptionDisplay.rowText(for: stop.placeDescription, name: stop.name),
             detail: caption,
             showsPastRange: pastRange,
             systemImage: stop.category.systemImage,
@@ -478,7 +478,7 @@ struct SuggestionsSection: View {
     }
 
     private func present(_ stop: SuggestedStop, title: String) {
-        guard let text = PlaceDescriptionDisplay.text(for: stop.placeDescription) else { return }
+        guard let text = PlaceDescriptionDisplay.text(for: stop.placeDescription, name: stop.name) else { return }
         openDescription = OpenPlaceDescription(id: stop.id, name: title, text: text, textIdentifier: "")
     }
 
