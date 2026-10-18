@@ -13,6 +13,19 @@ struct HotelsAlongRouteSection: View {
 
     private var hotelSection: some View {
         Section("Hotels") {
+            // Above the rows that a check updates, so a focus abort further
+            // down still leaves evening-1 state in the accessibility tree.
+            Text(verbatim: viewModel.hotelLodgingProbe)
+                .font(.system(size: 1))
+                .foregroundStyle(.clear)
+                .frame(maxWidth: .infinity, minHeight: 1, maxHeight: 1)
+                .accessibilityIdentifier(AccessibilityID.hotelLodgingState)
+                .accessibilityLabel(viewModel.hotelLodgingProbe)
+                .accessibilityValue(viewModel.hotelLodgingProbe)
+                .focusable()
+                .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+                .listRowSeparator(.hidden)
+
             // A date picker in this list is a focus container iPad aborts on,
             // which drops every hotel row after it. The stepper is one control.
             Stepper(value: hotelTargetMinutesBinding, in: 15...((24 * 60) - 15), step: 15) {
@@ -50,30 +63,19 @@ struct HotelsAlongRouteSection: View {
                         .font(.subheadline.weight(.semibold))
                         .accessibilityIdentifier("hotelDay.\(evening.dayNumber)")
                         .focusable()
-                    if evening.options.isEmpty, let message = evening.emptyMessage {
-                        Text(message)
-                            .foregroundStyle(.secondary)
-                            .accessibilityIdentifier(AccessibilityID.noLodging)
-                            .accessibilityLabel(message)
-                            .focusable()
-                    } else if !evening.options.isEmpty {
-                        ForEach(evening.options) { stop in
-                            HotelCheckRow(viewModel: viewModel, stop: stop, evening: evening)
-                            HotelLinkRow(stop: stop)
-                        }
-                    } else {
-                        FocusPlaceholderRow()
-                    }
+                    // One list row for the evening's options. Checking a hotel
+                    // updates that row in place. An if/else ForEach here is a
+                    // container the iPad list drops, leaving the day header
+                    // and a blank gap where the hotels were.
+                    HotelEveningOptions(viewModel: viewModel, evening: evening)
                 }
             } else {
                 FocusPlaceholderRow()
             }
 
-            if !viewModel.bufferedHotelStops.isEmpty {
-                BufferedHotelApplyRow(viewModel: viewModel)
-            } else {
-                FocusPlaceholderRow()
-            }
+            // Same row checked or not. Swapping in the Apply button on the
+            // tap added a list container and the sidebar dropped the hotels.
+            HotelApplySlot(viewModel: viewModel)
         }
     }
 
@@ -86,50 +88,49 @@ struct HotelsAlongRouteSection: View {
 
 }
 
+/// One evening's hotels, or the empty-window line. A single list row so a
+/// check does not insert or remove cells under the day header.
+private struct HotelEveningOptions: View {
+    let viewModel: RoutePlannerViewModel
+    let evening: HotelEveningPlan
+
+    var body: some View {
+        if evening.options.isEmpty, let message = evening.emptyMessage {
+            Text(message)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier(AccessibilityID.noLodging)
+                .accessibilityLabel(message)
+                .focusable()
+        } else if !evening.options.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(evening.options) { stop in
+                    HotelCheckRow(viewModel: viewModel, stop: stop, evening: evening)
+                    HotelLinkRow(stop: stop)
+                }
+            }
+        } else {
+            FocusPlaceholderRow()
+        }
+    }
+}
+
 /// One hotel, checked or not. Its body reads the buffer, so the identifier
 /// flips to `.checked` on the tap instead of staying on the first render.
 /// The title text carries the identifier, same as a fuel row: a list cell
 /// exposes that text and drops an identifier that lives only on the button.
 private struct HotelCheckRow: View {
-    @Environment(\.planningUsesSidebar) private var planningUsesSidebar
-    /// A split-view list can deliver one finger tap twice. The second
-    /// delivery would clear the check the first one just set. A later tap
-    /// still unchecks. The phone sheet does not double-deliver.
-    @State private var lastToggleUptime: TimeInterval = 0
-
     let viewModel: RoutePlannerViewModel
     let stop: SuggestedStop
     let evening: HotelEveningPlan
 
-    private static let duplicateTapWindow: TimeInterval = 0.45
-
     var body: some View {
-        styledButton
-            .sidebarStopHighlight(selected: viewModel.highlightedStopID == stop.id)
-    }
-
-    /// Borderless is the style a sidebar list activates once. Plain is what
-    /// the phone sheet already exposes to XCUITest.
-    @ViewBuilder
-    private var styledButton: some View {
-        if planningUsesSidebar {
-            checkButton.buttonStyle(.borderless)
-        } else {
-            checkButton.buttonStyle(.plain)
-        }
-    }
-
-    private var checkButton: some View {
         let onRoute = viewModel.isStopOnRoute(stop)
         let checked = viewModel.isHotelBuffered(stop)
         let caption = viewModel.hotelCaption(for: stop, in: evening)
         let identifier = AccessibilityID.hotelStop(stop.name, checked: checked)
         let description = PlaceDescriptionDisplay.rowText(for: stop.placeDescription)
-        return Button {
+        Button {
             guard !onRoute else { return }
-            let now = ProcessInfo.processInfo.systemUptime
-            guard now - lastToggleUptime > Self.duplicateTapWindow else { return }
-            lastToggleUptime = now
             viewModel.toggleBufferedHotelStop(stop, onEvening: evening.dayNumber)
         } label: {
             HStack(alignment: .top, spacing: 8) {
@@ -162,14 +163,15 @@ private struct HotelCheckRow: View {
                 }
             }
         }
+        .buttonStyle(.plain)
         .disabled(onRoute)
         .accessibilityIdentifier(identifier)
+        .sidebarStopHighlight(selected: viewModel.highlightedStopID == stop.id)
     }
 }
 
-/// Call and Website stay on their own row so the check button is the only
-/// control in the hotel row. Absent links stay a one-point placeholder so
-/// the list's focus children do not drop to zero.
+/// Call and Website. Absent links stay a one-point placeholder so the
+/// evening row's focus children do not drop to zero.
 private struct HotelLinkRow: View {
     let stop: SuggestedStop
 
@@ -200,11 +202,15 @@ private struct HotelLinkRow: View {
 }
 
 /// Checked hotels wait here until the rider applies them in one route update.
-struct BufferedHotelApplyRow: View {
+/// The buttons stay in the row when nothing is checked. Replacing this row
+/// with a placeholder on the tap is what left a blank gap under Day 1.
+struct HotelApplySlot: View {
     let viewModel: RoutePlannerViewModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let empty = viewModel.bufferedHotelStops.isEmpty
+        VStack(alignment: .leading, spacing: empty ? 0 : 8) {
+            FocusPlaceholderRow()
             Button {
                 viewModel.applyBufferedHotelStops()
             } label: {
@@ -213,10 +219,18 @@ struct BufferedHotelApplyRow: View {
             }
             .buttonStyle(.borderedProminent)
             .accessibilityIdentifier(AccessibilityID.applyHotels)
+            .disabled(empty)
+            .accessibilityHidden(empty)
+            .opacity(empty ? 0 : 1)
+            .frame(maxHeight: empty ? CGFloat(0) : nil)
 
             Button("Clear selection") {
                 viewModel.clearBufferedHotelStops()
             }
+            .disabled(empty)
+            .accessibilityHidden(empty)
+            .opacity(empty ? 0 : 1)
+            .frame(maxHeight: empty ? CGFloat(0) : nil)
         }
     }
 }

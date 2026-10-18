@@ -41,8 +41,13 @@ final class CoreJourneyUITests: XCTestCase {
         XCTAssertTrue(first.exists, diagnosticTree(app))
         scrollUntilHittable(first, in: app)
         first.tap()
+        RunLoop.current.run(until: Date().addingTimeInterval(2))
+        attachPlanningDiagnostics("hotelTapPlus2s", of: app)
 
         let firstChecked = revealPlanningRow("hotelStop.Quality Inn.checked", in: app)
+        if !firstChecked.exists {
+            attachPlanningDiagnostics("hotelCheckedMissing", of: app)
+        }
         XCTAssertTrue(firstChecked.exists, diagnosticTree(app))
 
         let second = revealPlanningRow("hotelStop.Holiday Inn Express.unchecked", in: app)
@@ -1205,7 +1210,7 @@ final class CoreJourneyUITests: XCTestCase {
             "Plan Ride", "gas station", "Navigate", "Apply", "placeSearch",
             "rideHighlights", "Ride Highlights", "highlight.", "Tallulah", "Bare Overlook",
             "routeMapFrame",
-            "noLodging", "hotelStop", "Quality Inn", "Holiday Inn", "No lodging"
+            "noLodging", "hotelStop", "hotelLodgingState", "hotelDay", "Quality Inn", "Holiday Inn", "No lodging"
         ]
         let highlights = full.split(separator: "\n").filter { line in
             keywords.contains { line.localizedCaseInsensitiveContains($0) }
@@ -1254,6 +1259,15 @@ final class CoreJourneyUITests: XCTestCase {
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+
+    /// Screenshot and the full accessibility tree, kept in the xcresult.
+    private func attachPlanningDiagnostics(_ name: String, of app: XCUIApplication) {
+        attachScreenshot(name, of: app)
+        let tree = XCTAttachment(string: app.debugDescription)
+        tree.name = "\(name)-tree"
+        tree.lifetime = .keepAlways
+        add(tree)
     }
 
     private func dismissKeyboard(_ app: XCUIApplication) {

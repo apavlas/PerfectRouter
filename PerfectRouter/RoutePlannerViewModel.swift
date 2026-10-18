@@ -8,6 +8,7 @@ import SwiftUI
 /// Console log for gas planning. Same subsystem and category as the
 /// corridor search so one Xcode filter shows the whole path.
 private let gasLog = Logger(subsystem: "com.apavlas.PerfectRouter", category: "gas")
+private let hotelLog = Logger(subsystem: "com.apavlas.PerfectRouter", category: "hotels")
 
 /// One scored option inside a Twisty leg: either a single `MKRoute` alternate
 /// or several routes stitched through an offset corridor.
@@ -2123,6 +2124,18 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             bufferedHotelStops.append(stop)
         }
         checkedHotelByDay = checked
+        hotelLog.info("\(self.hotelLodgingProbe, privacy: .public)")
+    }
+
+    /// Evening 1, for the planning list and the test log. Checked key, how
+    /// many options are still published, and whether a lookup is in flight.
+    var hotelLodgingProbe: String {
+        let evening = hotelEvenings.first { $0.dayNumber == 1 } ?? hotelEvenings.first
+        let day = evening?.dayNumber ?? 0
+        let names = evening?.options.map(\.name).joined(separator: "|") ?? ""
+        let checkedName = evening?.options.first { isHotelBuffered($0) }?.name ?? "none"
+        let key = checkedHotelByDay[day] ?? "none"
+        return "day=\(day) options=\(evening?.options.count ?? 0) names=\(names) checked=\(checkedName) key=\(key) loading=\(isSearchingHotels) failed=\(hotelLoadFailed) buffered=\(bufferedHotelStops.count)"
     }
 
     func isHotelBuffered(_ stop: SuggestedStop) -> Bool {

@@ -16,6 +16,8 @@ enum AccessibilityID {
     static let noGasStations = "noGasStations"
     static let noLodging = "noLodging"
     static let hotelTarget = "hotelTarget"
+    /// One line of evening-1 lodging state for UI-test attachments.
+    static let hotelLodgingState = "hotelLodgingState"
     static let applyHotels = "applyHotels"
     static let navigate = "navigate"
     static let rideHighlights = "rideHighlights"
