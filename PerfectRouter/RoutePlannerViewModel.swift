@@ -2096,14 +2096,27 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         toggleBufferedHotelStop(stop, onEvening: day)
     }
 
+    /// The list row calls this before the toggle, including when the row
+    /// bails out. A missing line means the button action never ran.
+    func noteHotelRowTap(name: String, day: Int, onRoute: Bool) {
+        hotelLog.info("row name=\(name, privacy: .public) day=\(day, privacy: .public) onRoute=\(onRoute, privacy: .public) \(self.hotelLodgingProbe, privacy: .public)")
+    }
+
     /// Radio for one evening: a second hotel replaces the first. Tapping the
     /// hotel already checked for that evening clears it, the same gesture as
     /// a fuel stop. Other evenings stay.
     func toggleBufferedHotelStop(_ stop: SuggestedStop, onEvening dayNumber: Int) {
-        guard stop.coordinate.isValidLocation, stop.category == .lodging else { return }
-        guard dayNumber > 0 else { return }
         let key = Self.coordinateKey(stop.coordinate)
+        guard stop.coordinate.isValidLocation, stop.category == .lodging else {
+            hotelLog.info("return reason=not-lodging name=\(stop.name, privacy: .public) day=\(dayNumber, privacy: .public)")
+            return
+        }
+        guard dayNumber > 0 else {
+            hotelLog.info("return reason=day name=\(stop.name, privacy: .public) day=\(dayNumber, privacy: .public)")
+            return
+        }
         guard !isStopOnRoute(stop) else {
+            hotelLog.info("return reason=onRoute name=\(stop.name, privacy: .public) day=\(dayNumber, privacy: .public) key=\(key, privacy: .public)")
             bufferedHotelStops.removeAll { Self.sameCoordinate($0.coordinate, stop.coordinate) }
             let days = checkedHotelByDay.filter { $0.value == key }.map(\.key)
             for day in days {

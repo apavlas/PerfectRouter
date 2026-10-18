@@ -39,8 +39,8 @@ final class CoreJourneyUITests: XCTestCase {
 
         let first = revealPlanningRow("hotelStop.Quality Inn.unchecked", in: app)
         XCTAssertTrue(first.exists, diagnosticTree(app))
-        scrollUntilHittable(first, in: app)
-        first.tap()
+        scrollUntilInsidePlanningList(first, in: app)
+        tapHotelRadio(first)
         RunLoop.current.run(until: Date().addingTimeInterval(2))
         attachPlanningDiagnostics("hotelTapPlus2s", of: app)
 
@@ -52,8 +52,8 @@ final class CoreJourneyUITests: XCTestCase {
 
         let second = revealPlanningRow("hotelStop.Holiday Inn Express.unchecked", in: app)
         XCTAssertTrue(second.exists, diagnosticTree(app))
-        scrollUntilHittable(second, in: app)
-        second.tap()
+        scrollUntilInsidePlanningList(second, in: app)
+        tapHotelRadio(second)
 
         XCTAssertTrue(
             revealPlanningRow("hotelStop.Holiday Inn Express.checked", in: app).exists,
@@ -1028,20 +1028,59 @@ final class CoreJourneyUITests: XCTestCase {
 
     /// Brings a planning-list row into the accessibility tree.
     ///
-    /// A check replaces the identifier on the row that was just tapped. Give
-    /// that update time at the current offset. Scrolling away first drops the
-    /// iPad cell before `.checked` is published. The search then goes down
-    /// and back up from here, because a drag can pass lodging, and only then
-    /// from the top. `reveal`'s one-direction nudge is the last fallback.
+    /// Scrolls `planningList` only. Dragging the sheet grabber on iPad resizes
+    /// the floating sheet and the hotel rows leave the list. A check replaces
+    /// the identifier on the row that was just tapped, so this waits at the
+    /// current offset before any drag.
     private func revealPlanningRow(_ id: String, in app: XCUIApplication) -> XCUIElement {
-        expandPlanningSheet(app)
         if let found = waitForControl(id, in: app, timeout: 1.5) { return found }
-        let nearby = scrollPlanningListUntilExists(id, in: app, maxSwipes: 12)
+        let nearby = scrollPlanningListUntilExists(id, in: app, maxSwipes: 12, expandSheet: false)
         if nearby.exists { return nearby }
-        scrollToTop(app)
-        let fromTop = scrollPlanningListUntilExists(id, in: app, maxSwipes: 16)
+        scrollToTop(app, expandSheet: false)
+        let fromTop = scrollPlanningListUntilExists(id, in: app, maxSwipes: 16, expandSheet: false)
         if fromTop.exists { return fromTop }
-        return reveal(id, in: app)
+        return reveal(id, in: app, expandSheet: false)
+    }
+
+    /// The row's frame sits fully inside the list, not merely overlapping it.
+    /// A hotel clipped on the iPad sheet's bottom edge reports hittable while
+    /// the tap lands outside the list.
+    private func scrollUntilInsidePlanningList(
+        _ element: XCUIElement,
+        in app: XCUIApplication
+    ) {
+        var nudges = 0
+        while nudges < 10 {
+            let list = planningList(in: app)
+            if element.exists, element.isHittable, rowFrame(element, isInside: list) {
+                return
+            }
+            let listFrame = list.frame
+            let frame = element.exists ? element.frame : .zero
+            let clippedBelow = frame.maxY > listFrame.maxY - 12
+            let clippedAbove = frame.minY < listFrame.minY + 12
+            let up = !element.exists || frame.height < 2 || clippedBelow || (!clippedAbove && frame.midY > listFrame.midY)
+            nudgePlanningList(in: app, up: up)
+            nudges += 1
+        }
+        let list = planningList(in: app)
+        XCTAssertTrue(
+            element.exists && element.isHittable && rowFrame(element, isInside: list),
+            "Row was clipped by the planning list.\nrow=\(element.frame) list=\(list.frame)\n\(diagnosticTree(app))"
+        )
+    }
+
+    private func rowFrame(_ element: XCUIElement, isInside list: XCUIElement) -> Bool {
+        guard element.exists, list.exists, element.frame.width > 2, element.frame.height > 2 else { return false }
+        guard list.frame.width > 40, list.frame.height > 40 else { return false }
+        return list.frame.insetBy(dx: 4, dy: 12).contains(element.frame)
+    }
+
+    /// The circle sits on the trailing edge of the hotel button. The button's
+    /// center is the title, and on a short iPad sheet that point can fall on
+    /// the clip even when the circle is on screen.
+    private func tapHotelRadio(_ row: XCUIElement) {
+        row.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.26)).tap()
     }
 
     /// Scrolls `planningList` from its current offset until `identifier` exists.
@@ -1050,9 +1089,10 @@ final class CoreJourneyUITests: XCTestCase {
     private func scrollPlanningListUntilExists(
         _ identifier: String,
         in app: XCUIApplication,
-        maxSwipes: Int
+        maxSwipes: Int,
+        expandSheet: Bool = true
     ) -> XCUIElement {
-        expandPlanningSheet(app)
+        if expandSheet { expandPlanningSheet(app) }
         if let found = control(identifier, in: app) { return found }
         for pass in 0..<2 {
             let up = pass == 0
@@ -1101,13 +1141,13 @@ final class CoreJourneyUITests: XCTestCase {
     }
 
     /// Brings `id` on screen. Does not fail; callers assert and attach the tree.
-    private func reveal(_ id: String, in app: XCUIApplication, timeout: TimeInterval = 20) -> XCUIElement {
-        revealEither([id], in: app, timeout: timeout)
+    private func reveal(_ id: String, in app: XCUIApplication, timeout: TimeInterval = 20, expandSheet: Bool = true) -> XCUIElement {
+        revealEither([id], in: app, timeout: timeout, expandSheet: expandSheet)
     }
 
-    private func revealEither(_ ids: [String], in app: XCUIApplication, timeout: TimeInterval) -> XCUIElement {
-        expandPlanningSheet(app)
-        scrollToTop(app)
+    private func revealEither(_ ids: [String], in app: XCUIApplication, timeout: TimeInterval, expandSheet: Bool = true) -> XCUIElement {
+        if expandSheet { expandPlanningSheet(app) }
+        scrollToTop(app, expandSheet: expandSheet)
         let deadline = Date().addingTimeInterval(timeout)
         var down = 0
         while Date() < deadline {
@@ -1118,7 +1158,7 @@ final class CoreJourneyUITests: XCTestCase {
             // A half-list swipe jumps over the highlight rows. They are short,
             // and the poll only sees the list between drags.
             if down >= 40 {
-                scrollToTop(app)
+                scrollToTop(app, expandSheet: expandSheet)
                 down = 0
             } else {
                 nudgePlanningList(in: app, up: true)
@@ -1224,8 +1264,8 @@ final class CoreJourneyUITests: XCTestCase {
         """
     }
 
-    private func scrollToTop(_ app: XCUIApplication) {
-        expandPlanningSheet(app)
+    private func scrollToTop(_ app: XCUIApplication, expandSheet: Bool = true) {
+        if expandSheet { expandPlanningSheet(app) }
         for _ in 0..<12 {
             if let field = placeSearchField(in: app),
                field.frame.height > 1,
@@ -1234,7 +1274,7 @@ final class CoreJourneyUITests: XCTestCase {
             }
             swipePlanningList(in: app, up: false)
         }
-        expandPlanningSheet(app)
+        if expandSheet { expandPlanningSheet(app) }
     }
 
     /// Drags the sheet grabber to the large detent. A half-height sheet only

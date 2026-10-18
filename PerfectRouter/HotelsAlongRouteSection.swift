@@ -130,6 +130,7 @@ private struct HotelCheckRow: View {
         let identifier = AccessibilityID.hotelStop(stop.name, checked: checked)
         let description = PlaceDescriptionDisplay.rowText(for: stop.placeDescription)
         Button {
+            viewModel.noteHotelRowTap(name: stop.name, day: evening.dayNumber, onRoute: onRoute)
             guard !onRoute else { return }
             viewModel.toggleBufferedHotelStop(stop, onEvening: evening.dayNumber)
         } label: {
