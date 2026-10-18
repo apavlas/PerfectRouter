@@ -733,7 +733,7 @@ struct BufferedGasApplyRow: View {
             Button {
                 viewModel.applyBufferedGasStops()
             } label: {
-                Label("Apply \(viewModel.bufferedGasStops.count) stops", systemImage: "checkmark.circle.fill")
+                Label(RoutePlannerViewModel.applyStopsLabel(count: viewModel.bufferedGasStops.count), systemImage: "checkmark.circle.fill")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)

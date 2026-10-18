@@ -371,6 +371,14 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         }
     }
 
+    /// Buffered gas and hotel Apply buttons. One stop is singular.
+    static func applyStopsLabel(count: Int) -> String {
+        switch count {
+        case 1: return "Apply 1 stop"
+        default: return "Apply \(count) stops"
+        }
+    }
+
     /// Pin tap in the sidebar layout. Scrolls the row into view and paints it.
     /// Does not move the camera — the pin is already on screen.
     func highlightListedStop(id: UUID) {

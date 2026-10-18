@@ -215,7 +215,7 @@ struct HotelApplySlot: View {
             Button {
                 viewModel.applyBufferedHotelStops()
             } label: {
-                Label("Apply \(viewModel.bufferedHotelStops.count) stops", systemImage: "checkmark.circle.fill")
+                Label(RoutePlannerViewModel.applyStopsLabel(count: viewModel.bufferedHotelStops.count), systemImage: "checkmark.circle.fill")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)

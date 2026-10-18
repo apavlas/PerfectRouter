@@ -129,6 +129,24 @@ final class HotelAlongRouteTests: XCTestCase {
         XCTAssertEqual(days[1].ridingSeconds, 10 * 3_600, accuracy: 1)
     }
 
+    func testArrivalDayIsExcludedFromLodgingEvenings() {
+        // 700 miles at 50 mph is 14 hours from 8 AM. 6 PM is mile 500, so
+        // day 1 is an overnight. The next morning covers the last 200 miles
+        // by noon and ends at the destination, so day 2 is not a lodging
+        // evening and does not get the empty-window row.
+        let ride = [leg(miles: 700, hours: 14)]
+        let days = evenings(legs: ride, departureHour: 8)
+        XCTAssertEqual(days.map(\.dayNumber), [1])
+        XCTAssertEqual(days[0].targetDistance, 500 * mile, accuracy: 1)
+        XCTAssertFalse(days.contains { $0.dayNumber == 2 })
+    }
+
+    func testApplyStopsLabelSingularizesOne() {
+        XCTAssertEqual(RoutePlannerViewModel.applyStopsLabel(count: 0), "Apply 0 stops")
+        XCTAssertEqual(RoutePlannerViewModel.applyStopsLabel(count: 1), "Apply 1 stop")
+        XCTAssertEqual(RoutePlannerViewModel.applyStopsLabel(count: 2), "Apply 2 stops")
+    }
+
     func testAppliedOvernightStartsTheNextSixPMFromThatHotel() {
         let hotel = 400 * mile
         let days = evenings(overnights: [hotel], departureHour: 8)
