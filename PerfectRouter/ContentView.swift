@@ -385,7 +385,7 @@ struct ContentView: View {
             }
             }
 
-            if !hotelPins.isEmpty {
+            if FeatureFlags.hotelsAlongRoute, !hotelPins.isEmpty {
                 ForEach(hotelPins) { stop in
                     Annotation(stop.name, coordinate: stop.coordinate) {
                         Button {
@@ -799,7 +799,7 @@ struct ContentView: View {
 
     private func markerIcon(for index: Int) -> String {
         if index == 0 { return "flag.fill" }
-        if viewModel.waypoints[index].isOvernight { return "bed.double.fill" }
+        if FeatureFlags.hotelsAlongRoute, viewModel.waypoints[index].isOvernight { return "bed.double.fill" }
         if index == viewModel.waypoints.count - 1 { return "flag.checkered" }
         return "mappin"
     }

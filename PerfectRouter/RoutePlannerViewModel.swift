@@ -615,7 +615,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     /// One lodging lookup for the line already drawn. A newer route or a
     /// newer target time bumps `hotelGeneration` and this run publishes nothing.
+    /// Build 9 leaves the feature off, so a finished route does not search.
     private func scheduleHotelSearch() {
+        guard FeatureFlags.hotelsAlongRoute else { return }
         hotelGeneration += 1
         let generation = hotelGeneration
         hotelTask?.cancel()
@@ -626,6 +628,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// route first; one widen to fifteen when that window is empty. UI tests
     /// publish nothing so the stub ride does not call MapKit.
     private func refreshHotels(generation: Int) async {
+        guard FeatureFlags.hotelsAlongRoute else { return }
         guard generation == hotelGeneration, !Task.isCancelled else { return }
         if UITestStubLaunch.isEnabled {
             hotelEvenings = []
@@ -1047,10 +1050,11 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// the rider changes it. The window stays an hour either side.
     var hotelTargetMinutes = HotelAlongRoute.defaultTargetMinutes
 
-    /// The hotels section is on the sheet when there is something to show:
-    /// a search, a result, a checked hotel, or a failed lookup.
+    /// The hotels section is on the sheet when the feature is on and there
+    /// is something to show: a search, a result, a checked hotel, or a failed lookup.
     var showsHotelSection: Bool {
-        isSearchingHotels || hotelLoadFailed || !hotelEvenings.isEmpty || !bufferedHotelStops.isEmpty
+        guard FeatureFlags.hotelsAlongRoute else { return false }
+        return isSearchingHotels || hotelLoadFailed || !hotelEvenings.isEmpty || !bufferedHotelStops.isEmpty
     }
 
     /// Recommended stops, inline gap warnings, and past-range stations, in

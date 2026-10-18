@@ -6,6 +6,12 @@ struct HotelsAlongRouteSection: View {
     let viewModel: RoutePlannerViewModel
 
     var body: some View {
+        if FeatureFlags.hotelsAlongRoute {
+            hotelSection
+        }
+    }
+
+    private var hotelSection: some View {
         Section("Hotels") {
             DatePicker(
                 "Arrive around",
