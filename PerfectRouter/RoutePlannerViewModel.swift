@@ -2096,9 +2096,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     }
 
     /// Radio for one evening: a second hotel replaces the first. Tapping the
-    /// hotel already checked for that evening leaves it checked. A list row
-    /// can deliver the same tap twice, and the second delivery must not
-    /// clear the radio. Clear selection drops the evening. Other evenings stay.
+    /// hotel already checked for that evening clears it, the same gesture as
+    /// a fuel stop. Other evenings stay.
     func toggleBufferedHotelStop(_ stop: SuggestedStop, onEvening dayNumber: Int) {
         guard stop.coordinate.isValidLocation, stop.category == .lodging else { return }
         guard dayNumber > 0 else { return }
@@ -2109,9 +2108,6 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             for day in days {
                 checkedHotelByDay.removeValue(forKey: day)
             }
-            return
-        }
-        if checkedHotelByDay[dayNumber] == key {
             return
         }
         let checked = HotelAlongRoute.checkedKeys(

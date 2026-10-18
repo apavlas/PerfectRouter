@@ -24,7 +24,7 @@ final class CoreJourneyUITests: XCTestCase {
     func testNoLodgingStateShowsTheWindowMessage() {
         let app = launch()
         planFixedRoute(in: app)
-        let message = reveal("noLodging", in: app)
+        let message = revealPlanningRow("noLodging", in: app)
         XCTAssertTrue(message.exists, diagnosticTree(app))
         XCTAssertEqual(
             message.label,
@@ -37,25 +37,25 @@ final class CoreJourneyUITests: XCTestCase {
         let app = launch()
         planFixedRoute(in: app)
 
-        let first = reveal("hotelStop.Quality Inn.unchecked", in: app)
+        let first = revealPlanningRow("hotelStop.Quality Inn.unchecked", in: app)
         XCTAssertTrue(first.exists, diagnosticTree(app))
         scrollUntilHittable(first, in: app)
         first.tap()
 
-        let firstChecked = reveal("hotelStop.Quality Inn.checked", in: app)
+        let firstChecked = revealPlanningRow("hotelStop.Quality Inn.checked", in: app)
         XCTAssertTrue(firstChecked.exists, diagnosticTree(app))
 
-        let second = reveal("hotelStop.Holiday Inn Express.unchecked", in: app)
+        let second = revealPlanningRow("hotelStop.Holiday Inn Express.unchecked", in: app)
         XCTAssertTrue(second.exists, diagnosticTree(app))
         scrollUntilHittable(second, in: app)
         second.tap()
 
         XCTAssertTrue(
-            reveal("hotelStop.Holiday Inn Express.checked", in: app).exists,
+            revealPlanningRow("hotelStop.Holiday Inn Express.checked", in: app).exists,
             diagnosticTree(app)
         )
         XCTAssertTrue(
-            reveal("hotelStop.Quality Inn.unchecked", in: app).exists,
+            revealPlanningRow("hotelStop.Quality Inn.unchecked", in: app).exists,
             diagnosticTree(app)
         )
         XCTAssertFalse(
@@ -277,7 +277,7 @@ final class CoreJourneyUITests: XCTestCase {
         let app = launch()
         planFixedRoute(in: app)
 
-        _ = reveal("tankRangeSlider", in: app)
+        _ = revealPlanningRow("tankRangeSlider", in: app)
         let slider = app.sliders["tankRangeSlider"]
         XCTAssertTrue(slider.waitForExistence(timeout: 3), diagnosticTree(app))
         scrollUntilHittable(slider, in: app)
@@ -1019,6 +1019,23 @@ final class CoreJourneyUITests: XCTestCase {
             file: file,
             line: line
         )
+    }
+
+    /// Brings a planning-list row into the accessibility tree.
+    ///
+    /// `reveal` long-presses and nudges about 16% of the list. That gesture
+    /// does not scroll the iPad sidebar, so a lodging row or the tank slider
+    /// below the fold never appears and the tree stays map pins. A rider
+    /// reaches those rows by scrolling this same list — route style sits
+    /// below them and already shows up that way. The drag here is the one
+    /// Leave later uses. `reveal` is only the fallback for a short iPhone row.
+    private func revealPlanningRow(_ id: String, in app: XCUIApplication) -> XCUIElement {
+        expandPlanningSheet(app)
+        if let found = control(id, in: app) { return found }
+        scrollToTop(app)
+        let found = scrollPlanningListUntilExists(id, in: app, maxSwipes: 16)
+        if found.exists { return found }
+        return reveal(id, in: app)
     }
 
     /// Scrolls `planningList` from its current offset until `identifier` exists.
