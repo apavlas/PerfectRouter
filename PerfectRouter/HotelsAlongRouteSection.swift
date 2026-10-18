@@ -91,18 +91,45 @@ struct HotelsAlongRouteSection: View {
 /// The title text carries the identifier, same as a fuel row: a list cell
 /// exposes that text and drops an identifier that lives only on the button.
 private struct HotelCheckRow: View {
+    @Environment(\.planningUsesSidebar) private var planningUsesSidebar
+    /// A split-view list can deliver one finger tap twice. The second
+    /// delivery would clear the check the first one just set. A later tap
+    /// still unchecks. The phone sheet does not double-deliver.
+    @State private var lastToggleUptime: TimeInterval = 0
+
     let viewModel: RoutePlannerViewModel
     let stop: SuggestedStop
     let evening: HotelEveningPlan
 
+    private static let duplicateTapWindow: TimeInterval = 0.45
+
     var body: some View {
+        styledButton
+            .sidebarStopHighlight(selected: viewModel.highlightedStopID == stop.id)
+    }
+
+    /// Borderless is the style a sidebar list activates once. Plain is what
+    /// the phone sheet already exposes to XCUITest.
+    @ViewBuilder
+    private var styledButton: some View {
+        if planningUsesSidebar {
+            checkButton.buttonStyle(.borderless)
+        } else {
+            checkButton.buttonStyle(.plain)
+        }
+    }
+
+    private var checkButton: some View {
         let onRoute = viewModel.isStopOnRoute(stop)
         let checked = viewModel.isHotelBuffered(stop)
         let caption = viewModel.hotelCaption(for: stop, in: evening)
         let identifier = AccessibilityID.hotelStop(stop.name, checked: checked)
         let description = PlaceDescriptionDisplay.rowText(for: stop.placeDescription)
-        Button {
+        return Button {
             guard !onRoute else { return }
+            let now = ProcessInfo.processInfo.systemUptime
+            guard now - lastToggleUptime > Self.duplicateTapWindow else { return }
+            lastToggleUptime = now
             viewModel.toggleBufferedHotelStop(stop, onEvening: evening.dayNumber)
         } label: {
             HStack(alignment: .top, spacing: 8) {
@@ -135,10 +162,8 @@ private struct HotelCheckRow: View {
                 }
             }
         }
-        .buttonStyle(.plain)
         .disabled(onRoute)
         .accessibilityIdentifier(identifier)
-        .sidebarStopHighlight(selected: viewModel.highlightedStopID == stop.id)
     }
 }
 

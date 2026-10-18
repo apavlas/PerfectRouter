@@ -1023,18 +1023,19 @@ final class CoreJourneyUITests: XCTestCase {
 
     /// Brings a planning-list row into the accessibility tree.
     ///
-    /// `reveal` long-presses and nudges about 16% of the list. That gesture
-    /// does not scroll the iPad sidebar, so a lodging row or the tank slider
-    /// below the fold never appears and the tree stays map pins. A rider
-    /// reaches those rows by scrolling this same list — route style sits
-    /// below them and already shows up that way. The drag here is the one
-    /// Leave later uses. `reveal` is only the fallback for a short iPhone row.
+    /// A check replaces the identifier on the row that was just tapped. Give
+    /// that update time at the current offset. Scrolling away first drops the
+    /// iPad cell before `.checked` is published. The search then goes down
+    /// and back up from here, because a drag can pass lodging, and only then
+    /// from the top. `reveal`'s one-direction nudge is the last fallback.
     private func revealPlanningRow(_ id: String, in app: XCUIApplication) -> XCUIElement {
         expandPlanningSheet(app)
-        if let found = control(id, in: app) { return found }
+        if let found = waitForControl(id, in: app, timeout: 1.5) { return found }
+        let nearby = scrollPlanningListUntilExists(id, in: app, maxSwipes: 12)
+        if nearby.exists { return nearby }
         scrollToTop(app)
-        let found = scrollPlanningListUntilExists(id, in: app, maxSwipes: 16)
-        if found.exists { return found }
+        let fromTop = scrollPlanningListUntilExists(id, in: app, maxSwipes: 16)
+        if fromTop.exists { return fromTop }
         return reveal(id, in: app)
     }
 
