@@ -312,8 +312,8 @@ final class CoreJourneyUITests: XCTestCase {
         planFixedRoute(in: app)
 
         for style in ["Avoid Highways", "Scenic", "Twisty", "Fastest"] {
-            selectRouteStyle(style, in: app)
-            assertReplanBanner(contains: style, in: app)
+            let before = selectRouteStyle(style, in: app)
+            assertReplanBanner(contains: style, since: before, in: app)
             waitForBannerToFinish(in: app)
             waitForNavigate(in: app)
             // A bowed style can recommend a different pump. Wait for the
@@ -403,9 +403,10 @@ final class CoreJourneyUITests: XCTestCase {
     }
 
     private func addOnRouteFuel(in app: XCUIApplication) {
+        let before = completedReplanGeneration(in: app)
         search("On Route Fuel", in: app)
         XCTAssertTrue(identified("waypoint.On Route Fuel", in: app).waitForExistence(timeout: 5))
-        assertReplanBanner(contains: "Fastest", in: app)
+        assertReplanBanner(contains: "Fastest", since: before, in: app)
         waitForBannerToFinish(in: app)
         let names = waitForPublishedRecommendations(in: app)
         XCTAssertFalse(
@@ -590,15 +591,16 @@ final class CoreJourneyUITests: XCTestCase {
     private func tapSelectRecommended(in app: XCUIApplication) {
         let select = reveal("selectRecommended", in: app)
         scrollUntilHittable(select, in: app)
+        let before = completedReplanGeneration(in: app)
         select.tap()
-        assertReplanBanner(contains: "Fastest", in: app)
+        assertReplanBanner(contains: "Fastest", since: before, in: app)
         waitForBannerToFinish(in: app)
         assertWaypointListed("Pilot Madison", in: app)
     }
 
     // MARK: - Route style
 
-    private func selectRouteStyle(_ style: String, in app: XCUIApplication) {
+    private func selectRouteStyle(_ style: String, in app: XCUIApplication) -> Int {
         let deadline = Date().addingTimeInterval(20)
         var down = 0
         var picker: XCUIElement?
@@ -624,8 +626,9 @@ final class CoreJourneyUITests: XCTestCase {
         }
         guard let picker else {
             XCTFail("Route style control did not appear.\n\n\(diagnosticTree(app))")
-            return
+            return completedReplanGeneration(in: app)
         }
+        let before = completedReplanGeneration(in: app)
         scrollUntilHittable(picker, in: app)
         // Highlights lengthen the list, so this picker is found at the bottom
         // edge. An iPad menu opened from there sits off the sheet and Twisty
@@ -646,10 +649,11 @@ final class CoreJourneyUITests: XCTestCase {
             // Give the menu a moment to become hittable. A coordinate tap
             // before that can hit the closed picker instead of Twisty.
             let allowCoordinate = Date().timeIntervalSince(started) > 1.5
-            if tapRouteStyleOption(style, in: app, allowCoordinate: allowCoordinate) { return }
+            if tapRouteStyleOption(style, in: app, allowCoordinate: allowCoordinate) { return before }
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         }
         XCTFail("Route style \(style) was not hittable")
+        return before
     }
 
     /// Menu row for `style`. Prefer a hittable control. A visible iPad popover
@@ -663,7 +667,11 @@ final class CoreJourneyUITests: XCTestCase {
         var candidates = [identified("routeStyleOption.\(style)", in: app)]
         let labeled = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", style))
         for index in 0..<labeled.count {
-            candidates.append(labeled.element(boundBy: index))
+            let element = labeled.element(boundBy: index)
+            // The sheet keeps the current style mounted even when the menu
+            // is open. That label is the style name, and it is not a choice.
+            if element.identifier == "activeRouteStyle" { continue }
+            candidates.append(element)
         }
         let visible = candidates.filter { option in
             guard option.exists, option.frame.width > 8, option.frame.height > 8 else { return false }
@@ -682,77 +690,64 @@ final class CoreJourneyUITests: XCTestCase {
 
     // MARK: - Assertions
 
-    private func assertReplanBanner(contains style: String, in app: XCUIApplication) {
+    private func assertReplanBanner(contains style: String, since before: Int, in app: XCUIApplication) {
         // The stub is still calculating when this starts. Look immediately.
         // Scrolling the sheet to the top first used to burn the whole
         // request, and the banner is only up while that request runs.
+        // `before` is the publish count sampled before the tap. A cached
+        // Fastest leg can publish before the next poll, so the banner text
+        // is gone and the sheet marker is the proof it landed.
         if bannerShows(style, in: app) { return }
-        dismissKeyboard(app)
-        expandPlanningSheet(app)
-        // Four applied stops are four sequential stub requests. Keep looking
-        // until that line can finish, then accept the banner or the completed
-        // replan. A gas-search spinner means the route request already ended.
+        if replanDidComplete(style, since: before, in: app) { return }
         let deadline = Date().addingTimeInterval(20)
         var lastLabel = ""
-        var nudges = 0
         while Date() < deadline {
             if bannerShows(style, in: app, lastLabel: &lastLabel) { return }
-            // A cached style (Fastest, after the other three) finishes before
-            // the banner can be read. The summary that proves it landed sits
-            // above the highlight rows and is unloaded while the style picker
-            // is on screen.
-            if !replanBannerIsUp(in: app) {
-                if !identified("activeRouteStyle", in: app).exists {
-                    scrollToTop(app)
-                    if !identified("activeRouteStyle", in: app).exists {
-                        nudgePlanningList(in: app, up: true)
-                    }
-                }
-                // A few passes first, so a banner that is about to appear is
-                // not treated as already finished. The scroll above is what
-                // puts the summary back after the highlight rows unload it.
-                if nudges >= 4, routeRequestHasFinished(style: style, in: app) { return }
-            }
-            // iPad can park the in-list copy under the fold. Alternate
-            // toward the top and just past it; the nav-bar copy needs no scroll.
-            if nudges % 3 == 2 {
-                swipePlanningList(in: app, up: (nudges / 3) % 2 == 1)
-            }
-            nudges += 1
+            if replanDidComplete(style, since: before, in: app) { return }
             RunLoop.current.run(until: Date().addingTimeInterval(0.12))
         }
         if bannerShows(style, in: app, lastLabel: &lastLabel) { return }
-        if routeRequestHasFinished(style: style, in: app) { return }
+        if replanDidComplete(style, since: before, in: app) { return }
         let bannerIDs = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "identifier CONTAINS 'replan'"))
+            .matching(NSPredicate(format: "identifier CONTAINS 'replan' OR identifier == 'activeRouteStyle' OR identifier == 'lastCompletedReplanStyle'"))
             .allElementsBoundByIndex
-            .map { "\($0.identifier) label=\($0.label)" }
+            .map { "\($0.identifier) label=\($0.label) value=\($0.value ?? "")" }
             .joined(separator: "\n")
-        XCTFail("Replanning banner for \(style) did not appear (last label: \(lastLabel))\nBanner ids:\n\(bannerIDs)\n\n\(diagnosticTree(app))")
+        XCTFail("Replanning banner for \(style) did not appear (last label: \(lastLabel), since \(before))\nBanner ids:\n\(bannerIDs)\n\n\(diagnosticTree(app))")
     }
 
-    /// The route request is done. Gas search may still be spinning; that
-    /// starts only after `isCalculating` drops and the banner comes down.
-    /// A style control that is on screen must already show `style`, so a
-    /// leftover plan from the previous style does not count.
-    private func routeRequestHasFinished(style: String, in app: XCUIApplication) -> Bool {
+    /// True once this action's line has published and the banner is down.
+    /// The generation has to move, so a Fastest plan already on screen does
+    /// not count. A failed route does not publish, so it does not count either.
+    private func replanDidComplete(_ style: String, since before: Int, in app: XCUIApplication) -> Bool {
         if replanBannerIsUp(in: app) { return false }
         let failed = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Routing failed'")).firstMatch.exists
             || app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'No route found'")).firstMatch.exists
         if failed { return false }
-        let active = identified("activeRouteStyle", in: app)
-        // Off-screen does not count. A fuel plan left over from the previous
-        // style is still in the tree until the summary is visited, and the
-        // highlight rows are what push that summary out of the lazy list.
-        guard active.exists else { return false }
-        guard active.label == style || active.label.hasPrefix(style) else { return false }
-        // "Searching along your route…" is also the in-list copy while the
-        // line is still calculating, so it is not proof the request finished.
-        // The gas-search sentence, a republished plan, and Navigate all start
-        // after `isCalculating` drops.
-        let gasFollowUp = app.staticTexts["Searching for gas along the route…"].exists
-            || !publishedFuelNames(in: app).isEmpty
-        return gasFollowUp || navigateButton(in: app).exists
+        guard let done = completedReplan(in: app) else { return false }
+        guard done.generation > before else { return false }
+        return done.style == style || done.style.hasPrefix(style)
+    }
+
+    /// `style|generation` from the sheet marker. Nil before the first publish
+    /// and when the element is not in the tree yet.
+    private func completedReplan(in app: XCUIApplication) -> (style: String, generation: Int)? {
+        let marker = identified("lastCompletedReplanStyle", in: app)
+        guard marker.exists else { return nil }
+        let fromValue = marker.value as? String
+        let raw: String
+        if let fromValue, fromValue.contains("|") {
+            raw = fromValue
+        } else {
+            raw = marker.label
+        }
+        let parts = raw.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+        guard parts.count == 2, let generation = Int(parts[1]) else { return nil }
+        return (parts[0], generation)
+    }
+
+    private func completedReplanGeneration(in app: XCUIApplication) -> Int {
+        completedReplan(in: app)?.generation ?? 0
     }
 
     private func waitForBannerToFinish(in app: XCUIApplication) {
@@ -1304,7 +1299,7 @@ final class CoreJourneyUITests: XCTestCase {
             "leaveLater", "routeStyle", "waypoint.", "noGas", "replan",
             "Plan Ride", "gas station", "Navigate", "Apply", "placeSearch",
             "rideHighlights", "Ride Highlights", "highlight.", "Tallulah", "Bare Overlook",
-            "routeMapFrame",
+            "routeMapFrame", "lastCompleted", "activeRouteStyle",
             "noLodging", "hotelStop", "hotelLodgingState", "hotelDay", "Quality Inn", "Holiday Inn", "No lodging",
             "noHotelPicked", "chooseHotel", "rideDay", "Weatherford", "No hotel"
         ]

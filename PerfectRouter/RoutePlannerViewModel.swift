@@ -544,6 +544,12 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// not publish an empty station list or drop `isSearchingGas`.
     private var gasGeneration = 0
 
+    /// Style of the last line that published, and how many publishes have
+    /// landed. A cached leg can finish before the replan banner is readable.
+    /// The sheet keeps both on an element that is not inside the lazy list.
+    private(set) var lastCompletedReplanStyle: String = ""
+    private(set) var lastCompletedReplanGeneration: Int = 0
+
     /// Distinct from "searching". Only `.empty` may say there are no stations.
     /// A cancel leaves this alone (the replacement search owns the screen).
     private(set) var gasLoadState: GasLoadState = .pending {
@@ -2734,6 +2740,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             cancelled: Task.isCancelled
         ) else { return }
         legs = newLegs
+        noteCompletedReplan()
         plannedCorridor = newLegs.map { RouteGeometry.coordinates(of: $0.polyline) }
         if preservedFuelPool != nil {
             reprojectPreservedGasStations()
@@ -2818,6 +2825,13 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// request. The first plan uses the same sentence as a style switch.
     nonisolated static func routeReplanStatus(style: RouteStyle) -> String {
         "Replanning for \(style.rawValue)…"
+    }
+
+    /// Records a line that just published. A cancelled or superseded pass
+    /// returns before `legs` is replaced, so it does not advance this.
+    private func noteCompletedReplan() {
+        lastCompletedReplanStyle = routeStyle.rawValue
+        lastCompletedReplanGeneration += 1
     }
 
     /// Map banner: a line is already drawn and a replacement is in flight.

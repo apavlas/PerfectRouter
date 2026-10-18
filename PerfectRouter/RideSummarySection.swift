@@ -80,9 +80,12 @@ struct RideSummarySection: View {
                     FocusPlaceholderRow()
                 }
                 // Active style sits immediately above Navigate so the rider
-                // can see which line they're about to hand off. The
-                // representation is only the style name: a combined label
-                // includes the detail and misses the banner fallback.
+                // can see which line they're about to hand off. The element
+                // is only the style name: a combined label includes the
+                // detail and misses the banner fallback. The same id also
+                // lives on the sheet inset, because this row leaves the lazy
+                // list once the waypoint section is tall enough to push it
+                // off screen.
                 VStack(alignment: .leading, spacing: 2) {
                     Label(viewModel.routeStyle.rawValue, systemImage: viewModel.routeStyle.systemImage)
                         .font(.subheadline.weight(.semibold))
@@ -91,10 +94,9 @@ struct RideSummarySection: View {
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityRepresentation {
-                    Text(viewModel.routeStyle.rawValue)
-                        .accessibilityIdentifier(AccessibilityID.activeRouteStyle)
-                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(viewModel.routeStyle.rawValue)
+                .accessibilityIdentifier(AccessibilityID.activeRouteStyle)
                 // Primary, one-tap hand-off. Apple Maps is CarPlay-native, so
                 // its turn-by-turn guidance automatically continues on the car
                 // display once the rider connects to CarPlay.

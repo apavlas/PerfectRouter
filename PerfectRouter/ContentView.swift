@@ -596,7 +596,29 @@ struct ContentView: View {
                 // Stays on screen while the summary is scrolled off the large
                 // iPad sheet. Always has a child, so the inset is not an
                 // empty focus container when the replan starts or ends.
-                sheetReplanBanner
+                // The proof rows are one point and are direct children, so a
+                // nested stack cannot swallow their identifiers. The list
+                // below is lazy, and a tall waypoint section unloads the
+                // summary that used to be the only `activeRouteStyle`.
+                VStack(spacing: 0) {
+                    sheetReplanBanner
+                    Text(verbatim: viewModel.routeStyle.rawValue)
+                        .font(.system(size: 1))
+                        .foregroundStyle(.clear)
+                        .frame(maxWidth: .infinity, minHeight: 1, maxHeight: 1)
+                        .accessibilityIdentifier(AccessibilityID.activeRouteStyle)
+                        .accessibilityLabel(viewModel.routeStyle.rawValue)
+                        .focusable()
+                    Text(verbatim: "\(viewModel.lastCompletedReplanStyle)|\(viewModel.lastCompletedReplanGeneration)")
+                        .font(.system(size: 1))
+                        .foregroundStyle(.clear)
+                        .frame(maxWidth: .infinity, minHeight: 1, maxHeight: 1)
+                        .accessibilityIdentifier(AccessibilityID.lastCompletedReplanStyle)
+                        .accessibilityLabel("\(viewModel.lastCompletedReplanStyle)|\(viewModel.lastCompletedReplanGeneration)")
+                        .accessibilityValue("\(viewModel.lastCompletedReplanStyle)|\(viewModel.lastCompletedReplanGeneration)")
+                        .focusable()
+                }
+                .accessibilityElement(children: .contain)
             }
             .navigationTitle("Plan Ride")
             .navigationBarTitleDisplayMode(.inline)

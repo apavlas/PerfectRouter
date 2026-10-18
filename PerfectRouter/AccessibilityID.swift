@@ -9,6 +9,10 @@ enum AccessibilityID {
     static let fuelSelectingSpinner = "fuel.selecting.spinner"
     static let applyStops = "applyStops"
     static let replanBanner = "replanBanner"
+    /// Always mounted on the planning sheet. Value is `style|generation`
+    /// for the last line that actually published. The banner itself is gone
+    /// as soon as that publish finishes.
+    static let lastCompletedReplanStyle = "lastCompletedReplanStyle"
     static let routeStylePicker = "routeStylePicker"
     static let activeRouteStyle = "activeRouteStyle"
     static let tankRangeSlider = "tankRangeSlider"
