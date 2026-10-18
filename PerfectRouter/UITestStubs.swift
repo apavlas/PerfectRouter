@@ -120,13 +120,39 @@ enum UITestFixture {
         return stops.sorted { $0.distanceAlongRoute < $1.distanceAlongRoute }
     }
 
-    /// Two hotels for one evening, and a later evening with no lodging.
-    /// UI tests assert the radio check and the exact empty-window copy.
+    /// Two hotels for evening 1, one hotel for evening 2, and a later
+    /// evening with no lodging. UI tests assert the radio check, applying
+    /// only evening 2, and the exact empty-window copy.
     /// These are fixture rows, not MapKit results. Captions are real
     /// offsets, not the 6:00 PM / 0 mi stand-in.
     static let sameEveningHotelA = "Quality Inn"
     static let sameEveningHotelB = "Holiday Inn Express"
+    /// Evening 2's hotel. Applying only this one must not collapse evening 1.
+    static let secondEveningHotel = "Weatherford Inn"
     static let noLodgingCopy = "No lodging found between 5 and 7 PM"
+
+    /// On-route 6 PM points for the stub ride. The empty lodging evening is
+    /// not one of these: it stays in the hotel section so the no-lodging
+    /// copy can be found, and it does not add a riding day.
+    static func stubPlannedEvenings() -> [HotelAlongRoute.Evening] {
+        let mile = metersPerMile
+        return [
+            HotelAlongRoute.Evening(
+                dayNumber: 1,
+                dayStartDistance: 0,
+                targetDistance: 90 * mile,
+                departureMinutes: 8 * 60,
+                ridingSeconds: 10 * 3_600
+            ),
+            HotelAlongRoute.Evening(
+                dayNumber: 2,
+                dayStartDistance: 90 * mile,
+                targetDistance: 180 * mile,
+                departureMinutes: HotelAlongRoute.morningDepartureMinutes,
+                ridingSeconds: 10 * 3_600
+            ),
+        ]
+    }
 
     static func stubHotelEvenings() -> [HotelEveningPlan] {
         let quality = SuggestedStop(
@@ -157,6 +183,21 @@ enum UITestFixture {
                 usesMetric: false
             ),
         ]
+        let weatherford = SuggestedStop(
+            name: secondEveningHotel,
+            coordinate: coordinate(milesNorth: 180, eastMeters: 2 * metersPerMile),
+            category: .lodging,
+            distanceAlongRoute: 180 * metersPerMile,
+            detourMeters: 2 * metersPerMile
+        )
+        let dayTwoCaptions = [
+            weatherford.id: HotelAlongRoute.arrivalCaption(
+                arrivalMinutes: 18 * 60 + 5,
+                detourMeters: weatherford.detourMeters,
+                fartherOff: false,
+                usesMetric: false
+            ),
+        ]
         return [
             HotelEveningPlan(
                 dayNumber: 1,
@@ -169,7 +210,16 @@ enum UITestFixture {
             ),
             HotelEveningPlan(
                 dayNumber: 2,
-                dayStartDistance: 100 * metersPerMile,
+                dayStartDistance: 90 * metersPerMile,
+                departureMinutes: HotelAlongRoute.morningDepartureMinutes,
+                options: [weatherford],
+                captions: dayTwoCaptions,
+                widened: false,
+                emptyMessage: nil
+            ),
+            HotelEveningPlan(
+                dayNumber: 3,
+                dayStartDistance: 400 * metersPerMile,
                 departureMinutes: HotelAlongRoute.morningDepartureMinutes,
                 options: [],
                 captions: [:],

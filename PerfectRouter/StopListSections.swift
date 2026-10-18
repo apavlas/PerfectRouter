@@ -265,12 +265,28 @@ struct WaypointsSection: View {
                 FocusPlaceholderRow()
             }
             if !viewModel.waypoints.isEmpty {
-                ForEach(Array(viewModel.waypoints.enumerated()), id: \.element.id) { index, waypoint in
-                    let label = waypointAccessibilityLabel(index: index, waypoint: waypoint)
-                    waypointCell(index: index, waypoint: waypoint, label: label)
+                ForEach(viewModel.routeListEntries) { entry in
+                    if let index = entry.waypointIndex, viewModel.waypoints.indices.contains(index) {
+                        let waypoint = viewModel.waypoints[index]
+                        let label = waypointAccessibilityLabel(
+                            index: index,
+                            waypoint: waypoint,
+                            dayTitle: entry.headingTitle
+                        )
+                        waypointCell(
+                            index: index,
+                            waypoint: waypoint,
+                            label: label,
+                            heading: entry.headingTitle,
+                            headingDay: entry.headingDay
+                        )
+                    } else if let day = entry.unpickedDay {
+                        noHotelRow(day, heading: entry.headingTitle, headingDay: entry.headingDay)
+                            .moveDisabled(true)
+                    }
                 }
-                .onDelete { viewModel.removeWaypoint(at: $0) }
-                .onMove { viewModel.moveWaypoint(from: $0, to: $1) }
+                .onDelete { viewModel.removeListedWaypoints(at: $0) }
+                .onMove { viewModel.moveListedWaypoints(from: $0, to: $1) }
             } else {
                 FocusPlaceholderRow()
             }
@@ -284,18 +300,24 @@ struct WaypointsSection: View {
     /// a button so a tap centers the map. Both branches carry the identifier
     /// XCUITest queries; it is not on an inner text, which the query misses.
     @ViewBuilder
-    private func waypointCell(index: Int, waypoint: Waypoint, label: String) -> some View {
+    private func waypointCell(
+        index: Int,
+        waypoint: Waypoint,
+        label: String,
+        heading: String?,
+        headingDay: HotelAlongRoute.RideDay?
+    ) -> some View {
         if planningUsesSidebar {
             Button {
                 viewModel.focusListedStop(id: waypoint.id, coordinate: waypoint.coordinate)
             } label: {
-                waypointRow(index: index, waypoint: waypoint)
+                waypointRow(index: index, waypoint: waypoint, heading: heading, headingDay: headingDay)
             }
             .buttonStyle(.plain)
             .sidebarStopHighlight(selected: viewModel.highlightedStopID == waypoint.id)
             .modifier(WaypointAccessibility(label: label, name: waypoint.name))
         } else {
-            waypointRow(index: index, waypoint: waypoint)
+            waypointRow(index: index, waypoint: waypoint, heading: heading, headingDay: headingDay)
                 .modifier(WaypointAccessibility(label: label, name: waypoint.name))
         }
     }
@@ -306,21 +328,26 @@ struct WaypointsSection: View {
     /// a stack that already has the name — the other branch is the name alone,
     /// so a replan never leaves an empty stack in the row.
     @ViewBuilder
-    private func waypointRow(index: Int, waypoint: Waypoint) -> some View {
+    private func waypointRow(
+        index: Int,
+        waypoint: Waypoint,
+        heading: String?,
+        headingDay: HotelAlongRoute.RideDay?
+    ) -> some View {
         let pastRange = viewModel.waypointIsBeyondRemainingRange(at: index)
-        let dayTitle = FeatureFlags.hotelsAlongRoute ? viewModel.rideDayTitle(at: index) : nil
+        let dayTitle = FeatureFlags.hotelsAlongRoute
+            ? (heading ?? viewModel.rideDayTitle(at: index))
+            : nil
+        let ending = viewModel.rideDayEnding(atWaypoint: index)
+        let overDay: Int? = ending?.exceedsDailyLimit == true ? ending?.dayNumber : nil
         Label {
             if let caption = viewModel.waypointRidingCaption(at: index) {
                 VStack(alignment: .leading, spacing: 2) {
                     if let dayTitle {
-                        dayHeading(dayTitle)
+                        dayHeading(dayTitle, day: headingDay)
                     }
                     waypointName(waypoint)
-                    Text(caption)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.leading)
-                        .lineLimit(4)
+                    ridingCaption(caption, overLimitDay: overDay)
                     if pastRange {
                         PastYourRangeLabel()
                     }
@@ -328,7 +355,7 @@ struct WaypointsSection: View {
             } else if pastRange || dayTitle != nil {
                 VStack(alignment: .leading, spacing: 2) {
                     if let dayTitle {
-                        dayHeading(dayTitle)
+                        dayHeading(dayTitle, day: headingDay)
                     }
                     waypointName(waypoint)
                     if pastRange {
@@ -345,10 +372,64 @@ struct WaypointsSection: View {
         .id(waypoint.id)
     }
 
-    private func dayHeading(_ title: String) -> some View {
-        Text(title)
-            .font(.subheadline.weight(.semibold))
-            .accessibilityIdentifier("rideDay.\(title)")
+    private func dayHeading(_ title: String, day: HotelAlongRoute.RideDay?) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .accessibilityIdentifier("rideDay.\(title)")
+            if let day {
+                Text(verbatim: day.exceedsDailyLimit ? "over" : "ok")
+                    .font(.system(size: 1))
+                    .foregroundStyle(.clear)
+                    .frame(maxWidth: .infinity, minHeight: 1, maxHeight: 1)
+                    .accessibilityIdentifier(AccessibilityID.rideDayLimit(day.dayNumber))
+                    .accessibilityLabel(day.exceedsDailyLimit ? "over" : "ok")
+            }
+        }
+    }
+
+    /// Planned evening with no hotel. Ends that riding day and reopens the
+    /// picker for it. The row stays even when a later night's hotel is applied.
+    private func noHotelRow(
+        _ day: HotelAlongRoute.RideDay,
+        heading: String?,
+        headingDay: HotelAlongRoute.RideDay?
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let heading {
+                dayHeading(heading, day: headingDay)
+            }
+            Text(HotelAlongRoute.noHotelPickedCopy)
+                .accessibilityIdentifier(AccessibilityID.noHotelPicked(day.dayNumber))
+                .accessibilityLabel(HotelAlongRoute.noHotelPickedCopy)
+            ridingCaption(
+                viewModel.rideDayCaption(day),
+                overLimitDay: day.exceedsDailyLimit ? day.dayNumber : nil
+            )
+            Button("Choose") {
+                viewModel.focusHotelEvening(day.unpickedEvening ?? day.dayNumber)
+            }
+            .buttonStyle(.borderless)
+            .accessibilityIdentifier(AccessibilityID.chooseHotel(day.dayNumber))
+        }
+    }
+
+    @ViewBuilder
+    private func ridingCaption(_ caption: String, overLimitDay: Int?) -> some View {
+        if let overLimitDay {
+            Text(caption)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Color.orange)
+                .multilineTextAlignment(.leading)
+                .lineLimit(4)
+                .accessibilityIdentifier(AccessibilityID.rideDayOverLimit(overLimitDay))
+        } else {
+            Text(caption)
+                .font(.caption)
+                .foregroundStyle(Color.secondary)
+                .multilineTextAlignment(.leading)
+                .lineLimit(4)
+        }
     }
 
     private func waypointName(_ waypoint: Waypoint) -> some View {
@@ -358,9 +439,9 @@ struct WaypointsSection: View {
             .accessibilityIdentifier(AccessibilityID.waypoint(waypoint.name))
     }
 
-    private func waypointAccessibilityLabel(index: Int, waypoint: Waypoint) -> String {
+    private func waypointAccessibilityLabel(index: Int, waypoint: Waypoint, dayTitle: String? = nil) -> String {
         var parts: [String] = []
-        if FeatureFlags.hotelsAlongRoute, let day = viewModel.rideDayTitle(at: index) {
+        if FeatureFlags.hotelsAlongRoute, let day = dayTitle ?? viewModel.rideDayTitle(at: index) {
             parts.append(day)
         }
         parts.append(waypoint.name)

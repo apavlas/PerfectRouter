@@ -657,6 +657,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         guard FeatureFlags.hotelsAlongRoute else { return }
         guard generation == hotelGeneration, !Task.isCancelled else { return }
         if UITestStubLaunch.isEnabled {
+            plannedLodgingEvenings = UITestFixture.stubPlannedEvenings()
             hotelEvenings = UITestFixture.stubHotelEvenings()
             hotelLoadFailed = false
             isSearchingHotels = false
@@ -666,6 +667,12 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         let polylines = plannedCorridor
         let target = hotelTargetMinutes
         let departureMinutes = HotelAlongRoute.minutes(from: effectiveDeparture)
+        plannedLodgingEvenings = HotelAlongRoute.evenings(
+            legs: driveLegs,
+            overnightDistances: [],
+            departureMinutes: departureMinutes,
+            targetMinutes: target
+        )
         let evenings = HotelAlongRoute.evenings(
             legs: driveLegs,
             overnightDistances: overnightDistancesAlongRoute(),
@@ -1135,6 +1142,14 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// the ride ends before that clock — that is not the "none found" copy.
     var hotelEvenings: [HotelEveningPlan] = []
 
+    /// Every planned lodging evening, including nights that already have a
+    /// hotel. Day boundaries come from these, not from applied hotels alone.
+    private(set) var plannedLodgingEvenings: [HotelAlongRoute.Evening] = []
+
+    /// Bumped when Choose should scroll the hotel picker for one evening.
+    private(set) var scrollToHotelToken = 0
+    private(set) var scrollToHotelDay: Int?
+
     /// Hotels the rider checked. Apply inserts one per evening.
     private(set) var bufferedHotelStops: [SuggestedStop] = []
 
@@ -1237,10 +1252,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             distanceMeters: distance,
             anchors: fuelRidingAnchorDistances(including: distance),
             legs: driveLegTimings(),
-            dayStartMeters: HotelAlongRoute.dayStartDistance(
-                for: distance,
-                overnightDistances: overnightDistancesAlongRoute()
-            )
+            dayStartMeters: dayStartMeters(for: distance)
         )
     }
 
@@ -1268,26 +1280,190 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// match the list.
     func waypointRidingCaption(at index: Int) -> String? {
         guard legs.count + 1 == waypoints.count else { return nil }
+        let legs = driveLegTimings()
+        let dayStart: CLLocationDistance? = rideDays.isEmpty
+            ? nil
+            : dayStartMeters(for: waypointDistance(at: index))
         return FuelStopRidingTime.waypointCaption(
             index: index,
-            legs: driveLegTimings(),
+            legs: legs,
             dayStartIndex: HotelAlongRoute.dayStartIndex(
                 for: index,
                 overnightIndices: overnightWaypointIndices
-            )
+            ),
+            dayStartMeters: dayStart
         )
     }
 
-    /// "Day 1" / "Day 2" on the route list. Nil on a one-day ride and on
-    /// rows that stay in the same day.
+    /// "Day 1" / "Day 2" on the route list. Planned evenings set the
+    /// boundaries. With none, an applied hotel still splits the ride, and a
+    /// one-day ride has no heading.
     func rideDayTitle(at index: Int) -> String? {
-        HotelAlongRoute.dayTitle(at: index, overnightIndices: overnightWaypointIndices)
+        guard rideDays.count > 1 else {
+            return HotelAlongRoute.dayTitle(at: index, overnightIndices: overnightWaypointIndices)
+        }
+        return routeListEntries.first { $0.waypointIndex == index }?.headingTitle
     }
 
     private var overnightWaypointIndices: [Int] {
         waypoints.enumerated().compactMap { index, waypoint in
             waypoint.isOvernight ? index : nil
         }
+    }
+
+    /// Planned evenings, matched to applied hotels. Empty when the line
+    /// does not match the waypoint list yet — the overnight headings stay.
+    var rideDays: [HotelAlongRoute.RideDay] {
+        guard FeatureFlags.hotelsAlongRoute, !plannedLodgingEvenings.isEmpty else { return [] }
+        let legs = cachedDriveLegs
+        guard legs.count + 1 == waypoints.count else { return [] }
+        let total = legs.reduce(0.0) { $0 + max(0, $1.distanceMeters) }
+        guard total > 1 else { return [] }
+        return HotelAlongRoute.rideDays(
+            evenings: plannedLodgingEvenings,
+            overnightDistances: overnightDistancesAlongRoute(),
+            totalDistance: total,
+            legs: legs,
+            dailyLimit: HotelAlongRoute.dailyRidingLimit(targetMinutes: hotelTargetMinutes)
+        )
+    }
+
+    /// Polyline length from the origin through `index` legs. The destination
+    /// is the whole line.
+    func waypointDistance(at index: Int) -> CLLocationDistance {
+        if index <= 0 { return 0 }
+        let legs = cachedDriveLegs
+        if index >= waypoints.count - 1, legs.count + 1 == waypoints.count {
+            return legs.reduce(0.0) { $0 + max(0, $1.distanceMeters) }
+        }
+        guard index <= legs.count else { return 0 }
+        return legs.prefix(index).reduce(0.0) { $0 + max(0, $1.distanceMeters) }
+    }
+
+    func dayStartMeters(for distance: CLLocationDistance) -> CLLocationDistance {
+        let tolerance = FuelStopRidingTime.sameStopToleranceMeters
+        if let day = rideDays.first(where: {
+            distance >= $0.startDistance - tolerance && distance <= $0.endDistance + tolerance
+        }) {
+            return day.startDistance
+        }
+        return HotelAlongRoute.dayStartDistance(
+            for: distance,
+            overnightDistances: overnightDistancesAlongRoute()
+        )
+    }
+
+    /// The day whose end is this waypoint, when the row shows that day's
+    /// full riding time.
+    func rideDayEnding(atWaypoint index: Int) -> HotelAlongRoute.RideDay? {
+        let days = rideDays
+        guard !days.isEmpty, waypoints.indices.contains(index) else { return nil }
+        if index == waypoints.count - 1 { return days.last }
+        let distance = waypointDistance(at: index)
+        let tolerance = FuelStopRidingTime.sameStopToleranceMeters
+        return days.first { abs($0.endDistance - distance) <= tolerance }
+    }
+
+    func rideDayCaption(_ day: HotelAlongRoute.RideDay) -> String {
+        let distance = max(0, day.endDistance - day.startDistance)
+        let miles = FuelStopRidingTime.formatDistance(distance, usesMetric: AppSettings.usesMetricUnits)
+        let riding = FuelStopRidingTime.formatDuration(day.ridingSeconds)
+        return "\(miles) · \(riding) riding"
+    }
+
+    /// Scrolls the hotel section to the evening Choose names.
+    func focusHotelEvening(_ day: Int) {
+        scrollToHotelDay = day
+        scrollToHotelToken += 1
+    }
+
+    /// One route-list row. A planned evening with no hotel is its own row
+    /// between the waypoints, so applying a later hotel does not merge the
+    /// days in front of it.
+    struct RouteListEntry: Identifiable {
+        var id: String
+        var waypointIndex: Int?
+        var unpickedDay: HotelAlongRoute.RideDay?
+        var headingTitle: String?
+        var headingDay: HotelAlongRoute.RideDay?
+    }
+
+    var routeListEntries: [RouteListEntry] {
+        let days = rideDays
+        guard days.count > 1 else {
+            return waypoints.enumerated().map { index, waypoint in
+                RouteListEntry(
+                    id: waypoint.id.uuidString,
+                    waypointIndex: index,
+                    unpickedDay: nil,
+                    headingTitle: nil,
+                    headingDay: nil
+                )
+            }
+        }
+        let tolerance = FuelStopRidingTime.sameStopToleranceMeters
+        let unpicked = days.filter { $0.unpickedEvening != nil }
+        var nextUnpicked = 0
+        var entries: [RouteListEntry] = []
+        var lastDay: Int?
+        for index in waypoints.indices {
+            let distance = waypointDistance(at: index)
+            while nextUnpicked < unpicked.count,
+                  unpicked[nextUnpicked].endDistance < distance - tolerance {
+                let day = unpicked[nextUnpicked]
+                entries.append(RouteListEntry(
+                    id: "noHotel-\(day.dayNumber)",
+                    waypointIndex: nil,
+                    unpickedDay: day,
+                    headingTitle: lastDay == day.dayNumber ? nil : "Day \(day.dayNumber)",
+                    headingDay: lastDay == day.dayNumber ? nil : day
+                ))
+                lastDay = day.dayNumber
+                nextUnpicked += 1
+            }
+            let day = days.first {
+                distance >= $0.startDistance - tolerance && distance <= $0.endDistance + tolerance
+            }
+            let startsDay = day.map { lastDay != $0.dayNumber } ?? false
+            let waypoint = waypoints[index]
+            entries.append(RouteListEntry(
+                id: waypoint.id.uuidString,
+                waypointIndex: index,
+                unpickedDay: nil,
+                headingTitle: startsDay ? day.map { "Day \($0.dayNumber)" } : nil,
+                headingDay: startsDay ? day : nil
+            ))
+            if let day { lastDay = day.dayNumber }
+        }
+        return entries
+    }
+
+    func removeListedWaypoints(at offsets: IndexSet) {
+        let entries = routeListEntries
+        let indexes = offsets.compactMap { offset -> Int? in
+            guard entries.indices.contains(offset) else { return nil }
+            return entries[offset].waypointIndex
+        }
+        guard !indexes.isEmpty else { return }
+        removeWaypoint(at: IndexSet(indexes))
+    }
+
+    func moveListedWaypoints(from source: IndexSet, to destination: Int) {
+        let entries = routeListEntries
+        let from = IndexSet(source.compactMap { offset -> Int? in
+            guard entries.indices.contains(offset) else { return nil }
+            return entries[offset].waypointIndex
+        })
+        guard !from.isEmpty else { return }
+        let dest: Int
+        if destination >= entries.count {
+            dest = waypoints.count
+        } else if let index = entries[destination].waypointIndex {
+            dest = index
+        } else {
+            dest = entries[destination...].compactMap(\.waypointIndex).first ?? waypoints.count
+        }
+        moveWaypoint(from: from, to: dest)
     }
 
     /// Polyline length and `expectedTravelTime` for each current leg.
@@ -2998,6 +3174,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         highlightGeneration += 1
         rideHighlights = []
         hotelEvenings = []
+        plannedLodgingEvenings = []
         hotelLoadFailed = false
         isSearchingHotels = false
         isShowingAllGasOnRoute = false

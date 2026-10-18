@@ -141,6 +141,97 @@ final class HotelAlongRouteTests: XCTestCase {
         XCTAssertFalse(days.contains { $0.dayNumber == 2 })
     }
 
+    func testLaterOvernightDoesNotSwallowTheEarlierEvening() {
+        // 1,200 miles in 24 hours. 6 PM on day 2 is mile 1,000. A hotel
+        // there is night 2, so night 1 at mile 500 is still offered.
+        let hotel = 1_000 * mile
+        let days = evenings(overnights: [hotel], departureHour: 8)
+        XCTAssertEqual(days.map(\.dayNumber), [1])
+        XCTAssertEqual(days[0].targetDistance, 500 * mile, accuracy: 1)
+    }
+
+    func testDayCountAndRidingTimeMatchWithNoHotelsOneMiddleHotelAndAllHotels() {
+        let ride = longRide
+        let planned = evenings(legs: ride, departureHour: 8)
+        let total = 1_200 * mile
+        let limit = HotelAlongRoute.dailyRidingLimit(targetMinutes: 18 * 60)
+        let none = HotelAlongRoute.rideDays(
+            evenings: planned,
+            overnightDistances: [],
+            totalDistance: total,
+            legs: ride,
+            dailyLimit: limit
+        )
+        let middle = HotelAlongRoute.rideDays(
+            evenings: planned,
+            overnightDistances: [1_000 * mile],
+            totalDistance: total,
+            legs: ride,
+            dailyLimit: limit
+        )
+        let all = HotelAlongRoute.rideDays(
+            evenings: planned,
+            overnightDistances: [500 * mile, 1_000 * mile],
+            totalDistance: total,
+            legs: ride,
+            dailyLimit: limit
+        )
+        XCTAssertEqual(none.map(\.dayNumber), [1, 2, 3])
+        XCTAssertEqual(middle.map(\.dayNumber), [1, 2, 3])
+        XCTAssertEqual(all.map(\.dayNumber), [1, 2, 3])
+        for index in none.indices {
+            XCTAssertEqual(none[index].ridingSeconds, middle[index].ridingSeconds, accuracy: 1)
+            XCTAssertEqual(none[index].ridingSeconds, all[index].ridingSeconds, accuracy: 1)
+        }
+        XCTAssertEqual(none[0].ridingSeconds, 10 * 3_600, accuracy: 1)
+        XCTAssertEqual(none[2].ridingSeconds, 4 * 3_600, accuracy: 1)
+        XCTAssertFalse(none.contains { $0.exceedsDailyLimit })
+
+        // Ten miles past night 2 only moves that day's end. Night 1 stays.
+        let detour = HotelAlongRoute.rideDays(
+            evenings: planned,
+            overnightDistances: [1_010 * mile],
+            totalDistance: total,
+            legs: ride,
+            dailyLimit: limit
+        )
+        XCTAssertEqual(detour.map(\.dayNumber), [1, 2, 3])
+        XCTAssertEqual(detour[0].ridingSeconds, none[0].ridingSeconds, accuracy: 1)
+        XCTAssertEqual(detour[1].ridingSeconds - none[1].ridingSeconds, 0.2 * 3_600, accuracy: 1)
+        XCTAssertEqual(none[2].ridingSeconds - detour[2].ridingSeconds, 0.2 * 3_600, accuracy: 1)
+    }
+
+    func testUnpickedEveningProducesANoHotelBoundary() {
+        let ride = longRide
+        let planned = evenings(legs: ride, departureHour: 8)
+        let days = HotelAlongRoute.rideDays(
+            evenings: planned,
+            overnightDistances: [1_000 * mile],
+            totalDistance: 1_200 * mile,
+            legs: ride,
+            dailyLimit: 10 * 3_600
+        )
+        XCTAssertEqual(days[0].unpickedEvening, 1)
+        XCTAssertNil(days[1].unpickedEvening)
+        XCTAssertNil(days[2].unpickedEvening)
+        XCTAssertEqual(HotelAlongRoute.noHotelPickedCopy, "No hotel picked")
+    }
+
+    func testOverLimitDaySetsTheWarningFlag() {
+        let ride = longRide
+        let planned = evenings(legs: ride, departureHour: 8)
+        let days = HotelAlongRoute.rideDays(
+            evenings: planned,
+            overnightDistances: [],
+            totalDistance: 1_200 * mile,
+            legs: ride,
+            dailyLimit: 8 * 3_600
+        )
+        XCTAssertTrue(days[0].exceedsDailyLimit)
+        XCTAssertTrue(days[1].exceedsDailyLimit)
+        XCTAssertFalse(days[2].exceedsDailyLimit)
+    }
+
     func testApplyStopsLabelSingularizesOne() {
         XCTAssertEqual(RoutePlannerViewModel.applyStopsLabel(count: 0), "Apply 0 stops")
         XCTAssertEqual(RoutePlannerViewModel.applyStopsLabel(count: 1), "Apply 1 stop")

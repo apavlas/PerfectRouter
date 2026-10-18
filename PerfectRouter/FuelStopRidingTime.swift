@@ -168,12 +168,14 @@ enum FuelStopRidingTime {
         index: Int,
         legs: [Leg],
         dayStartIndex: Int = 0,
+        dayStartMeters: CLLocationDistance? = nil,
         usesMetric: Bool = AppSettings.usesMetricUnits
     ) -> String? {
         guard index > 0, index <= legs.count else { return nil }
         let origin = min(max(dayStartIndex, 0), index)
         let endDistance = distanceThroughWaypoint(index, legs: legs)
-        let originDistance = distanceThroughWaypoint(origin, legs: legs)
+        let originDistance = dayStartMeters.map { min(max(0, $0), endDistance) }
+            ?? distanceThroughWaypoint(origin, legs: legs)
         let distance = max(0, endDistance - originDistance)
         let cumulative = max(
             0,
@@ -183,8 +185,16 @@ enum FuelStopRidingTime {
         let miles = formatDistance(distance, usesMetric: usesMetric)
         let riding = formatDuration(cumulative)
         // The first stop of this morning. "Since last" would only repeat
-        // the time since the overnight stop.
-        if index == origin + 1 {
+        // the time since the overnight stop. A planned evening that is not
+        // a waypoint is that morning when the previous stop is still behind it.
+        let firstOfDay: Bool
+        if dayStartMeters != nil {
+            let previous = distanceThroughWaypoint(index - 1, legs: legs)
+            firstOfDay = previous <= originDistance + sameStopToleranceMeters
+        } else {
+            firstOfDay = index == origin + 1
+        }
+        if firstOfDay {
             return "\(miles) · \(riding) riding"
         }
         let previousDistance = distanceThroughWaypoint(index - 1, legs: legs)

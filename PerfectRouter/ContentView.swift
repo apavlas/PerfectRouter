@@ -680,6 +680,10 @@ struct ContentView: View {
                 guard let id else { return }
                 proxy.scrollTo(id, anchor: .center)
             }
+            .onChange(of: viewModel.scrollToHotelToken) { _, _ in
+                guard let day = viewModel.scrollToHotelDay else { return }
+                proxy.scrollTo(AccessibilityID.hotelDay(day), anchor: .center)
+            }
             }
         }
     }

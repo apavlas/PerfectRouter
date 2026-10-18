@@ -69,6 +69,57 @@ final class CoreJourneyUITests: XCTestCase {
         )
     }
 
+    func testApplyingOnlyTheSecondEveningKeepsEarlierDayBoundaries() {
+        let app = launch()
+        planFixedRoute(in: app)
+
+        let hotel = revealPlanningRow("hotelStop.Weatherford Inn.unchecked", in: app)
+        XCTAssertTrue(hotel.exists, diagnosticTree(app))
+        scrollUntilInsidePlanningList(hotel, in: app)
+        tapHotelRadio(hotel)
+        XCTAssertTrue(
+            revealPlanningRow("hotelStop.Weatherford Inn.checked", in: app).exists,
+            diagnosticTree(app)
+        )
+
+        let apply = revealPlanningRow("applyHotels", in: app)
+        XCTAssertTrue(apply.exists, diagnosticTree(app))
+        scrollUntilInsidePlanningList(apply, in: app)
+        apply.tap()
+        waitForBannerToFinish(in: app)
+        assertWaypointListed("Weatherford Inn", in: app)
+
+        XCTAssertTrue(revealPlanningRow("rideDay.Day 1", in: app).exists, diagnosticTree(app))
+        XCTAssertTrue(revealPlanningRow("rideDay.Day 2", in: app).exists, diagnosticTree(app))
+        XCTAssertTrue(revealPlanningRow("rideDay.Day 3", in: app).exists, diagnosticTree(app))
+        XCTAssertFalse(identified("rideDay.Day 4", in: app).exists, diagnosticTree(app))
+
+        let missing = revealPlanningRow("noHotelPicked.1", in: app)
+        XCTAssertTrue(missing.exists, diagnosticTree(app))
+        XCTAssertEqual(missing.label, "No hotel picked", diagnosticTree(app))
+        let choose = revealPlanningRow("chooseHotel.1", in: app)
+        XCTAssertTrue(choose.exists, diagnosticTree(app))
+        XCTAssertEqual(choose.label, "Choose", diagnosticTree(app))
+        XCTAssertFalse(identified("noHotelPicked.2", in: app).exists, diagnosticTree(app))
+
+        for day in 1...3 {
+            let probe = revealPlanningRow("rideDayLimit.\(day)", in: app)
+            XCTAssertTrue(probe.exists, diagnosticTree(app))
+            if probe.label == "over" {
+                XCTAssertTrue(
+                    revealPlanningRow("rideDayOverLimit.\(day)", in: app).exists,
+                    "Day \(day) is over the riding limit with no warning\n\(diagnosticTree(app))"
+                )
+            } else {
+                XCTAssertEqual(probe.label, "ok", diagnosticTree(app))
+                XCTAssertFalse(
+                    identified("rideDayOverLimit.\(day)", in: app).exists,
+                    diagnosticTree(app)
+                )
+            }
+        }
+    }
+
     func testPlanRouteBetweenTwoFixedPointsShowsFuelStops() {
         let app = launch()
         planFixedRoute(in: app)
@@ -1250,7 +1301,8 @@ final class CoreJourneyUITests: XCTestCase {
             "Plan Ride", "gas station", "Navigate", "Apply", "placeSearch",
             "rideHighlights", "Ride Highlights", "highlight.", "Tallulah", "Bare Overlook",
             "routeMapFrame",
-            "noLodging", "hotelStop", "hotelLodgingState", "hotelDay", "Quality Inn", "Holiday Inn", "No lodging"
+            "noLodging", "hotelStop", "hotelLodgingState", "hotelDay", "Quality Inn", "Holiday Inn", "No lodging",
+            "noHotelPicked", "chooseHotel", "rideDay", "Weatherford", "No hotel"
         ]
         let highlights = full.split(separator: "\n").filter { line in
             keywords.contains { line.localizedCaseInsensitiveContains($0) }

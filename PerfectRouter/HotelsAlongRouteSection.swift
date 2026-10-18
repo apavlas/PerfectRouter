@@ -61,7 +61,8 @@ struct HotelsAlongRouteSection: View {
                 ForEach(viewModel.hotelEvenings) { evening in
                     Text("Day \(evening.dayNumber)")
                         .font(.subheadline.weight(.semibold))
-                        .accessibilityIdentifier("hotelDay.\(evening.dayNumber)")
+                        .accessibilityIdentifier(AccessibilityID.hotelDay(evening.dayNumber))
+                        .id(AccessibilityID.hotelDay(evening.dayNumber))
                         .focusable()
                     // One list row for the evening's options. Checking a hotel
                     // updates that row in place. An if/else ForEach here is a

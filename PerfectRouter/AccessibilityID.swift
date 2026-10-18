@@ -19,6 +19,12 @@ enum AccessibilityID {
     /// One line of evening-1 lodging state for UI-test attachments.
     static let hotelLodgingState = "hotelLodgingState"
     static let applyHotels = "applyHotels"
+
+    static func noHotelPicked(_ day: Int) -> String { "noHotelPicked.\(day)" }
+    static func chooseHotel(_ day: Int) -> String { "chooseHotel.\(day)" }
+    static func rideDayLimit(_ day: Int) -> String { "rideDayLimit.\(day)" }
+    static func rideDayOverLimit(_ day: Int) -> String { "rideDayOverLimit.\(day)" }
+    static func hotelDay(_ day: Int) -> String { "hotelDay.\(day)" }
     static let navigate = "navigate"
     static let rideHighlights = "rideHighlights"
     /// Camera center after a route is framed, as "latitude,longitude".
