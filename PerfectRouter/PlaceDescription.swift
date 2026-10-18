@@ -14,6 +14,8 @@ import MapKit
 ///
 /// A description is shown only when it is about that exact place. Text whose
 /// source record, page title, or domain names a different place is dropped.
+/// Review-site filler (review counts, photo counts, star ratings, truncated
+/// quotes) is not a description either. Neither check removes the place.
 enum PlaceDescriptionDisplay {
     static let collapsedLineLimit = 2
     static let rowSentenceLimit = 2
@@ -24,6 +26,7 @@ enum PlaceDescriptionDisplay {
     /// restatement is removed first; text about a different place is not shown.
     static func text(for description: String?, name: String? = nil) -> String? {
         guard let text = PlaceDescriptionReader.normalize(description) else { return nil }
+        if PlaceDescriptionReader.isReviewSiteFiller(text) { return nil }
         guard let social = PlaceDescriptionReader.droppingSocialEngagementSentences(in: text) else {
             return nil
         }
@@ -119,6 +122,7 @@ enum PlaceDescriptionReader {
     ) -> String? {
         if let raw, isOnlyPhoneNumber(raw) { return nil }
         guard let text = normalize(raw) else { return nil }
+        if isReviewSiteFiller(text) { return nil }
         if isOnlyPhoneNumber(text) || isBareCategory(text) || isOnlyAddress(text) { return nil }
         guard let social = droppingSocialEngagementSentences(in: text) else { return nil }
         guard let prose = strippingRestatedNameAndLocality(in: social, name: name) else { return nil }
@@ -204,6 +208,7 @@ enum PlaceDescriptionReader {
     /// three words or only the place name.
     static func acceptedPlaceText(_ raw: String?, name: String?) -> String? {
         guard let text = normalize(raw) else { return nil }
+        if isReviewSiteFiller(text) { return nil }
         guard let social = droppingSocialEngagementSentences(in: text) else { return nil }
         guard let prose = strippingRestatedNameAndLocality(in: social, name: name) else { return nil }
         if namesADifferentPlace(prose, placeName: name) { return nil }
@@ -218,6 +223,69 @@ enum PlaceDescriptionReader {
         let words = capped.split(whereSeparator: \.isWhitespace)
         guard words.count >= 3 else { return nil }
         return capped
+    }
+
+    /// Yelp, Tripadvisor, and Google listing chrome is not a description.
+    /// A review count, a photo count, a star rating, or a truncated quoted
+    /// snippet blanks the whole string. The place row stays; it just has
+    /// no description. Real prose that never uses those markers stays.
+    static func isReviewSiteFiller(_ text: String) -> Bool {
+        if text.contains("★") || text.contains("☆") || text.contains("⭐") || text.contains("✩") {
+            return true
+        }
+        if hasTruncatedQuotation(text) { return true }
+        let tokens = matchKey(text).split(separator: " ").map(String.init)
+        if hasCountedWord(tokens, words: ["review", "reviews"]) { return true }
+        if hasCountedWord(tokens, words: ["photo", "photos"]) { return true }
+        if hasCountedWord(tokens, words: ["star", "stars", "rating", "ratings"]) { return true }
+        return hasRatedScore(tokens)
+    }
+
+    /// "1 review" and "3 photos", including a number glued on as "5star".
+    /// The number may sit on either side of the word. "a review in the book"
+    /// has no count and is not filler.
+    private static func hasCountedWord(_ tokens: [String], words: [String]) -> Bool {
+        let keys = Set(words)
+        for index in tokens.indices {
+            let token = tokens[index]
+            let numberedStar = isNumberedStar(token)
+            guard keys.contains(token) || numberedStar else { continue }
+            if numberedStar { return true }
+            if index > 0, isCountToken(tokens[index - 1]) { return true }
+            if index + 1 < tokens.count, isCountToken(tokens[index + 1]) { return true }
+        }
+        return false
+    }
+
+    private static func isCountToken(_ token: String) -> Bool {
+        !token.isEmpty && token.allSatisfy(\.isNumber)
+    }
+
+    /// "5star" / "5stars" after a hyphen is stripped. "superstar" is not.
+    private static func isNumberedStar(_ token: String) -> Bool {
+        let suffix = token.hasSuffix("stars") ? "stars" : (token.hasSuffix("star") ? "star" : nil)
+        guard let suffix else { return false }
+        let prefix = token.dropLast(suffix.count)
+        return !prefix.isEmpty && prefix.allSatisfy(\.isNumber)
+    }
+
+    /// "rated 4.5" or "rating 5" after the decimal point is stripped.
+    private static func hasRatedScore(_ tokens: [String]) -> Bool {
+        guard tokens.count >= 2 else { return false }
+        for index in 0..<(tokens.count - 1) {
+            let token = tokens[index]
+            guard token == "rated" || token == "rating" else { continue }
+            if isCountToken(tokens[index + 1]) { return true }
+        }
+        return false
+    }
+
+    /// A review snippet cut off with an ellipsis, not a finished quotation
+    /// inside a real sentence.
+    private static func hasTruncatedQuotation(_ text: String) -> Bool {
+        let quotes: Set<Character> = ["\"", "“", "”", "«"]
+        guard text.contains(where: { quotes.contains($0) }) else { return false }
+        return text.contains("…") || text.contains("...")
     }
 
     /// One sentence of Facebook-style place stats is not a description.

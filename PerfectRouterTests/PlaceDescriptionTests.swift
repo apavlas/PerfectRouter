@@ -644,6 +644,54 @@ final class PlaceDescriptionTests: XCTestCase {
         XCTAssertEqual(ownMeta, bigTexanShown)
     }
 
+    /// Scraped Yelp/Tripadvisor/Google chrome. The card shows nothing.
+    func testReviewSiteFillerIsNotADescription() {
+        let scraped = "1 review and 3 photos of DARK BELMONT WALKING TOURS \"This wa…"
+        XCTAssertTrue(PlaceDescriptionReader.isReviewSiteFiller(scraped))
+        XCTAssertNil(PlaceDescriptionDisplay.text(for: scraped, name: "Dark Belmont Walking Tours"))
+        XCTAssertNil(PlaceDescriptionDisplay.rowText(for: scraped, name: "Dark Belmont Walking Tours"))
+        XCTAssertNil(PlaceDescriptionReader.acceptedPlaceText(scraped, name: "Dark Belmont Walking Tours"))
+        XCTAssertNil(PlaceDescriptionReader.acceptedAppleMapsText(
+            scraped,
+            name: "Dark Belmont Walking Tours",
+            rejectIfEqual: []
+        ))
+
+        let reviews = "23 reviews praise the cafe on Main Street."
+        let photos = "3 photos of the old brick depot on Route 66."
+        let stars = "Rated 4.5 stars by recent visitors to the canyon."
+        let glyphs = "★★★★☆ A short walk from the highway."
+        let snippet = "\"This walking tour was the highlight of our trip…\""
+        for filler in [reviews, photos, stars, glyphs, snippet] {
+            XCTAssertTrue(PlaceDescriptionReader.isReviewSiteFiller(filler), filler)
+            XCTAssertNil(PlaceDescriptionDisplay.text(for: filler, name: "Dark Belmont Walking Tours"), filler)
+            XCTAssertNil(PlaceDescriptionReader.acceptedPlaceText(filler, name: "Dark Belmont Walking Tours"), filler)
+        }
+
+        XCTAssertFalse(PlaceDescriptionReader.isReviewSiteFiller(PlaceDescriptionReader.cadillacRanchDescription))
+        XCTAssertEqual(
+            PlaceDescriptionDisplay.text(
+                for: PlaceDescriptionReader.cadillacRanchDescription,
+                name: "Cadillac Ranch"
+            ),
+            PlaceDescriptionReader.cadillacRanchDescription
+        )
+        let filling = "The restored 1930s gas station now serves as a Route 66 visitor center."
+        XCTAssertFalse(PlaceDescriptionReader.isReviewSiteFiller(filling))
+        XCTAssertEqual(PlaceDescriptionDisplay.text(for: filling, name: "The Filling Station"), filling)
+        XCTAssertFalse(PlaceDescriptionReader.isReviewSiteFiller(bigTexanDescription))
+        XCTAssertEqual(
+            PlaceDescriptionDisplay.text(for: bigTexanDescription, name: "The Big Texan Steak Ranch"),
+            bigTexanShown
+        )
+        let guestBook = "Visitors leave a review in the guest book at the station."
+        XCTAssertFalse(PlaceDescriptionReader.isReviewSiteFiller(guestBook))
+        XCTAssertEqual(PlaceDescriptionDisplay.text(for: guestBook, name: "The Filling Station"), guestBook)
+        let quoted = "Riders call the ranch \"a Texas icon.\" Ten vintage cars stand in a field west of town."
+        XCTAssertFalse(PlaceDescriptionReader.isReviewSiteFiller(quoted))
+        XCTAssertEqual(PlaceDescriptionDisplay.text(for: quoted, name: "Cadillac Ranch"), quoted)
+    }
+
     private func placeQuery(url: String) -> PlaceDescriptionQuery {
         PlaceDescriptionQuery(
             id: UUID(),

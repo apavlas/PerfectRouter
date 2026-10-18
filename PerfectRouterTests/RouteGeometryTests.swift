@@ -192,4 +192,52 @@ final class RouteGeometryTests: XCTestCase {
         )
         XCTAssertTrue(coords.isEmpty)
     }
+
+    // MARK: - Route camera
+
+    func testEmptyCoordinatesDoNotFrame() {
+        XCTAssertNil(RouteMapFraming.region(containing: []))
+    }
+
+    /// iPhone and iPad portrait pass the sheet fraction. iPad landscape and
+    /// Mac pass 0. The stub ride stays over Georgia, not the device location.
+    func testStubRideFramesOverTheRouteForSheetAndSidebar() {
+        let origin = UITestFixture.origin
+        let destination = UITestFixture.coordinate(milesNorth: UITestFixture.routeMiles, eastMeters: 0)
+        let coordinates = [origin, destination]
+        let midLatitude = (origin.latitude + destination.latitude) / 2
+
+        let sidebar = RouteMapFraming.region(containing: coordinates, bottomObscuredFraction: 0)
+        let sheet = RouteMapFraming.region(containing: coordinates, bottomObscuredFraction: 0.5)
+        guard let sidebar, let sheet else {
+            XCTFail("Expected a frame for the stub ride")
+            return
+        }
+
+        for fraction in [0.0, 0.5] {
+            guard let frame = RouteMapFraming.region(
+                containing: coordinates,
+                bottomObscuredFraction: fraction
+            ) else {
+                XCTFail("Expected a frame for fraction \(fraction)")
+                continue
+            }
+            XCTAssertGreaterThan(frame.centerLatitude, 30, "fraction \(fraction)")
+            XCTAssertLessThan(frame.centerLatitude, 42, "fraction \(fraction)")
+            XCTAssertLessThan(frame.centerLongitude, -80, "fraction \(fraction)")
+            XCTAssertGreaterThan(frame.centerLongitude, -84, "fraction \(fraction)")
+            let band = frame.visibleLatitudeBounds(bottomObscuredFraction: fraction)
+            XCTAssertGreaterThanOrEqual(origin.latitude, band.south, "fraction \(fraction)")
+            XCTAssertLessThanOrEqual(origin.latitude, band.north, "fraction \(fraction)")
+            XCTAssertGreaterThanOrEqual(destination.latitude, band.south, "fraction \(fraction)")
+            XCTAssertLessThanOrEqual(destination.latitude, band.north, "fraction \(fraction)")
+            let labelParts = frame.accessibilityLabel.split(separator: ",")
+            XCTAssertEqual(labelParts.count, 2)
+            XCTAssertFalse(frame.accessibilityLabel.contains(" "))
+        }
+
+        XCTAssertEqual(sidebar.centerLatitude, midLatitude, accuracy: 0.02)
+        XCTAssertLessThan(sheet.centerLatitude, midLatitude - 0.5)
+        XCTAssertEqual(sidebar.centerLongitude, sheet.centerLongitude, accuracy: 0.0001)
+    }
 }

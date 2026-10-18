@@ -33,6 +33,10 @@ private struct AlongRouteQuery: Sendable {
     var known: CLLocationDistance
 }
 
+/// Cadillac Ranch is about 15 km past downtown Amarillo, outside the 8 km
+/// sights corridor. File-level so the nonisolated highlight pick can read it.
+private let cadillacRanchApproachMeters: CLLocationDistance = 20_000
+
 /// One leg's vertices and drive time, copied on the main actor so the
 /// length scan can run off it. `MKRoute` itself is not sendable.
 private struct DriveLegSnapshot: Sendable {
@@ -4569,13 +4573,14 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 corridorRadiusMeters: 8_000,
                 generation: generation
             )
-            // A cancelled highlight pass publishes nothing. A throttled or
-            // failed lookup is not an empty ride: landmarks on the line
-            // still appear.
-            guard !Task.isCancelled, generation == highlightGeneration else { return }
-            searched = found.status == .completed ? found.stops : []
+            // A newer route owns the list. A cancelled, throttled, or failed
+            // lookup does not: landmarks on the line still publish. Clearing
+            // the list here is what left Oklahoma City → Amarillo with no rows.
+            guard generation == highlightGeneration else { return }
+            searched = (found.status == .completed && !Task.isCancelled) ? found.stops : []
         }
 
+        guard generation == highlightGeneration else { return }
         let landmarks = Self.landmarkHighlights(
             alongPolylines: suggestionRoutePolylines,
             totalDistance: totalDistanceMeters
@@ -4592,8 +4597,13 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             totalDistance: totalDistanceMeters
         ))
         rideHighlights = picked
+        guard generation == highlightGeneration else { return }
         let enriched = await attachingPlaceDescriptions(picked)
+        // A rejected description blanks that card's text. It must not drop
+        // the row, and a failed fetch must not replace the list with a
+        // shorter one. Cancellation leaves the picks already published.
         guard generation == highlightGeneration, !Task.isCancelled else { return }
+        guard enriched.count == picked.count else { return }
         rideHighlights = enriched
     }
 
@@ -4616,19 +4626,21 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     /// Cadillac Ranch sits just south of I-40 west of Amarillo. A dozen
     /// highlight samples on a coast-to-coast ride miss it unless one lands
-    /// nearby. When the published line passes within the sights corridor,
-    /// the ranch is a candidate and already carries its description.
+    /// nearby. When the published line passes within the approach, the ranch
+    /// is a candidate and already carries its description. A projection on
+    /// the Amarillo endpoint is kept; `selectHighlights` parks it inside the
+    /// end window. The stored sentence is applied here and is not fetched.
     nonisolated static func landmarkHighlights(
         alongPolylines polylines: [[CLLocationCoordinate2D]],
         totalDistance: CLLocationDistance,
-        corridorMeters: CLLocationDistance = 8_000
+        corridorMeters: CLLocationDistance = cadillacRanchApproachMeters
     ) -> [SuggestedStop] {
         guard totalDistance > 0, polylinesAreMeasurable(polylines) else { return [] }
         let coordinate = PlaceDescriptionReader.cadillacRanchCoordinate
         let detour = RouteGeometry.distanceFromRoute(of: coordinate, alongPolylines: polylines)
         guard detour.isFinite, detour <= corridorMeters else { return [] }
         let along = RouteGeometry.distanceAlongRoute(of: coordinate, alongPolylines: polylines)
-        guard along > 1, along < totalDistance - 1 else { return [] }
+        guard along > 1 else { return [] }
         let stop = SuggestedStop(
             name: "Cadillac Ranch",
             coordinate: coordinate,
@@ -4641,6 +4653,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     /// Fills in a place's own page description when Apple Maps had no prose.
     /// Queries are sendable copies; the map item stays on the main actor.
+    /// Every input stop is returned. A page that fails the place match, or
+    /// that is only review-site filler, stores nil on that stop and leaves
+    /// the row in the list.
     private func attachingPlaceDescriptions(_ stops: [SuggestedStop]) async -> [SuggestedStop] {
         let queries = stops.compactMap { stop -> PlaceDescriptionQuery? in
             guard stop.category.showsPlaceDescription, stop.placeDescription == nil else { return nil }
@@ -4679,12 +4694,26 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     ) -> [SuggestedStop] {
         guard maxCount > 0, totalDistance > 0 else { return [] }
 
-        // Ignore sights basically at the origin or destination.
+        // Ignore sights basically at the origin or destination. Cadillac
+        // Ranch is the exception: a ride that ends in Amarillo leaves it
+        // just past the city, and the row is parked inside this window
+        // instead of being dropped. Other sights keep the 8 km cap.
         let endMargin = min(5_000, totalDistance * 0.05)
-        let eligible = candidates.filter {
-            $0.detourMeters <= maxDetourMeters
-                && $0.distanceAlongRoute > endMargin
-                && $0.distanceAlongRoute < totalDistance - endMargin
+        let eligible = candidates.compactMap { stop -> SuggestedStop? in
+            let ranch = PlaceDescriptionReader.placeNamesMatch(stop.name, "Cadillac Ranch")
+            let detourLimit = ranch
+                ? max(maxDetourMeters, cadillacRanchApproachMeters)
+                : maxDetourMeters
+            guard stop.detourMeters <= detourLimit else { return nil }
+            var along = stop.distanceAlongRoute
+            if ranch, along >= totalDistance - endMargin {
+                let parked = totalDistance - endMargin - 1
+                guard parked > endMargin else { return nil }
+                along = parked
+            }
+            guard along > endMargin, along < totalDistance - endMargin else { return nil }
+            if along == stop.distanceAlongRoute { return stop }
+            return stop.withDistanceAlongRoute(along)
         }
 
         var chosen: [SuggestedStop] = []

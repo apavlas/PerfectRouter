@@ -454,3 +454,97 @@ enum RouteGeometry {
         }
     }
 }
+
+/// Camera for one planned ride. Built from the polyline's coordinates so a
+/// layout pass can frame the route without reading `MKMapRect` (that rect
+/// does not move the camera off user tracking).
+struct RouteMapFrame: Equatable {
+    var centerLatitude: CLLocationDegrees
+    var centerLongitude: CLLocationDegrees
+    var latitudeDelta: CLLocationDegrees
+    var longitudeDelta: CLLocationDegrees
+
+    var center: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: centerLatitude, longitude: centerLongitude)
+    }
+
+    var span: MKCoordinateSpan {
+        MKCoordinateSpan(latitudeDelta: latitudeDelta, longitudeDelta: longitudeDelta)
+    }
+
+    /// Latitudes still on screen when a bottom sheet covers `fraction` of
+    /// the map. The sheet hides the southern part of the camera.
+    func visibleLatitudeBounds(bottomObscuredFraction: Double) -> (south: Double, north: Double) {
+        let fraction = min(max(bottomObscuredFraction, 0), 0.85)
+        let southEdge = centerLatitude - latitudeDelta / 2
+        let northEdge = centerLatitude + latitudeDelta / 2
+        return (southEdge + fraction * latitudeDelta, northEdge)
+    }
+
+    /// "lat,lon" with a fixed decimal point, so a UI test can read the
+    /// camera without depending on the locale.
+    var accessibilityLabel: String {
+        "\(Self.token(centerLatitude)),\(Self.token(centerLongitude))"
+    }
+
+    private static func token(_ value: Double) -> String {
+        let sign = value < 0 ? "-" : ""
+        let scaled = Int((abs(value) * 10_000).rounded())
+        let whole = scaled / 10_000
+        let fraction = scaled % 10_000
+        return "\(sign)\(whole).\(String(format: "%04d", fraction))"
+    }
+}
+
+/// Fits a route in the map. `bottomObscuredFraction` is the planning sheet
+/// (iPhone and iPad portrait). Sidebar layouts — iPad landscape and Mac —
+/// pass 0 because the list is beside the map, not on top of it.
+enum RouteMapFraming {
+    static let marginFraction = 0.15
+    /// Keeps a north-south road from collapsing to a hairline of longitude.
+    static let minimumSpan: CLLocationDegrees = 0.02
+
+    static func region(
+        containing coordinates: [CLLocationCoordinate2D],
+        bottomObscuredFraction: Double = 0,
+        marginFraction: Double = RouteMapFraming.marginFraction
+    ) -> RouteMapFrame? {
+        let points = coordinates.filter(\.isValidLocation)
+        guard let first = points.first else { return nil }
+        var minLat = first.latitude
+        var maxLat = first.latitude
+        var minLon = first.longitude
+        var maxLon = first.longitude
+        for point in points.dropFirst() {
+            minLat = min(minLat, point.latitude)
+            maxLat = max(maxLat, point.latitude)
+            minLon = min(minLon, point.longitude)
+            maxLon = max(maxLon, point.longitude)
+        }
+
+        let margin = min(max(marginFraction, 0), 0.4)
+        var latSpan = max(maxLat - minLat, minimumSpan)
+        var lonSpan = max(maxLon - minLon, minimumSpan)
+        let growth = 1 + margin * 2
+        latSpan *= growth
+        lonSpan *= growth
+        var centerLat = (minLat + maxLat) / 2
+        let centerLon = (minLon + maxLon) / 2
+
+        let obscured = min(max(bottomObscuredFraction, 0), 0.85)
+        if obscured > 0 {
+            // The visible band is the top (1 - obscured) of the map. Widen
+            // the latitude span so the padded route fits in that band, then
+            // shift the camera south by half the covered fraction.
+            latSpan /= (1 - obscured)
+            centerLat -= (obscured / 2) * latSpan
+        }
+        guard centerLat.isFinite, centerLon.isFinite, latSpan > 0, lonSpan > 0 else { return nil }
+        return RouteMapFrame(
+            centerLatitude: centerLat,
+            centerLongitude: centerLon,
+            latitudeDelta: latSpan,
+            longitudeDelta: lonSpan
+        )
+    }
+}
