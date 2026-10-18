@@ -217,6 +217,134 @@ final class HotelAlongRouteTests: XCTestCase {
         XCTAssertEqual(HotelAlongRoute.noHotelPickedCopy, "No hotel picked")
     }
 
+    /// Day 2 of the stub ride is about 90 miles and under two hours. That is
+    /// inside a 100 mile tank and inside the 10 hour riding budget. "Past
+    /// your range" is the hop from the last fill, not that day length. An
+    /// unpicked evening is not a fill: with no pump, the hotel 180 miles from
+    /// the start is past the tank, and a pump 30 miles before the hotel is not.
+    func testShortDayIsNotPastYourRangeUnlessTheFuelHopExceedsTheTank() {
+        let ride = [
+            leg(miles: 180, hours: 180.0 / 55),
+            leg(miles: 100, hours: 100.0 / 55),
+        ]
+        let evening = 90 * mile
+        let hotel = 180 * mile
+        let planned = [
+            HotelAlongRoute.Evening(
+                dayNumber: 1,
+                dayStartDistance: 0,
+                targetDistance: evening,
+                departureMinutes: 8 * 60,
+                ridingSeconds: 10 * 3_600
+            ),
+            HotelAlongRoute.Evening(
+                dayNumber: 2,
+                dayStartDistance: evening,
+                targetDistance: hotel,
+                departureMinutes: HotelAlongRoute.morningDepartureMinutes,
+                ridingSeconds: 10 * 3_600
+            ),
+        ]
+        let limit = HotelAlongRoute.dailyRidingLimit(targetMinutes: 18 * 60)
+        let days = HotelAlongRoute.rideDays(
+            evenings: planned,
+            overnightDistances: [hotel],
+            totalDistance: 280 * mile,
+            legs: ride,
+            dailyLimit: limit
+        )
+        XCTAssertEqual(days.map(\.dayNumber), [1, 2, 3])
+        XCTAssertEqual(days[0].unpickedEvening, 1)
+        XCTAssertNil(days[1].unpickedEvening)
+        let dayMiles = (days[1].endDistance - days[1].startDistance) / mile
+        XCTAssertEqual(dayMiles, 90, accuracy: 0.1)
+        XCTAssertLessThan(days[1].ridingSeconds, 2 * 3_600)
+        XCTAssertFalse(days.contains { $0.exceedsDailyLimit })
+
+        let tank = 100 * mile
+        let pilot = 80 * mile
+        let onRoute = 150 * mile
+        XCTAssertFalse(RoutePlannerViewModel.hopExceedsTank(
+            distance: hotel,
+            anchors: [0, pilot, onRoute],
+            tank: tank
+        ))
+        XCTAssertFalse(RoutePlannerViewModel.hopExceedsTank(
+            distance: dayMiles * mile,
+            anchors: [0, pilot, onRoute],
+            tank: tank
+        ))
+        // The last pump is 80 miles back and the hotel is just past one tank.
+        XCTAssertTrue(RoutePlannerViewModel.hopExceedsTank(
+            distance: hotel + mile,
+            anchors: [0, pilot],
+            tank: tank
+        ))
+        // No pump at all. The evening at 90 miles must not be inserted as a fill,
+        // or this hop would look like 90 miles and the warning would disappear.
+        XCTAssertTrue(RoutePlannerViewModel.hopExceedsTank(
+            distance: hotel,
+            anchors: [0],
+            tank: tank
+        ))
+        XCTAssertFalse(RoutePlannerViewModel.hopExceedsTank(
+            distance: hotel,
+            anchors: [0, evening],
+            tank: tank
+        ))
+
+        let viewModel = RoutePlannerViewModel()
+        viewModel.fuelRangeMeters = tank
+        let origin = UITestFixture.origin
+        let hotelCoord = UITestFixture.coordinate(milesNorth: 180, eastMeters: 2 * mile)
+        let destination = UITestFixture.coordinate(milesNorth: 280, eastMeters: 0)
+        var overnight = Waypoint(name: "Weatherford Inn", coordinate: hotelCoord)
+        overnight.isOvernight = true
+        viewModel.waypoints = [
+            Waypoint(name: "Test Origin", coordinate: origin),
+            overnight,
+            Waypoint(name: "Test Destination", coordinate: destination),
+        ]
+        let toHotel = StubRouteBuilder.routes(
+            from: origin,
+            to: hotelCoord,
+            avoidsHighways: false,
+            alternates: false
+        )
+        let toDestination = StubRouteBuilder.routes(
+            from: hotelCoord,
+            to: destination,
+            avoidsHighways: false,
+            alternates: false
+        )
+        viewModel.legs = [toHotel[0], toDestination[0]]
+        viewModel.fuelStops = [
+            SuggestedStop(
+                name: "Pilot Madison",
+                coordinate: UITestFixture.coordinate(milesNorth: 80, eastMeters: 800),
+                category: .gas,
+                distanceAlongRoute: pilot,
+                detourMeters: 800
+            ),
+            SuggestedStop(
+                name: "On Route Fuel",
+                coordinate: UITestFixture.coordinate(milesNorth: 150, eastMeters: 0),
+                category: .gas,
+                distanceAlongRoute: onRoute,
+                detourMeters: 0
+            ),
+        ]
+        XCTAssertFalse(viewModel.waypointIsBeyondRemainingRange(at: 1))
+        XCTAssertEqual(viewModel.waypointRangeNotices(at: 1), [])
+
+        viewModel.fuelStops = []
+        XCTAssertTrue(
+            viewModel.waypointIsBeyondRemainingRange(at: 1),
+            "The unpicked evening is not a fuel fill, so the hop from the start still exceeds the tank"
+        )
+        XCTAssertEqual(viewModel.waypointRangeNotices(at: 1), ["Past your range"])
+    }
+
     func testOverLimitDaySetsTheWarningFlag() {
         let ride = longRide
         let planned = evenings(legs: ride, departureHour: 8)

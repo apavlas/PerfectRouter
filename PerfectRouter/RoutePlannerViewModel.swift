@@ -404,6 +404,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             noteRouteGeometryChanged()
             rebuildDriveLegCache()
             rebuildDistanceCache()
+            refreshPublishedRideDays()
         }
     }
 
@@ -658,6 +659,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         guard generation == hotelGeneration, !Task.isCancelled else { return }
         if UITestStubLaunch.isEnabled {
             plannedLodgingEvenings = UITestFixture.stubPlannedEvenings()
+            refreshPublishedRideDays()
             hotelEvenings = UITestFixture.stubHotelEvenings()
             hotelLoadFailed = false
             isSearchingHotels = false
@@ -673,6 +675,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             departureMinutes: departureMinutes,
             targetMinutes: target
         )
+        refreshPublishedRideDays()
         let evenings = HotelAlongRoute.evenings(
             legs: driveLegs,
             overnightDistances: overnightDistancesAlongRoute(),
@@ -1311,9 +1314,24 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         }
     }
 
-    /// Planned evenings, matched to applied hotels. Empty when the line
-    /// does not match the waypoint list yet — the overnight headings stay.
+    /// Last day split whose legs matched the waypoint list. A replan inserts
+    /// stops before the new line exists; dropping the day rows in that gap
+    /// leaves the list's focus containers empty and iPad freezes the
+    /// accessibility tree on the idle replan glyph.
+    private var publishedRideDays: [HotelAlongRoute.RideDay] = []
+
+    /// Planned evenings, matched to applied hotels. While the published line
+    /// still belongs to the previous waypoint list, the last split stays so
+    /// the route list does not lose its day rows mid-replan.
     var rideDays: [HotelAlongRoute.RideDay] {
+        guard FeatureFlags.hotelsAlongRoute, !plannedLodgingEvenings.isEmpty else { return [] }
+        if cachedDriveLegs.count + 1 != waypoints.count {
+            return publishedRideDays
+        }
+        return computedRideDays()
+    }
+
+    private func computedRideDays() -> [HotelAlongRoute.RideDay] {
         guard FeatureFlags.hotelsAlongRoute, !plannedLodgingEvenings.isEmpty else { return [] }
         let legs = cachedDriveLegs
         guard legs.count + 1 == waypoints.count else { return [] }
@@ -1326,6 +1344,16 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             legs: legs,
             dailyLimit: HotelAlongRoute.dailyRidingLimit(targetMinutes: hotelTargetMinutes)
         )
+    }
+
+    /// Stores the split when the line matches the list. A mismatch keeps the
+    /// previous split instead of publishing an empty one.
+    private func refreshPublishedRideDays() {
+        let fresh = computedRideDays()
+        let lineMatchesList = cachedDriveLegs.count + 1 == waypoints.count
+        if !fresh.isEmpty || lineMatchesList || plannedLodgingEvenings.isEmpty || !FeatureFlags.hotelsAlongRoute {
+            publishedRideDays = fresh
+        }
     }
 
     /// Polyline length from the origin through `index` legs. The destination
@@ -1385,7 +1413,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         var waypointIndex: Int?
         var unpickedDay: HotelAlongRoute.RideDay?
         var headingTitle: String?
-        var headingDay: HotelAlongRoute.RideDay?
+        /// Accessibility header for the day. Not a waypoint, so the
+        /// `waypoint.<name>` id on the stop row stays the stop.
+        var dayMarker: HotelAlongRoute.RideDay? = nil
     }
 
     var routeListEntries: [RouteListEntry] {
@@ -1396,8 +1426,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                     id: waypoint.id.uuidString,
                     waypointIndex: index,
                     unpickedDay: nil,
-                    headingTitle: nil,
-                    headingDay: nil
+                    headingTitle: nil
                 )
             }
         }
@@ -1411,12 +1440,15 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             while nextUnpicked < unpicked.count,
                   unpicked[nextUnpicked].endDistance < distance - tolerance {
                 let day = unpicked[nextUnpicked]
+                let startsDay = lastDay != day.dayNumber
+                if startsDay {
+                    entries.append(Self.dayMarkerEntry(day))
+                }
                 entries.append(RouteListEntry(
                     id: "noHotel-\(day.dayNumber)",
                     waypointIndex: nil,
                     unpickedDay: day,
-                    headingTitle: lastDay == day.dayNumber ? nil : "Day \(day.dayNumber)",
-                    headingDay: lastDay == day.dayNumber ? nil : day
+                    headingTitle: startsDay ? "Day \(day.dayNumber)" : nil
                 ))
                 lastDay = day.dayNumber
                 nextUnpicked += 1
@@ -1425,17 +1457,29 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 distance >= $0.startDistance - tolerance && distance <= $0.endDistance + tolerance
             }
             let startsDay = day.map { lastDay != $0.dayNumber } ?? false
+            if startsDay, let day {
+                entries.append(Self.dayMarkerEntry(day))
+            }
             let waypoint = waypoints[index]
             entries.append(RouteListEntry(
                 id: waypoint.id.uuidString,
                 waypointIndex: index,
                 unpickedDay: nil,
-                headingTitle: startsDay ? day.map { "Day \($0.dayNumber)" } : nil,
-                headingDay: startsDay ? day : nil
+                headingTitle: startsDay ? day.map { "Day \($0.dayNumber)" } : nil
             ))
             if let day { lastDay = day.dayNumber }
         }
         return entries
+    }
+
+    private static func dayMarkerEntry(_ day: HotelAlongRoute.RideDay) -> RouteListEntry {
+        RouteListEntry(
+            id: "ride-day-\(day.dayNumber)",
+            waypointIndex: nil,
+            unpickedDay: nil,
+            headingTitle: nil,
+            dayMarker: day
+        )
     }
 
     func removeListedWaypoints(at offsets: IndexSet) {
@@ -2154,21 +2198,37 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// True when `distance` is farther than the tank from the last fill the
     /// rider can use: the start, an applied gas stop, or an in-range
     /// recommendation. Recommended stops themselves are inside that window.
+    /// A planned evening with no hotel is not a fill, so it is not an anchor.
     func isBeyondRemainingRange(distanceAlongRoute distance: CLLocationDistance) -> Bool {
-        guard distance.isFinite, distance > 0, fuelRangeMeters > 0 else { return false }
         if isRecommendedFuelDistance(distance) { return false }
-        let previous = remainingRangeAnchors
-            .filter { $0 < distance - FuelStopRidingTime.sameStopToleranceMeters }
+        return Self.hopExceedsTank(
+            distance: distance,
+            anchors: remainingRangeAnchors,
+            tank: fuelRangeMeters
+        )
+    }
+
+    /// The hop from the farthest anchor still before `distance` exceeds the
+    /// tank. Anchors are fills and in-range recommendations, not day boundaries.
+    nonisolated static func hopExceedsTank(
+        distance: CLLocationDistance,
+        anchors: [CLLocationDistance],
+        tank: CLLocationDistance
+    ) -> Bool {
+        guard distance.isFinite, distance > 0, tank > 0 else { return false }
+        let previous = anchors
+            .filter { $0.isFinite && $0 < distance - FuelStopRidingTime.sameStopToleranceMeters }
             .max() ?? 0
-        return distance - previous > fuelRangeMeters
+        return distance - previous > tank
     }
 
     /// A waypoint past the tank from the previous fill. Nil legs, or a list
-    /// that does not match the published route, are not labeled.
+    /// that does not match the published route, are not labeled. The distance
+    /// is the polyline length, the same meters as the fuel anchors — not the
+    /// day segment drawn in the caption.
     func waypointIsBeyondRemainingRange(at index: Int) -> Bool {
         guard index > 0, legs.count + 1 == waypoints.count else { return false }
-        let distance = legs.prefix(index).reduce(0) { $0 + $1.distance }
-        return isBeyondRemainingRange(distanceAlongRoute: distance)
+        return isBeyondRemainingRange(distanceAlongRoute: waypointDistance(at: index))
     }
 
     /// Shown on a fuel stop whose hop from the previous fill is longer
@@ -2222,8 +2282,18 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     private var remainingRangeAnchors: [CLLocationDistance] {
         var anchors: [CLLocationDistance] = [0]
         anchors.append(contentsOf: gasFillDistances)
-        anchors.append(contentsOf: fuelStops.map { cachedDistance(for: $0) })
+        anchors.append(contentsOf: fuelStops.map { fuelAnchorDistance($0) })
         return anchors
+    }
+
+    /// Mile mark for one recommendation. A projection that collapsed to the
+    /// origin keeps the distance already stored on the stop, so a hotel is
+    /// not "past your range" just because the cache missed the pump.
+    private func fuelAnchorDistance(_ stop: SuggestedStop) -> CLLocationDistance {
+        RouteGeometry.preferredDistanceAlongRoute(
+            projected: cachedDistance(for: stop),
+            known: stop.distanceAlongRoute
+        )
     }
 
     private func isRecommendedFuelDistance(_ distance: CLLocationDistance) -> Bool {
@@ -3175,6 +3245,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         rideHighlights = []
         hotelEvenings = []
         plannedLodgingEvenings = []
+        refreshPublishedRideDays()
         hotelLoadFailed = false
         isSearchingHotels = false
         isShowingAllGasOnRoute = false

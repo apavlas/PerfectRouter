@@ -10,13 +10,13 @@ private struct NavigationReplanBanner: View {
     var status: String
 
     var body: some View {
-        Text(verbatim: calculating ? "Replanning…" : "·")
+        Text(verbatim: calculating ? status : "·")
             .font(.caption.weight(.semibold))
             .lineLimit(1)
             .minimumScaleFactor(0.7)
             .opacity(calculating ? 1 : 0)
             .accessibilityIdentifier(calculating ? AccessibilityID.replanBanner : "replanNavIdle")
-            .accessibilityLabel(calculating ? status : " ")
+            .accessibilityLabel(calculating ? status : "Idle")
             .accessibilityHidden(!calculating)
             .allowsHitTesting(false)
             .focusable()
@@ -454,7 +454,7 @@ struct ContentView: View {
             .padding(.vertical, showing ? 8 : 0)
             .background(showing ? AnyShapeStyle(.regularMaterial) : AnyShapeStyle(.clear))
             .accessibilityIdentifier(showing ? AccessibilityID.replanBanner : "replanSheetIdle")
-            .accessibilityLabel(showing ? status : " ")
+            .accessibilityLabel(showing ? status : "Idle")
             .accessibilityHidden(!showing)
             .focusable()
     }
@@ -494,21 +494,23 @@ struct ContentView: View {
             // The spinner is hidden from focus. A space-only title is not a
             // focus item either, so this stack had zero children at launch
             // and iPad aborted in UIFocusSystem. The idle glyph is a real
-            // character, and it is not the "Replanning for …" sentence, so
-            // a finished replan does not keep matching the banner.
+            // character. Its label is "Idle", not a space, so the tree does
+            // not fall back to the glyph while the id is still `replanBanner`.
+            // The id sits on this text, and only while the text is the
+            // "Replanning for …" sentence.
             Text(verbatim: showsMapReplanBanner ? status : "·")
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
                 .focusable()
+                .accessibilityIdentifier(showsMapReplanBanner ? AccessibilityID.replanBanner : "mapReplanIdle")
+                .accessibilityLabel(showsMapReplanBanner ? status : "Idle")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(.regularMaterial, in: Capsule())
         .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier(showsMapReplanBanner ? AccessibilityID.replanBanner : "mapReplanIdle")
-        .accessibilityLabel(showsMapReplanBanner ? status : " ")
+        .accessibilityElement(children: .contain)
         .accessibilityHidden(!showsMapReplanBanner)
         .allowsHitTesting(false)
     }

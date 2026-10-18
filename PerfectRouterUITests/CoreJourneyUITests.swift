@@ -781,10 +781,14 @@ final class CoreJourneyUITests: XCTestCase {
         for index in 0..<banners.count {
             let banner = banners.element(boundBy: index)
             guard banner.exists else { continue }
-            lastLabel = banner.label
-            if banner.label.localizedCaseInsensitiveContains(style) { return true }
+            let label = banner.label
+            // The idle chip is a middle dot. It shares no sentence with the
+            // style, and a whitespace label used to fall back to that glyph.
+            if label == "·" || label == "Idle" { continue }
+            lastLabel = label
+            if label.localizedCaseInsensitiveContains(style) { return true }
         }
-        let status = app.staticTexts.matching(
+        let status = app.descendants(matching: .any).matching(
             NSPredicate(format: "label CONTAINS %@", "Replanning for \(style)")
         ).firstMatch
         if status.exists {

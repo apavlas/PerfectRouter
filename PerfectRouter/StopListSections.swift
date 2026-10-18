@@ -266,7 +266,10 @@ struct WaypointsSection: View {
             }
             if !viewModel.waypoints.isEmpty {
                 ForEach(viewModel.routeListEntries) { entry in
-                    if let index = entry.waypointIndex, viewModel.waypoints.indices.contains(index) {
+                    if let day = entry.dayMarker {
+                        dayMarkerRow(day)
+                            .moveDisabled(true)
+                    } else if let index = entry.waypointIndex, viewModel.waypoints.indices.contains(index) {
                         let waypoint = viewModel.waypoints[index]
                         let label = waypointAccessibilityLabel(
                             index: index,
@@ -277,12 +280,13 @@ struct WaypointsSection: View {
                             index: index,
                             waypoint: waypoint,
                             label: label,
-                            heading: entry.headingTitle,
-                            headingDay: entry.headingDay
+                            heading: entry.headingTitle
                         )
                     } else if let day = entry.unpickedDay {
-                        noHotelRow(day, heading: entry.headingTitle, headingDay: entry.headingDay)
+                        noHotelRow(day, heading: entry.headingTitle)
                             .moveDisabled(true)
+                    } else {
+                        FocusPlaceholderRow()
                     }
                 }
                 .onDelete { viewModel.removeListedWaypoints(at: $0) }
@@ -304,20 +308,19 @@ struct WaypointsSection: View {
         index: Int,
         waypoint: Waypoint,
         label: String,
-        heading: String?,
-        headingDay: HotelAlongRoute.RideDay?
+        heading: String?
     ) -> some View {
         if planningUsesSidebar {
             Button {
                 viewModel.focusListedStop(id: waypoint.id, coordinate: waypoint.coordinate)
             } label: {
-                waypointRow(index: index, waypoint: waypoint, heading: heading, headingDay: headingDay)
+                waypointRow(index: index, waypoint: waypoint, heading: heading)
             }
             .buttonStyle(.plain)
             .sidebarStopHighlight(selected: viewModel.highlightedStopID == waypoint.id)
             .modifier(WaypointAccessibility(label: label, name: waypoint.name))
         } else {
-            waypointRow(index: index, waypoint: waypoint, heading: heading, headingDay: headingDay)
+            waypointRow(index: index, waypoint: waypoint, heading: heading)
                 .modifier(WaypointAccessibility(label: label, name: waypoint.name))
         }
     }
@@ -331,8 +334,7 @@ struct WaypointsSection: View {
     private func waypointRow(
         index: Int,
         waypoint: Waypoint,
-        heading: String?,
-        headingDay: HotelAlongRoute.RideDay?
+        heading: String?
     ) -> some View {
         let pastRange = viewModel.waypointIsBeyondRemainingRange(at: index)
         let dayTitle = FeatureFlags.hotelsAlongRoute
@@ -343,23 +345,23 @@ struct WaypointsSection: View {
         Label {
             if let caption = viewModel.waypointRidingCaption(at: index) {
                 VStack(alignment: .leading, spacing: 2) {
-                    if let dayTitle {
-                        dayHeading(dayTitle, day: headingDay)
-                    }
+                    dayHeadingSlot(dayTitle)
                     waypointName(waypoint)
                     ridingCaption(caption, overLimitDay: overDay)
                     if pastRange {
                         PastYourRangeLabel()
+                    } else {
+                        Color.clear.frame(height: 1)
                     }
                 }
             } else if pastRange || dayTitle != nil {
                 VStack(alignment: .leading, spacing: 2) {
-                    if let dayTitle {
-                        dayHeading(dayTitle, day: headingDay)
-                    }
+                    dayHeadingSlot(dayTitle)
                     waypointName(waypoint)
                     if pastRange {
                         PastYourRangeLabel()
+                    } else {
+                        Color.clear.frame(height: 1)
                     }
                 }
             } else {
@@ -372,33 +374,65 @@ struct WaypointsSection: View {
         .id(waypoint.id)
     }
 
-    private func dayHeading(_ title: String, day: HotelAlongRoute.RideDay?) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+    /// Visible "Day N" on the stop. The findable `rideDay.Day N` id lives on
+    /// `dayMarkerRow`, outside the waypoint accessibility stand-in. The other
+    /// branch is a one-point text so the stack does not drop to zero children
+    /// when a replan has not published the day yet.
+    @ViewBuilder
+    private func dayHeadingSlot(_ title: String?) -> some View {
+        if let title {
             Text(title)
                 .font(.subheadline.weight(.semibold))
-                .accessibilityIdentifier("rideDay.\(title)")
-            if let day {
-                Text(verbatim: day.exceedsDailyLimit ? "over" : "ok")
+                .accessibilityHidden(true)
+        } else {
+            Text(verbatim: " ")
+                .font(.system(size: 1))
+                .frame(maxWidth: .infinity, minHeight: 1, maxHeight: 1)
+                .accessibilityHidden(true)
+        }
+    }
+
+    /// One header per riding day, as its own list row. The waypoint row keeps
+    /// `waypoint.<name>`. Both the day id and the limit id are on this row so
+    /// a query can find them after Apply. A missing day has no row.
+    private func dayMarkerRow(_ day: HotelAlongRoute.RideDay) -> some View {
+        let limit = day.exceedsDailyLimit ? "over" : "ok"
+        return VStack(alignment: .leading, spacing: 0) {
+            Text(verbatim: "Day \(day.dayNumber)")
+                .font(.system(size: 1))
+                .foregroundStyle(.clear)
+                .frame(maxWidth: .infinity, minHeight: 1, maxHeight: 1)
+                .accessibilityIdentifier("rideDay.Day \(day.dayNumber)")
+                .accessibilityLabel("Day \(day.dayNumber)")
+                .accessibilityAddTraits(.isHeader)
+            Text(verbatim: limit)
+                .font(.system(size: 1))
+                .foregroundStyle(.clear)
+                .frame(maxWidth: .infinity, minHeight: 1, maxHeight: 1)
+                .accessibilityIdentifier(AccessibilityID.rideDayLimit(day.dayNumber))
+                .accessibilityLabel(limit)
+            if day.exceedsDailyLimit {
+                Text(verbatim: "over")
                     .font(.system(size: 1))
                     .foregroundStyle(.clear)
                     .frame(maxWidth: .infinity, minHeight: 1, maxHeight: 1)
-                    .accessibilityIdentifier(AccessibilityID.rideDayLimit(day.dayNumber))
-                    .accessibilityLabel(day.exceedsDailyLimit ? "over" : "ok")
+                    .accessibilityIdentifier(AccessibilityID.rideDayOverLimit(day.dayNumber))
+                    .accessibilityLabel("over")
             }
         }
+        .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+        .listRowSeparator(.hidden)
+        .listRowBackground(Color.clear)
     }
 
     /// Planned evening with no hotel. Ends that riding day and reopens the
     /// picker for it. The row stays even when a later night's hotel is applied.
     private func noHotelRow(
         _ day: HotelAlongRoute.RideDay,
-        heading: String?,
-        headingDay: HotelAlongRoute.RideDay?
+        heading: String?
     ) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            if let heading {
-                dayHeading(heading, day: headingDay)
-            }
+            dayHeadingSlot(heading)
             Text(HotelAlongRoute.noHotelPickedCopy)
                 .accessibilityIdentifier(AccessibilityID.noHotelPicked(day.dayNumber))
                 .accessibilityLabel(HotelAlongRoute.noHotelPickedCopy)

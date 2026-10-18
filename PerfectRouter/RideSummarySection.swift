@@ -156,7 +156,7 @@ struct RideSummarySection: View {
             .font(showing ? .subheadline.weight(.semibold) : .system(size: 1))
             .foregroundStyle(showing ? Color.primary : Color.clear)
             .accessibilityIdentifier(showing ? AccessibilityID.replanBanner : "replanBannerIdle")
-            .accessibilityLabel(showing ? replanStatus : " ")
+            .accessibilityLabel(showing ? replanStatus : "Idle")
             .accessibilityHidden(!showing)
             .focusable()
     }
