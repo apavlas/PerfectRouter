@@ -191,6 +191,10 @@ final class CoreJourneyUITests: XCTestCase {
         assertPlanningRowAbsent("gasLeg.1", in: app)
         XCTAssertTrue(revealPlanningRow("fuelStop.Pilot Madison.checked", in: app).exists, diagnosticTree(app))
 
+        // A downward swipe at the top of the list can drop the iPhone sheet
+        // to the collapsed detent. The header is still in the list; the
+        // short sheet is what hides it.
+        recoverCollapsedPhoneSheet(app)
         let closed = revealPlanningRow("gasListHeader", in: app)
         scrollUntilInsidePlanningList(closed, in: app)
         closed.tap()
@@ -1270,18 +1274,27 @@ final class CoreJourneyUITests: XCTestCase {
 
     /// Brings a planning-list row into the accessibility tree.
     ///
-    /// Scrolls `planningList` only. Dragging the sheet grabber on iPad resizes
-    /// the floating sheet and the hotel rows leave the list. A check replaces
-    /// the identifier on the row that was just tapped, so this waits at the
-    /// current offset before any drag.
+    /// Scrolls `planningList` only on iPad. Dragging that floating sheet's
+    /// grabber resizes it and the hotel rows leave the list. On iPhone a
+    /// downward swipe at the top of the list collapses the sheet, and the
+    /// row is simply off the short detent — reopen that sheet, then scroll.
+    /// A check replaces the identifier on the row that was just tapped, so
+    /// this waits at the current offset before any drag.
     private func revealPlanningRow(_ id: String, in app: XCUIApplication) -> XCUIElement {
+        recoverCollapsedPhoneSheet(app)
         if let found = waitForControl(id, in: app, timeout: 1.5) { return found }
         let nearby = scrollPlanningListUntilExists(id, in: app, maxSwipes: 12, expandSheet: false)
         if nearby.exists { return nearby }
+        recoverCollapsedPhoneSheet(app)
         scrollToTop(app, expandSheet: false)
         let fromTop = scrollPlanningListUntilExists(id, in: app, maxSwipes: 16, expandSheet: false)
         if fromTop.exists { return fromTop }
-        return reveal(id, in: app, expandSheet: false)
+        let revealed = reveal(id, in: app, expandSheet: false)
+        if revealed.exists { return revealed }
+        recoverCollapsedPhoneSheet(app)
+        if let found = waitForControl(id, in: app, timeout: 1.5) { return found }
+        let afterOpen = scrollPlanningListUntilExists(id, in: app, maxSwipes: 12, expandSheet: false)
+        return afterOpen.exists ? afterOpen : revealed
     }
 
     /// The row's frame sits fully inside the list, not merely overlapping it.
@@ -1293,6 +1306,7 @@ final class CoreJourneyUITests: XCTestCase {
     ) {
         var nudges = 0
         while nudges < 10 {
+            recoverCollapsedPhoneSheet(app)
             let list = planningList(in: app)
             if element.exists, element.isHittable, rowFrame(element, isInside: list) {
                 return
@@ -1305,10 +1319,12 @@ final class CoreJourneyUITests: XCTestCase {
             nudgePlanningList(in: app, up: up)
             nudges += 1
         }
+        recoverCollapsedPhoneSheet(app)
         let list = planningList(in: app)
+        let rowFrameText = element.exists ? "\(element.frame)" : "missing"
         XCTAssertTrue(
             element.exists && element.isHittable && rowFrame(element, isInside: list),
-            "Row was clipped by the planning list.\nrow=\(element.frame) list=\(list.frame)\n\(diagnosticTree(app))"
+            "Row was clipped by the planning list.\nrow=\(rowFrameText) list=\(list.frame)\n\(diagnosticTree(app))"
         )
     }
 
@@ -1335,14 +1351,19 @@ final class CoreJourneyUITests: XCTestCase {
         expandSheet: Bool = true
     ) -> XCUIElement {
         if expandSheet { expandPlanningSheet(app) }
+        recoverCollapsedPhoneSheet(app)
         if let found = control(identifier, in: app) { return found }
         for pass in 0..<2 {
             let up = pass == 0
             for _ in 0..<maxSwipes {
                 dragPlanningList(in: app, up: up)
+                // Finger moving down at the top of the list collapses the
+                // iPhone sheet instead of scrolling. Reopen before the next poll.
+                if !up { recoverCollapsedPhoneSheet(app) }
                 if let found = waitForControl(identifier, in: app, timeout: 0.6) { return found }
             }
         }
+        recoverCollapsedPhoneSheet(app)
         return identified(identifier, in: app)
     }
 
@@ -1530,15 +1551,89 @@ final class CoreJourneyUITests: XCTestCase {
 
     private func scrollToTop(_ app: XCUIApplication, expandSheet: Bool = true) {
         if expandSheet { expandPlanningSheet(app) }
-        for _ in 0..<12 {
-            if let field = placeSearchField(in: app),
-               field.frame.height > 1,
-               field.frame.minY < app.frame.height * 0.55 {
-                return
-            }
+        recoverCollapsedPhoneSheet(app)
+        var stalled = 0
+        var lastProbe = ""
+        for _ in 0..<8 {
+            recoverCollapsedPhoneSheet(app)
+            if placeSearchIsAtListTop(in: app) { return }
+            let probe = topPlanningProbe(in: app)
             swipePlanningList(in: app, up: false)
+            // At the top of the list this swipe drags the iPhone sheet to
+            // Collapsed instead of scrolling. Reopen. Stop once the search
+            // field is back; otherwise the swipe resized a mid-list sheet
+            // and the walk toward the top still has to finish.
+            if planningSheetCollapsed(app) {
+                recoverCollapsedPhoneSheet(app)
+                if placeSearchIsAtListTop(in: app) { return }
+                stalled = 0
+                lastProbe = ""
+                continue
+            }
+            if !probe.isEmpty, probe == lastProbe {
+                stalled += 1
+                if stalled >= 2 { return }
+            } else {
+                stalled = 0
+            }
+            lastProbe = probe
         }
         if expandSheet { expandPlanningSheet(app) }
+        recoverCollapsedPhoneSheet(app)
+    }
+
+    /// The search field is the first planning row. Once it sits inside the
+    /// list, further downward swipes do not scroll — on iPhone they collapse
+    /// the sheet.
+    private func placeSearchIsAtListTop(in app: XCUIApplication) -> Bool {
+        guard let field = placeSearchField(in: app), field.frame.height > 1 else { return false }
+        let list = planningList(in: app)
+        guard list.exists, list.frame.height > 40 else {
+            return field.frame.minY < app.frame.height * 0.55
+        }
+        return list.frame.insetBy(dx: -4, dy: 20).intersects(field.frame)
+    }
+
+    private func topPlanningProbe(in app: XCUIApplication) -> String {
+        let list = planningList(in: app)
+        guard list.exists, list.frame.height > 40 else { return "" }
+        let visible = list.frame.insetBy(dx: 4, dy: 12)
+        var bestY = CGFloat.greatestFiniteMagnitude
+        var best = ""
+        for element in list.buttons.allElementsBoundByIndex where element.exists {
+            let frame = element.frame
+            guard frame.height > 8, visible.intersects(frame), frame.minY <= bestY else { continue }
+            bestY = frame.minY
+            let id = element.identifier
+            best = id.isEmpty ? element.label : "\(id)@\(Int(frame.minY))"
+        }
+        return best
+    }
+
+    /// iPad portrait is a floating sheet. Dragging its grabber resizes that
+    /// sheet and hotel rows leave the list, so this never runs there. iPhone
+    /// is the full-width sheet under 600pt wide.
+    private func isPhonePlanningSheet(_ app: XCUIApplication) -> Bool {
+        app.frame.width < 600 && app.buttons["Sheet Grabber"].exists
+    }
+
+    /// Grabber value "Collapsed", or the short fraction detent parked at the
+    /// bottom of the phone.
+    private func planningSheetCollapsed(_ app: XCUIApplication) -> Bool {
+        guard isPhonePlanningSheet(app) else { return false }
+        let grabber = app.buttons["Sheet Grabber"]
+        let value = (grabber.value as? String) ?? ""
+        if value.localizedCaseInsensitiveContains("collapsed") { return true }
+        let list = planningList(in: app)
+        guard list.exists, list.frame.height > 40 else { return false }
+        return list.frame.height < 220 && list.frame.minY > app.frame.height * 0.65
+    }
+
+    /// Drags the phone grabber back to the large detent after a list swipe
+    /// collapsed it. No-op on iPad and when the sheet is already open.
+    private func recoverCollapsedPhoneSheet(_ app: XCUIApplication) {
+        guard planningSheetCollapsed(app) else { return }
+        expandPlanningSheet(app)
     }
 
     /// Drags the sheet grabber to the large detent. A half-height sheet only
