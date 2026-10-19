@@ -710,28 +710,17 @@ final class CoreJourneyUITests: XCTestCase {
     // MARK: - Route style
 
     private func selectRouteStyle(_ style: String, in app: XCUIApplication) -> Int {
-        let deadline = Date().addingTimeInterval(20)
-        var down = 0
-        var picker: XCUIElement?
-        while Date() < deadline {
-            let byID = identified("routeStylePicker", in: app)
-            if byID.exists {
-                picker = byID
-                break
-            }
-            let byLabel = app.buttons["Route style"]
-            if byLabel.exists {
-                picker = byLabel
-                break
-            }
-            if down >= 14 {
-                scrollToTop(app)
-                down = 0
-            } else {
-                swipePlanningList(in: app, up: true)
-                down += 1
-            }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.12))
+        expandPlanningSheet(app)
+        // Suggested Gas starts open, above this picker, until a fuel stop is
+        // applied. A 20s clock ran out on iPad after a handful of swipes,
+        // one drag short of the row.
+        var picker = routeStyleControl(in: app)
+        if picker == nil {
+            picker = scrollDownToRouteStyle(in: app)
+        }
+        if picker == nil {
+            scrollToTop(app, expandSheet: false)
+            picker = routeStyleControl(in: app) ?? scrollDownToRouteStyle(in: app)
         }
         guard let picker else {
             XCTFail("Route style control did not appear.\n\n\(diagnosticTree(app))")
@@ -739,7 +728,7 @@ final class CoreJourneyUITests: XCTestCase {
         }
         let before = completedReplanGeneration(in: app)
         scrollUntilHittable(picker, in: app)
-        // Highlights lengthen the list, so this picker is found at the bottom
+        // The open gas list and the highlights put this picker at the bottom
         // edge. An iPad menu opened from there sits off the sheet and Twisty
         // exists but is not hittable. Lift the anchor into the upper half.
         var lifts = 0
@@ -763,6 +752,52 @@ final class CoreJourneyUITests: XCTestCase {
         }
         XCTFail("Route style \(style) was not hittable")
         return before
+    }
+
+    private func routeStyleControl(in app: XCUIApplication) -> XCUIElement? {
+        let byID = identified("routeStylePicker", in: app)
+        if byID.exists { return byID }
+        let byLabel = app.buttons["Route style"]
+        if byLabel.exists { return byLabel }
+        return nil
+    }
+
+    /// One downward pass. Stops when the picker is in the tree, or when the
+    /// lowest list button stops changing, which is the end of the list.
+    private func scrollDownToRouteStyle(in app: XCUIApplication) -> XCUIElement? {
+        var lastProbe = ""
+        var stalled = 0
+        for _ in 0..<24 {
+            swipePlanningList(in: app, up: true)
+            if let found = routeStyleControl(in: app) { return found }
+            let probe = lowestPlanningButton(in: app)
+            if !probe.isEmpty, probe == lastProbe {
+                stalled += 1
+                if stalled >= 2 { return nil }
+            } else {
+                stalled = 0
+            }
+            lastProbe = probe
+        }
+        return routeStyleControl(in: app)
+    }
+
+    /// Identifier and position of the lowest button currently inside the list.
+    /// Unchanged across two drags means the list did not move.
+    private func lowestPlanningButton(in app: XCUIApplication) -> String {
+        let list = planningList(in: app)
+        guard list.exists, list.frame.height > 40 else { return "" }
+        let visible = list.frame.insetBy(dx: 4, dy: 12)
+        var bestY = -CGFloat.greatestFiniteMagnitude
+        var best = ""
+        for element in list.buttons.allElementsBoundByIndex where element.exists {
+            let frame = element.frame
+            guard frame.height > 8, visible.intersects(frame), frame.minY >= bestY else { continue }
+            bestY = frame.minY
+            let id = element.identifier
+            best = id.isEmpty ? element.label : "\(id)@\(Int(frame.minY))"
+        }
+        return best
     }
 
     /// Menu row for `style`. Prefer a hittable control. A visible iPad popover
