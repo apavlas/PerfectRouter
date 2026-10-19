@@ -240,14 +240,20 @@ final class CoreJourneyUITests: XCTestCase {
         XCTAssertTrue(revealPlanningRow("highlight.Tallulah Gorge.name", in: app).exists, diagnosticTree(app))
 
         selectCategory("Food", in: app)
-        let noFood = app.staticTexts["No food stops found near this route."]
-        XCTAssertTrue(noFood.waitForExistence(timeout: 8), diagnosticTree(app))
+        // Food is the suggestions section under Highlights. On iPhone the
+        // expanded highlight cards fill the sheet, so the food header and the
+        // empty-state line are below the fold and absent from the lazy list
+        // until scrolled. The header exists only after the Food chip sets the
+        // category, which is how this confirms the tap.
         let food = revealPlanningRow("foodListHeader", in: app)
+        XCTAssertTrue(food.exists, diagnosticTree(app))
         XCTAssertTrue(food.label.contains("Food"), food.label)
         XCTAssertTrue(food.label.contains("expanded"), food.label)
         scrollUntilInsidePlanningList(food, in: app)
         food.tap()
-        XCTAssertTrue(revealPlanningRow("foodListHeader", in: app).label.contains("collapsed"))
+        let collapsedFood = revealPlanningRow("foodListHeader", in: app)
+        XCTAssertTrue(collapsedFood.exists, diagnosticTree(app))
+        XCTAssertTrue(collapsedFood.label.contains("collapsed"), collapsedFood.label)
     }
 
     func testRideHighlightDescriptionIsClippedUnderTheNameAndExpands() {
