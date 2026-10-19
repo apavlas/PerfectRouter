@@ -25,11 +25,31 @@ final class MapFitInsetsTests: XCTestCase {
             sheet: CGRect(x: 0, y: map.height - sheetHeight, width: map.width, height: sheetHeight)
         ))
 
-        XCTAssertEqual(padding.bottom, sheetHeight, accuracy: 0.5)
+        // Visible coverage is the sheet height; the margin sits above the grabber.
+        XCTAssertEqual(padding.bottom, sheetHeight + MapFitInsets.margin, accuracy: 0.5)
         XCTAssertEqual(padding.top, 72, accuracy: 0.5)
         XCTAssertEqual(padding.left, MapFitInsets.margin, accuracy: 0.5)
         XCTAssertEqual(padding.right, MapFitInsets.margin, accuracy: 0.5)
-        XCTAssertEqual(padding.accessibilityLabel, "72,16,422,16")
+        XCTAssertEqual(padding.accessibilityLabel, "72,16,438,16")
+    }
+
+    /// The medium sheet's hosting view is laid out at the large height and
+    /// hangs below the screen. The inset follows the grabber, not that height.
+    func testPhoneSheetTallerThanTheScreenUsesTheGrabber() {
+        let map = CGSize(width: 402, height: 874)
+        let grabberY: CGFloat = 410
+        let padding = MapFitInsets.padding(for: MapFitMeasurement(
+            mapSize: map,
+            safeTop: 59,
+            topControls: CGRect(x: 0, y: 62, width: map.width, height: 58),
+            sheet: CGRect(x: 0, y: grabberY, width: map.width, height: 778)
+        ))
+
+        XCTAssertEqual(padding.bottom, map.height - grabberY + MapFitInsets.margin, accuracy: 0.5)
+        XCTAssertEqual(padding.top, 136, accuracy: 0.5)
+        XCTAssertEqual(padding.left, MapFitInsets.margin, accuracy: 0.5)
+        XCTAssertEqual(padding.right, MapFitInsets.margin, accuracy: 0.5)
+        XCTAssertLessThan(padding.bottom, 500)
     }
 
     func testIPadFloatingCardInsetsKeepTheRouteAboveTheCard() {
@@ -44,7 +64,7 @@ final class MapFitInsetsTests: XCTestCase {
             sheet: card
         ))
 
-        XCTAssertEqual(padding.bottom, cardHeight, accuracy: 0.5)
+        XCTAssertEqual(padding.bottom, cardHeight + MapFitInsets.margin, accuracy: 0.5)
         XCTAssertEqual(padding.top, 80, accuracy: 0.5)
         // Side gaps stay open. The route uses the full width above the card.
         XCTAssertEqual(padding.left, MapFitInsets.margin, accuracy: 0.5)
@@ -87,19 +107,37 @@ final class MapFitInsetsTests: XCTestCase {
             sheet: CGRect(x: 0, y: 350, width: 390, height: 350)
         ))
         XCTAssertEqual(padding.top, MapFitInsets.margin, accuracy: 0.5)
-        XCTAssertEqual(padding.bottom, 350, accuracy: 0.5)
+        XCTAssertEqual(padding.bottom, 350 + MapFitInsets.margin, accuracy: 0.5)
     }
 
-    func testSheetTallerThanTheMapStillReportsItsHeight() {
-        let map = CGSize(width: 390, height: 700)
-        let cardHeight: CGFloat = 790
+    func testCenteredIPadCardFitsTheBandAboveTheCard() {
+        let map = CGSize(width: 834, height: 1194)
+        let card = CGRect(x: 117, y: 380, width: 600, height: 480)
         let padding = MapFitInsets.padding(for: MapFitMeasurement(
             mapSize: map,
-            topControls: CGRect(x: 0, y: -80, width: map.width, height: 80),
-            sheet: CGRect(x: 0, y: map.height - cardHeight, width: map.width, height: cardHeight)
+            safeTop: 24,
+            topControls: CGRect(x: 0, y: 20, width: map.width, height: 60),
+            sheet: card
         ))
-        XCTAssertEqual(padding.bottom, cardHeight, accuracy: 0.5)
-        XCTAssertEqual(padding.top, MapFitInsets.margin, accuracy: 0.5)
+
+        XCTAssertEqual(padding.bottom, map.height - card.minY + MapFitInsets.margin, accuracy: 0.5)
+        XCTAssertEqual(padding.top, 96, accuracy: 0.5)
+        XCTAssertEqual(padding.left, MapFitInsets.margin, accuracy: 0.5)
+        XCTAssertEqual(padding.right, MapFitInsets.margin, accuracy: 0.5)
+    }
+
+    func testFloatingCardWithNoRoomAboveUsesTheSideGap() {
+        let map = CGSize(width: 834, height: 1194)
+        let card = CGRect(x: 220, y: 80, width: 400, height: 900)
+        let padding = MapFitInsets.padding(for: MapFitMeasurement(
+            mapSize: map,
+            topControls: CGRect(x: 0, y: 0, width: map.width, height: 50),
+            sheet: card
+        ))
+
+        XCTAssertEqual(padding.bottom, 0, accuracy: 0.5)
+        XCTAssertEqual(padding.right, map.width - card.minX + MapFitInsets.margin, accuracy: 0.5)
+        XCTAssertEqual(padding.left, MapFitInsets.margin, accuracy: 0.5)
     }
 
     func testEmptyMapProducesZeroPadding() {

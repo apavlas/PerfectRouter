@@ -4,12 +4,12 @@ import Foundation
 /// Edge padding, in points, that keeps a fitted route in the part of the map
 /// the rider can actually see.
 ///
-/// `bottom` is how far the planning sheet covers the map from the bottom
-/// edge. On a phone that is the sheet height. On an iPad portrait card that
-/// sits on the bottom edge, it is the card's height too. `top` clears the
-/// category chips. Leading and trailing grow when a tall panel covers that
-/// side; a floating card that only covers the bottom leaves the side gaps
-/// open so the route can sit above the card at the full map width.
+/// `bottom` is the distance from the map's bottom edge up to the sheet's
+/// visible top (the grabber), plus a small margin. It is not the sheet
+/// view's bounds height: a medium detent lays that view out taller than the
+/// card and the extra hangs below the screen. `top` clears the category
+/// chips when they overlap the map. A floating card with almost no map above
+/// it and a wide gap beside it pads that side instead.
 struct MapFitPadding: Equatable {
     var top: CGFloat
     var left: CGFloat
@@ -82,43 +82,75 @@ enum MapFitInsets {
         if sheet.width > 1, sheet.height > 1, sheet.intersects(mapRect) {
             let overlap = sheet.intersection(mapRect)
             if overlap.width > 8, overlap.height > 8 {
-                let spansWidth = overlap.width >= map.width * 0.65
-                let spansHeight = overlap.height >= map.height * 0.65
-                // A tall panel on one side (not the bottom card) leaves the
-                // route beside it. A bottom sheet, including a floating
-                // iPad card that does not reach the side edges, keeps the
-                // route in the band above the card.
-                if spansHeight && !spansWidth {
-                    let attachedLeading = overlap.minX <= measurement.safeLeft + 8
-                    let attachedTrailing = overlap.maxX >= map.width - measurement.safeRight - 8
-                    if attachedLeading && !attachedTrailing {
-                        left = max(left, overlap.maxX)
-                    } else if attachedTrailing && !attachedLeading {
-                        right = max(right, map.width - overlap.minX)
-                    } else {
-                        bottom = max(bottom, map.height - overlap.minY)
-                    }
-                } else {
-                    let coveredFromBottom = map.height - overlap.minY
-                    let flushWithBottom = overlap.maxY >= map.height - 12
-                    // A card that starts above the map (the chips already
-                    // shortened it) is still as tall as its own frame. Report
-                    // that height so the inset matches the presented sheet.
-                    if flushWithBottom {
-                        bottom = max(bottom, max(coveredFromBottom, sheet.height))
-                    } else {
-                        bottom = max(bottom, coveredFromBottom)
-                    }
-                }
+                apply(
+                    sheet: overlap,
+                    map: map,
+                    top: top,
+                    margin: margin,
+                    safeLeft: measurement.safeLeft,
+                    safeRight: measurement.safeRight,
+                    bottom: &bottom,
+                    left: &left,
+                    right: &right
+                )
             }
         }
 
         return MapFitPadding(
             top: min(max(0, top), map.height),
             left: min(max(0, left + margin), map.width),
-            bottom: max(0, bottom),
+            bottom: min(max(0, bottom), map.height),
             right: min(max(0, right + margin), map.width)
         )
+    }
+
+    /// Pads from the sheet's visible top, never from the view's raw height.
+    /// `sheet` is already clipped to the map, so a rect that hangs below the
+    /// screen contributes only the on-screen part.
+    private static func apply(
+        sheet: CGRect,
+        map: CGSize,
+        top: CGFloat,
+        margin: CGFloat,
+        safeLeft: CGFloat,
+        safeRight: CGFloat,
+        bottom: inout CGFloat,
+        left: inout CGFloat,
+        right: inout CGFloat
+    ) {
+        let spansHeight = sheet.height >= map.height * 0.65
+        let attachedBottom = sheet.maxY >= map.height - 12
+        let attachedLeading = sheet.minX <= safeLeft + 8
+        let attachedTrailing = sheet.maxX >= map.width - safeRight - 8
+        let aboveHeight = sheet.minY - top
+        let leadingGap = sheet.minX
+        let trailingGap = map.width - sheet.maxX
+
+        // A tall panel glued to one side (sidebar-sized) leaves the route
+        // on the open side. A bottom sheet, and a floating card with a
+        // usable band above it, keep the route above the card's top edge.
+        if spansHeight && !spansWidth && attachedLeading != attachedTrailing {
+            if attachedLeading {
+                left = max(left, sheet.maxX)
+            } else {
+                right = max(right, map.width - sheet.minX)
+            }
+            return
+        }
+
+        // The card covers the middle and the strip above it is a sliver.
+        // The open map is the column beside the card.
+        if !attachedBottom && aboveHeight < 100 && max(leadingGap, trailingGap) >= 160 {
+            if leadingGap >= trailingGap {
+                right = max(right, map.width - sheet.minX)
+            } else {
+                left = max(left, sheet.maxX)
+            }
+            return
+        }
+
+        let covered = map.height - sheet.minY + margin
+        bottom = max(bottom, min(map.height, covered))
     }
 
     /// How far the chip bar covers the map from the top. A bar that sits

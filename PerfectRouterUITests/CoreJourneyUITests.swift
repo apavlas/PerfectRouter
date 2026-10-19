@@ -11,6 +11,9 @@ final class CoreJourneyUITests: XCTestCase {
     private let stubArgument = "-UITestStubServices"
     private let noGasCopy = "No gas stations found along this route."
     private let gasFailedCopy = "Couldn't load gas — tap to retry"
+    /// While set, grabber drags inside the test are the only detent changes.
+    /// Search must not pull the sheet back to large under a fit.
+    private var locksPlanningDetent = false
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -229,8 +232,9 @@ final class CoreJourneyUITests: XCTestCase {
         XCTAssertLessThan(parts[1], -80, "Camera longitude was not the stub ride: \(marker.label)")
     }
 
-    /// Long stub ride, phone sheet. The fit advances and its bottom inset
-    /// matches the sheet. Dragging the sheet must not fit again.
+    /// Long stub ride, phone sheet at the medium detent. The fit advances,
+    /// the route sits above the grabber and below the chips, and a later
+    /// drag does not fit again.
     func testPhoneMapFitInsetsMatchTheSheet() throws {
         guard UIDevice.current.userInterfaceIdiom == .phone else {
             throw XCTSkip("iPhone sheet fit runs on iPhone")
@@ -1351,6 +1355,7 @@ final class CoreJourneyUITests: XCTestCase {
     /// exposes the first list rows, so fuel stops and the destination never
     /// appear in the accessibility tree.
     private func expandPlanningSheet(_ app: XCUIApplication) {
+        if locksPlanningDetent { return }
         let grabber = app.buttons["Sheet Grabber"]
         guard grabber.exists else { return }
         for _ in 0..<3 {
@@ -1465,8 +1470,9 @@ final class CoreJourneyUITests: XCTestCase {
         return app
     }
 
-    /// Plans the long stub ride and checks the fit cleared the sheet.
-    /// Dragging the grabber afterwards must leave the generation alone.
+    /// Plans the long stub ride at the medium detent and checks the route
+    /// landed in the visible map. Dragging the grabber afterwards must leave
+    /// the generation and the pin frames alone.
     private func assertPlannedRouteFitsAboveTheSheet(requirePortrait: Bool = false) throws {
         let app = launch()
         if requirePortrait {
@@ -1483,20 +1489,64 @@ final class CoreJourneyUITests: XCTestCase {
         }
 
         let before = mapFitGeneration(in: app)
-        planFixedRoute(in: app)
+        // One place does not publish a line. Collapse to the medium card
+        // before the destination, which is the fit the gate screenshots.
+        search("Test Origin", in: app)
+        collapsePlanningSheet(app)
+        locksPlanningDetent = true
+        search("Test Destination", in: app)
+        locksPlanningDetent = false
         let after = waitForMapFitGeneration(above: before, in: app)
+        // The camera animation is 0.6s. Read pins after it settles.
+        RunLoop.current.run(until: Date().addingTimeInterval(0.8))
+
+        let sheetTop = planningSheetTop(in: app)
+        XCTAssertGreaterThan(
+            sheetTop,
+            app.frame.height * 0.22,
+            "The sheet was still at the large detent, so the fit was not the medium card\n\(diagnosticTree(app))"
+        )
+        XCTAssertLessThan(
+            sheetTop,
+            app.frame.height * 0.72,
+            "The sheet collapsed past the medium detent\n\(diagnosticTree(app))"
+        )
+        let chipBottom = chipBarBottom(in: app)
+        let origin = routePinFrame("Test Origin", in: app, above: sheetTop)
+        let destination = routePinFrame("Test Destination", in: app, above: sheetTop)
+        assertPin(
+            origin,
+            name: "Test Origin",
+            above: sheetTop,
+            belowChips: chipBottom,
+            in: app
+        )
+        assertPin(
+            destination,
+            name: "Test Destination",
+            above: sheetTop,
+            belowChips: chipBottom,
+            in: app
+        )
+
         var insets = mapFitInsets(in: app)
         if insets.bottom < 40 {
             RunLoop.current.run(until: Date().addingTimeInterval(1.2))
             insets = mapFitInsets(in: app)
         }
-        let sheetHeight = presentedPlanningSheetHeight(in: app)
-        let tolerance = max(80, sheetHeight * 0.2)
+        // 16 matches MapFitInsets.margin. The bottom edge is the grabber,
+        // not the hosting view's off-screen height.
+        let expectedBottom = app.frame.maxY - sheetTop + 16
         XCTAssertEqual(
             insets.bottom,
-            sheetHeight,
-            accuracy: tolerance,
-            "mapFitInsets \(insets.label) bottom should match the sheet height \(sheetHeight). generation \(after)\n\(diagnosticTree(app))"
+            expectedBottom,
+            accuracy: 48,
+            "mapFitInsets \(insets.label) bottom should be the gap under the grabber (\(expectedBottom)), not the sheet view's height. generation \(after)\n\(diagnosticTree(app))"
+        )
+        XCTAssertGreaterThanOrEqual(
+            insets.top,
+            16,
+            "mapFitInsets \(insets.label) did not pad the top of the map"
         )
         let settled = mapFitGeneration(in: app)
         dragPlanningSheetDown(app)
@@ -1505,6 +1555,31 @@ final class CoreJourneyUITests: XCTestCase {
             mapFitGeneration(in: app),
             settled,
             "Dragging the sheet refit the map. insets \(mapFitInsets(in: app).label)\n\(diagnosticTree(app))"
+        )
+        let originAfter = routePinFrame("Test Origin", in: app, above: sheetTop)
+        let destinationAfter = routePinFrame("Test Destination", in: app, above: sheetTop)
+        XCTAssertEqual(originAfter.midX, origin.midX, accuracy: 24, "The drag moved Test Origin\n\(diagnosticTree(app))")
+        XCTAssertEqual(originAfter.midY, origin.midY, accuracy: 24, "The drag moved Test Origin\n\(diagnosticTree(app))")
+        XCTAssertEqual(destinationAfter.midX, destination.midX, accuracy: 24, "The drag moved Test Destination\n\(diagnosticTree(app))")
+        XCTAssertEqual(destinationAfter.midY, destination.midY, accuracy: 24, "The drag moved Test Destination\n\(diagnosticTree(app))")
+    }
+
+    private func assertPin(
+        _ frame: CGRect,
+        name: String,
+        above sheetTop: CGFloat,
+        belowChips chipBottom: CGFloat,
+        in app: XCUIApplication
+    ) {
+        XCTAssertLessThanOrEqual(
+            frame.maxY,
+            sheetTop + 12,
+            "\(name) sits under the sheet. pin \(frame) sheet top \(sheetTop)\n\(diagnosticTree(app))"
+        )
+        XCTAssertGreaterThanOrEqual(
+            frame.minY,
+            chipBottom - 36,
+            "\(name) sits under the chip bar. pin \(frame) chips \(chipBottom)\n\(diagnosticTree(app))"
         )
     }
 
@@ -1557,22 +1632,96 @@ final class CoreJourneyUITests: XCTestCase {
         )
     }
 
-    /// Distance from the top of Plan Ride to the bottom of the screen. A
-    /// bottom-anchored phone sheet and iPad card both present at that height.
-    private func presentedPlanningSheetHeight(in app: XCUIApplication) -> CGFloat {
+    /// Pulls a large sheet down to the medium card before the route is fitted.
+    private func collapsePlanningSheet(_ app: XCUIApplication) {
+        let grabber = app.buttons["Sheet Grabber"]
+        XCTAssertTrue(
+            grabber.waitForExistence(timeout: 2),
+            "The sheet grabber was missing, so the fit could not run at the medium detent\n\(diagnosticTree(app))"
+        )
+        for _ in 0..<3 {
+            if grabber.frame.minY > app.frame.height * 0.28 { return }
+            let start = grabber.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.52))
+            start.press(forDuration: 0.05, thenDragTo: end)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.45))
+        }
+    }
+
+    /// Map pin for a waypoint. List rows share the name and sit inside the
+    /// sheet, so a hit has to be the small marker above `sheetTop`.
+    private func routePinFrame(
+        _ name: String,
+        in app: XCUIApplication,
+        above sheetTop: CGFloat
+    ) -> CGRect {
+        let deadline = Date().addingTimeInterval(6)
+        while Date() < deadline {
+            if let frame = visibleRoutePin(name, in: app, above: sheetTop) {
+                return frame
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+        }
+        XCTFail("\(name) had no map pin above the sheet\n\(diagnosticTree(app))")
+        return .zero
+    }
+
+    private func visibleRoutePin(
+        _ name: String,
+        in app: XCUIApplication,
+        above sheetTop: CGFloat
+    ) -> CGRect? {
+        let features = app.otherElements.matching(
+            NSPredicate(format: "identifier == 'VKPointFeature' AND label CONTAINS %@", name)
+        )
+        if let frame = firstPinFrame(in: features, above: sheetTop) {
+            return frame
+        }
+        let labeled = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label == %@ OR label BEGINSWITH %@", name, name + ",")
+        )
+        return firstPinFrame(in: labeled, above: sheetTop, maximumHeight: 80)
+    }
+
+    private func firstPinFrame(
+        in query: XCUIElementQuery,
+        above sheetTop: CGFloat,
+        maximumHeight: CGFloat = 120
+    ) -> CGRect? {
+        for index in 0..<query.count {
+            let element = query.element(boundBy: index)
+            guard element.exists else { continue }
+            let frame = element.frame
+            guard frame.width > 1, frame.height > 1, frame.height <= maximumHeight else { continue }
+            guard frame.midY < sheetTop else { continue }
+            return frame
+        }
+        return nil
+    }
+
+    private func chipBarBottom(in app: XCUIApplication) -> CGFloat {
+        var bottom: CGFloat = 0
+        for name in ["Gas", "Food", "Coffee", "Scenic", "Sights"] {
+            let button = app.buttons[name].firstMatch
+            if button.exists {
+                bottom = max(bottom, button.frame.maxY)
+            }
+        }
+        XCTAssertGreaterThan(bottom, 1, "The chip bar was not on screen\n\(diagnosticTree(app))")
+        return bottom
+    }
+
+    private func planningSheetTop(in app: XCUIApplication) -> CGFloat {
+        let grabber = app.buttons["Sheet Grabber"]
+        if grabber.exists, grabber.frame.minY > 1 {
+            return grabber.frame.minY
+        }
         let bar = app.navigationBars["Plan Ride"]
         if bar.exists, bar.frame.minY > 1 {
-            return app.frame.maxY - bar.frame.minY
+            return bar.frame.minY
         }
-        let sheet = app.sheets.firstMatch
-        if sheet.exists, sheet.frame.height > 80 {
-            return sheet.frame.height
-        }
-        let list = planningList(in: app)
-        if list.frame.minY > 1 {
-            return app.frame.maxY - list.frame.minY
-        }
-        return list.frame.height
+        XCTFail("The sheet grabber was not on screen\n\(diagnosticTree(app))")
+        return 0
     }
 
     private func dragPlanningSheetDown(_ app: XCUIApplication) {

@@ -60,6 +60,9 @@ struct ContentView: View {
     @State private var mapUsesSidebar = false
     /// A fit is waiting for the sheet and chip bar to report frames.
     @State private var fitAwaitingChrome = false
+    /// True after the current legs have been fitted. A grabber drag must
+    /// not fit again; the next load, replan, or Apply clears this.
+    @State private var didFitCurrentLegs = false
     /// Camera callbacks caused by our own fit. A rider pan lands at zero.
     @State private var programmaticCameraEvents = 0
     /// True after the rider pans or zooms since the last route fit.
@@ -215,6 +218,7 @@ struct ContentView: View {
             // line. Dragging the sheet does not publish legs, so it leaves
             // the camera where the rider put it.
             guard !legs.isEmpty else { return }
+            didFitCurrentLegs = false
             riderAdjustedCamera = false
             fitRouteToVisibleMap(legs)
         }
@@ -223,7 +227,9 @@ struct ContentView: View {
         }
         .onAppear {
             mapUsesSidebar = usesSidebar
-            guard !viewModel.legs.isEmpty else { return }
+            // A detent drag can rebuild the map. That appearance is not a
+            // new route, so it must not move the camera.
+            guard !viewModel.legs.isEmpty, !didFitCurrentLegs else { return }
             riderAdjustedCamera = false
             fitRouteToVisibleMap(viewModel.legs)
         }
@@ -277,26 +283,6 @@ struct ContentView: View {
                 .accessibilityIdentifier(AccessibilityID.routeMapFrame)
                 .accessibilityLabel(framedRoute?.accessibilityLabel ?? "")
                 .accessibilityHidden(framedRoute == nil)
-                .allowsHitTesting(false)
-        }
-        .overlay(alignment: .topLeading) {
-            // Whole points: "top,left,bottom,right". Stays readable before
-            // the first fit so a test can see generation leave zero.
-            Text(verbatim: mapFitPadding.accessibilityLabel)
-                .font(.system(size: 1))
-                .foregroundStyle(.clear)
-                .frame(width: 8, height: 8)
-                .accessibilityIdentifier(AccessibilityID.mapFitInsets)
-                .accessibilityLabel(mapFitPadding.accessibilityLabel)
-                .allowsHitTesting(false)
-        }
-        .overlay(alignment: .topLeading) {
-            Text(verbatim: "\(mapFitGeneration)")
-                .font(.system(size: 1))
-                .foregroundStyle(.clear)
-                .frame(width: 8, height: 8)
-                .accessibilityIdentifier(AccessibilityID.mapFitGeneration)
-                .accessibilityLabel("\(mapFitGeneration)")
                 .allowsHitTesting(false)
         }
     }
@@ -647,6 +633,23 @@ struct ContentView: View {
                         .accessibilityLabel("\(viewModel.lastCompletedReplanStyle)|\(viewModel.lastCompletedReplanGeneration)")
                         .accessibilityValue("\(viewModel.lastCompletedReplanStyle)|\(viewModel.lastCompletedReplanGeneration)")
                         .focusable()
+                    // On the sheet, not the map. An iPad sheet hides the map
+                    // from the accessibility tree until the card moves, which
+                    // made these markers look missing until a grabber drag.
+                    Text(verbatim: mapFitPadding.accessibilityLabel)
+                        .font(.system(size: 1))
+                        .foregroundStyle(.clear)
+                        .frame(maxWidth: .infinity, minHeight: 1, maxHeight: 1)
+                        .accessibilityIdentifier(AccessibilityID.mapFitInsets)
+                        .accessibilityLabel(mapFitPadding.accessibilityLabel)
+                        .focusable()
+                    Text(verbatim: "\(mapFitGeneration)")
+                        .font(.system(size: 1))
+                        .foregroundStyle(.clear)
+                        .frame(maxWidth: .infinity, minHeight: 1, maxHeight: 1)
+                        .accessibilityIdentifier(AccessibilityID.mapFitGeneration)
+                        .accessibilityLabel("\(mapFitGeneration)")
+                        .focusable()
                 }
                 .accessibilityElement(children: .contain)
             }
@@ -763,6 +766,7 @@ struct ContentView: View {
     /// Called for a new line only — load, replan, and Apply — never because
     /// the sheet detent moved.
     private func fitRouteToVisibleMap(_ legs: [MKRoute]) {
+        guard !didFitCurrentLegs else { return }
         let measurement = currentMapFitMeasurement()
         guard measurement.mapSize.width > 1, measurement.mapSize.height > 1 else {
             fitAwaitingChrome = true
@@ -783,9 +787,11 @@ struct ContentView: View {
             insets: padding
         ), frame.center.isValidLocation else {
             fitAwaitingChrome = false
+            didFitCurrentLegs = true
             return
         }
         fitAwaitingChrome = false
+        didFitCurrentLegs = true
         framedRoute = frame
         mapFitPadding = padding
         mapFitGeneration += 1
@@ -817,7 +823,9 @@ struct ContentView: View {
     }
 
     private func followUpFitIfNeeded() {
-        guard fitAwaitingChrome, !riderAdjustedCamera else { return }
+        // Only the fit that is still waiting on a first measurement. A later
+        // grabber drag changes the sheet frame and must leave the camera.
+        guard fitAwaitingChrome, !didFitCurrentLegs, !riderAdjustedCamera else { return }
         guard !viewModel.legs.isEmpty else { return }
         fitRouteToVisibleMap(viewModel.legs)
     }
@@ -957,9 +965,9 @@ struct ContentView: View {
     }
 }
 
-/// Window frame of a view, including one hosted in a sheet. A sheet's
-/// SwiftUI global space is not the map's, so the probe converts through
-/// UIKit. Not a focus container: iPad aborts when an empty one appears.
+/// Screen frame of a view, including one hosted in a sheet. A sheet window
+/// and the map window do not share an origin, so the probe converts through
+/// the screen. Not a focus container: iPad aborts when an empty one appears.
 private struct MapFitFrameReporter: UIViewRepresentable {
     var onFrame: @MainActor (CGRect) -> Void
 
@@ -989,7 +997,7 @@ private struct MapFitViewportReporter: UIViewRepresentable {
     }
 }
 
-/// Publishes its window frame from layout. Delivery is the next main-actor
+/// Publishes a screen frame from layout. Delivery is the next main-actor
 /// turn so a state write is not inside `layoutSubviews`.
 @MainActor
 private final class MapFitFrameProbe: UIView {
@@ -998,8 +1006,10 @@ private final class MapFitFrameProbe: UIView {
     private var lastFrame = CGRect.null
     private var lastSafeArea = UIEdgeInsets(top: -1, left: -1, bottom: -1, right: -1)
     private var deliverScheduled = false
+    private var retryScheduled = false
     private var queuedFrame: CGRect?
     private var queuedSafeArea: UIEdgeInsets?
+    private weak var cachedMapView: MKMapView?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -1018,6 +1028,7 @@ private final class MapFitFrameProbe: UIView {
     override func didMoveToWindow() {
         super.didMoveToWindow()
         publish()
+        scheduleRetries()
     }
 
     override func layoutSubviews() {
@@ -1030,9 +1041,23 @@ private final class MapFitFrameProbe: UIView {
         publish()
     }
 
+    /// The presented card is not always in the first layout pass. Two later
+    /// reads catch it before the rider can drag the grabber.
+    private func scheduleRetries() {
+        guard !retryScheduled else { return }
+        retryScheduled = true
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(80))
+            self?.publish()
+            try? await Task.sleep(for: .milliseconds(320))
+            self?.publish()
+            self?.retryScheduled = false
+        }
+    }
+
     private func publish() {
-        guard let window else { return }
-        let frame = convert(bounds, to: window)
+        guard window != nil else { return }
+        let frame = resolvedFrame()
         guard frame.width > 1, frame.height > 1 else { return }
         let safe = safeAreaInsets
         let frameChanged = lastFrame.isNull || framesDiffer(frame, lastFrame)
@@ -1053,6 +1078,161 @@ private final class MapFitFrameProbe: UIView {
                 self.onViewport?(frame, safe)
             }
         }
+    }
+
+    /// Sheet probes report the visible card (grabber included, clipped to
+    /// the screen). Map probes report the `MKMapView` the camera fills.
+    /// Chip probes report their own screen frame.
+    private func resolvedFrame() -> CGRect {
+        guard let window else { return .zero }
+        let screen = window.screen.bounds
+        if onViewport != nil {
+            return mapViewFrame(clippedTo: screen)
+        }
+        if isInsideSheet {
+            let card = sheetCardFrame(clippedTo: screen)
+            if card.width > 1, card.height > 1 { return card }
+        }
+        return chromeFrame(clippedTo: screen)
+    }
+
+    /// The chip bar. One superview up covers a background probe whose own
+    /// bounds are still zero; walking further would report the whole map.
+    private func chromeFrame(clippedTo screen: CGRect) -> CGRect {
+        guard let window else { return .zero }
+        let own = screenFrame(bounds, of: self, window: window).intersection(screen)
+        if own.width > 1, own.height > 1 { return own }
+        guard let parent = superview else { return own }
+        return screenFrame(parent.bounds, of: parent, window: window).intersection(screen)
+    }
+
+    private var isInsideSheet: Bool {
+        var responder: UIResponder? = self
+        while let current = responder {
+            if let controller = current as? UIViewController,
+               controller.sheetPresentationController != nil {
+                return true
+            }
+            responder = current.next
+        }
+        return false
+    }
+
+    /// The detent's frame, not the hosting view's bounds. A medium sheet's
+    /// content view is often laid out at the large height and hangs below
+    /// the screen; using that height pads the route into a sliver.
+    private func sheetCardFrame(clippedTo screen: CGRect) -> CGRect {
+        if let presented = presentedFrame(clippedTo: screen) {
+            var frame = presented
+            if let chrome = enclosingChromeFrame(clippedTo: screen),
+               chrome.minY < frame.minY,
+               frame.minY - chrome.minY <= 32 {
+                let bottomEdge = frame.maxY
+                frame.origin.y = chrome.minY
+                frame.size.height = bottomEdge - chrome.minY
+            }
+            return frame.intersection(screen)
+        }
+        // No detent frame yet. A full-screen ancestor is the container, not
+        // the card; publishing it would pad the whole map.
+        let own = ownFrame(clippedTo: screen)
+        let covers = abs(own.width - screen.width) < 8 && abs(own.height - screen.height) < 8
+        return covers ? .zero : own
+    }
+
+    private func presentedFrame(clippedTo screen: CGRect) -> CGRect? {
+        var responder: UIResponder? = self
+        while let current = responder {
+            if let controller = current as? UIViewController,
+               let presentation = controller.sheetPresentationController,
+               let container = presentation.containerView,
+               let window = container.window {
+                let inContainer = presentation.frameOfPresentedViewInContainerView
+                guard inContainer.width > 40, inContainer.height > 40 else { return nil }
+                let onScreen = screenFrame(inContainer, of: container, window: window)
+                let clipped = onScreen.intersection(screen)
+                guard clipped.width > 40, clipped.height > 40 else { return nil }
+                return clipped
+            }
+            responder = current.next
+        }
+        return nil
+    }
+
+    /// Drop-shadow chrome around the presented view. Only a short extension
+    /// above the detent is the grabber; a much taller ancestor is the
+    /// off-screen layout and is ignored.
+    private func enclosingChromeFrame(clippedTo screen: CGRect) -> CGRect? {
+        var responder: UIResponder? = self
+        while let current = responder {
+            if let controller = current as? UIViewController,
+               let presented = controller.sheetPresentationController?.presentedView
+                ?? controller.presentationController?.presentedView {
+                var view: UIView? = presented
+                var best: CGRect?
+                var hops = 0
+                while let candidate = view, hops < 4 {
+                    guard let window = candidate.window else { break }
+                    let clipped = screenFrame(candidate.bounds, of: candidate, window: window).intersection(screen)
+                    let covers = abs(clipped.width - screen.width) < 8
+                        && abs(clipped.height - screen.height) < 8
+                    if clipped.height > 40, clipped.width > 40, !covers {
+                        best = clipped
+                    }
+                    if covers { break }
+                    view = candidate.superview
+                    hops += 1
+                }
+                return best
+            }
+            responder = current.next
+        }
+        return nil
+    }
+
+    private func mapViewFrame(clippedTo screen: CGRect) -> CGRect {
+        if let cachedMapView, let mapWindow = cachedMapView.window {
+            return screenFrame(cachedMapView.bounds, of: cachedMapView, window: mapWindow).intersection(screen)
+        }
+        var current: UIView? = self
+        var hops = 0
+        while let candidate = current, hops < 10 {
+            if let map = mapView(in: candidate, depth: 0) {
+                cachedMapView = map
+                guard let window = map.window else { break }
+                return screenFrame(map.bounds, of: map, window: window).intersection(screen)
+            }
+            current = candidate.superview
+            hops += 1
+        }
+        return ownFrame(clippedTo: screen)
+    }
+
+    private func mapView(in view: UIView, depth: Int) -> MKMapView? {
+        if depth > 8 { return nil }
+        if let map = view as? MKMapView { return map }
+        for subview in view.subviews {
+            if let map = mapView(in: subview, depth: depth + 1) { return map }
+        }
+        return nil
+    }
+
+    private func ownFrame(clippedTo screen: CGRect) -> CGRect {
+        guard let window else { return .zero }
+        var current: UIView? = self
+        var hops = 0
+        while let candidate = current, hops < 5 {
+            let clipped = screenFrame(candidate.bounds, of: candidate, window: window).intersection(screen)
+            if clipped.width > 40, clipped.height > 40 { return clipped }
+            current = candidate.superview
+            hops += 1
+        }
+        return screenFrame(bounds, of: self, window: window).intersection(screen)
+    }
+
+    private func screenFrame(_ rect: CGRect, of view: UIView, window: UIWindow) -> CGRect {
+        let inWindow = view.convert(rect, to: window)
+        return window.convert(inWindow, to: nil)
     }
 
     private func safeAreaEqual(_ lhs: UIEdgeInsets, _ rhs: UIEdgeInsets) -> Bool {
