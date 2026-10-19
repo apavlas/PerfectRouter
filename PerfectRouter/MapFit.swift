@@ -118,6 +118,7 @@ enum MapFitInsets {
         left: inout CGFloat,
         right: inout CGFloat
     ) {
+        let spansWidth = sheet.width >= map.width * 0.65
         let spansHeight = sheet.height >= map.height * 0.65
         let attachedBottom = sheet.maxY >= map.height - 12
         let attachedLeading = sheet.minX <= safeLeft + 8
