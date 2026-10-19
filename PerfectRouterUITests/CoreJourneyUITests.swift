@@ -472,7 +472,9 @@ final class CoreJourneyUITests: XCTestCase {
         while nudges < 8 {
             guard field.exists, field.frame.height > 1 else { return }
             let midY = field.frame.midY
-            if midY > chromeBottom, midY < lowerBand { return }
+            // A medium card does not reach the top half of the screen. The
+            // field only has to clear the navigation bar.
+            if midY > chromeBottom, locksPlanningDetent || midY < lowerBand { return }
             nudgePlanningList(in: app, up: midY >= lowerBand)
             nudges += 1
         }
@@ -498,6 +500,20 @@ final class CoreJourneyUITests: XCTestCase {
     /// field or a plain descendant, and a prior scroll drops it out of the
     /// lazy list until the sheet is back at the top.
     private func waitForPlaceSearch(in app: XCUIApplication, timeout: TimeInterval = 12) -> XCUIElement {
+        if locksPlanningDetent {
+            // The sheet is already at medium. Expanding would make the fit
+            // check the large detent, and scrolling to the top half of the
+            // screen pulls the field out of a card that starts lower.
+            let deadline = Date().addingTimeInterval(timeout)
+            while Date() < deadline {
+                if let field = placeSearchOnMediumSheet(in: app) {
+                    return field
+                }
+                RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+            }
+            XCTFail("Place search was not on the medium sheet\n\n\(diagnosticTree(app))")
+            return app.textFields["placeSearch"]
+        }
         expandPlanningSheet(app)
         scrollToTop(app)
         let deadline = Date().addingTimeInterval(timeout)
@@ -1508,8 +1524,8 @@ final class CoreJourneyUITests: XCTestCase {
         )
         XCTAssertLessThan(
             sheetTop,
-            app.frame.height * 0.72,
-            "The sheet collapsed past the medium detent\n\(diagnosticTree(app))"
+            app.frame.height * 0.64,
+            "The sheet is the compact card (grabber \(sheetTop) of \(app.frame.height)), so the fit is not the medium detent\n\(diagnosticTree(app))"
         )
         let chipBottom = chipBarBottom(in: app)
         let origin = routePinFrame("Test Origin", in: app, above: sheetTop)
@@ -1633,19 +1649,76 @@ final class CoreJourneyUITests: XCTestCase {
     }
 
     /// Pulls a large sheet down to the medium card before the route is fitted.
+    ///
+    /// A fast drag toward mid-screen keeps its velocity. On iPad portrait that
+    /// skips medium and snaps to the smallest card (grabber near 0.68 of a
+    /// 1210pt screen), which unloads `placeSearch`. A slow release next to
+    /// medium settles there, and a compact landing is dragged back up.
     private func collapsePlanningSheet(_ app: XCUIApplication) {
         let grabber = app.buttons["Sheet Grabber"]
         XCTAssertTrue(
             grabber.waitForExistence(timeout: 2),
             "The sheet grabber was missing, so the fit could not run at the medium detent\n\(diagnosticTree(app))"
         )
-        for _ in 0..<3 {
-            if grabber.frame.minY > app.frame.height * 0.28 { return }
-            let start = grabber.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.52))
-            start.press(forDuration: 0.05, thenDragTo: end)
-            RunLoop.current.run(until: Date().addingTimeInterval(0.45))
+        for _ in 0..<5 {
+            if mediumSheetShowsSearch(in: app) { return }
+            let fraction = grabber.frame.minY / max(app.frame.height, 1)
+            let target: CGFloat
+            if fraction > 0.60 || planningListIsCompact(in: app) {
+                target = 0.42
+            } else {
+                target = 0.46
+            }
+            dragPlanningGrabber(in: app, toNormalizedY: target)
         }
+        XCTAssertTrue(
+            mediumSheetShowsSearch(in: app),
+            "The medium sheet does not show the place search. grabber \(grabber.frame)\n\(diagnosticTree(app))"
+        )
+    }
+
+    /// Medium, with the search field on the card. Large still says "full" or
+    /// sits above 22% of the screen. The compact card sits below 64%.
+    private func mediumSheetShowsSearch(in app: XCUIApplication) -> Bool {
+        let grabber = app.buttons["Sheet Grabber"]
+        guard grabber.exists, grabber.frame.minY > 1 else { return false }
+        if sheetIsLarge(grabber, in: app) || sheetIsCompact(grabber, in: app) { return false }
+        return placeSearchOnMediumSheet(in: app) != nil
+    }
+
+    private func placeSearchOnMediumSheet(in app: XCUIApplication) -> XCUIElement? {
+        let grabber = app.buttons["Sheet Grabber"]
+        guard grabber.exists, let field = placeSearchField(in: app) else { return nil }
+        let frame = field.frame
+        guard frame.height > 20, frame.width > 40 else { return nil }
+        guard frame.minY >= grabber.frame.minY - 8 else { return nil }
+        guard frame.maxY <= app.frame.maxY + 2 else { return nil }
+        guard field.isHittable else { return nil }
+        return field
+    }
+
+    private func sheetIsLarge(_ grabber: XCUIElement, in app: XCUIApplication) -> Bool {
+        if grabber.frame.minY < app.frame.height * 0.22 { return true }
+        let value = ((grabber.value as? String) ?? "").lowercased()
+        return value.contains("full") && grabber.frame.minY < app.frame.height * 0.35
+    }
+
+    private func sheetIsCompact(_ grabber: XCUIElement, in app: XCUIApplication) -> Bool {
+        if grabber.frame.minY > app.frame.height * 0.64 { return true }
+        return planningListIsCompact(in: app)
+    }
+
+    private func planningListIsCompact(in app: XCUIApplication) -> Bool {
+        let list = planningList(in: app)
+        return list.elementType != .application && list.frame.height > 1 && list.frame.height < 110
+    }
+
+    private func dragPlanningGrabber(in app: XCUIApplication, toNormalizedY: CGFloat) {
+        let grabber = app.buttons["Sheet Grabber"]
+        let start = grabber.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: toNormalizedY))
+        start.press(forDuration: 0.3, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.35)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.45))
     }
 
     /// Map pin for a waypoint. List rows share the name and sit inside the
