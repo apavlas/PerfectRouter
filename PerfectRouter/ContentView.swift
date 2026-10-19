@@ -49,6 +49,21 @@ struct ContentView: View {
     /// Set when a route is framed. The label is the camera center so a UI
     /// test can tell the ride from the device location.
     @State private var framedRoute: RouteMapFrame?
+    /// Padding from the last route fit. Label is "top,left,bottom,right".
+    @State private var mapFitPadding = MapFitPadding.zero
+    /// Advances on load, replan, and Apply. A sheet drag does not advance it.
+    @State private var mapFitGeneration = 0
+    @State private var mapGlobalFrame: CGRect = .zero
+    @State private var sheetGlobalFrame: CGRect = .zero
+    @State private var topControlsGlobalFrame: CGRect = .zero
+    @State private var mapSafeArea = EdgeInsets()
+    @State private var mapUsesSidebar = false
+    /// A fit is waiting for the sheet and chip bar to report frames.
+    @State private var fitAwaitingChrome = false
+    /// Camera callbacks caused by our own fit. A rider pan lands at zero.
+    @State private var programmaticCameraEvents = 0
+    /// True after the rider pans or zooms since the last route fit.
+    @State private var riderAdjustedCamera = false
     @State private var visibleRegion: MKCoordinateRegion?
     @State private var showSheet = true
     @State private var sheetDetent: PresentationDetent = UITestStubLaunch.isEnabled ? .large : .medium
@@ -82,20 +97,14 @@ struct ContentView: View {
                             .navigationSplitViewColumnWidth(min: 300, ideal: 380, max: 480)
                             .accessibilityIdentifier("routeSidebar")
                     } detail: {
-                        mapColumn(usesSidebar: true, containerSize: geo.size)
+                        mapColumn(usesSidebar: true)
                             // The detail column's own bar would sit on top of
                             // the map. The route list keeps "Plan Ride".
                             .toolbar(.hidden, for: .navigationBar)
                     }
                     .navigationSplitViewStyle(.balanced)
                 } else {
-                    mapColumn(usesSidebar: false, containerSize: geo.size)
-                        // Mirror the planning sheet as a bottom safe-area inset
-                        // so the map centers content — and frames routes — in
-                        // the area the sheet doesn't cover. Without this a
-                        // computed route can sit entirely behind the sheet and
-                        // look like it never appeared.
-                        .safeAreaPadding(.bottom, geo.size.height * sheetObscuredFraction)
+                    mapColumn(usesSidebar: false)
                         .sheet(isPresented: Binding(
                             get: { showSheet && planningSheetEnabled },
                             set: { showSheet = $0 }
@@ -137,39 +146,49 @@ struct ContentView: View {
 
     /// MapReader exposes a proxy that converts a pressed screen point into a
     /// map coordinate, so a long press can drop a start point.
-    private func mapColumn(usesSidebar: Bool, containerSize: CGSize) -> some View {
+    private func mapColumn(usesSidebar: Bool) -> some View {
         MapReader { proxy in
-            map(usesSidebar: usesSidebar, containerSize: containerSize)
+            map(usesSidebar: usesSidebar)
                 .gesture(dropStartGesture(proxy: proxy))
         }
-    }
-
-    /// Roughly how much of the screen the planning sheet covers at the
-    /// current detent.
-    private var sheetObscuredFraction: CGFloat {
-        sheetDetent == .fraction(0.15) ? 0.15 : 0.5
     }
 
     /// Phone and portrait use the original map. The sidebar map adds
     /// selection so a pin tap can point at a row. Two initializers keep the
     /// phone map from growing a selection binding.
     @ViewBuilder
-    private func map(usesSidebar: Bool, containerSize: CGSize) -> some View {
+    private func map(usesSidebar: Bool) -> some View {
         if usesSidebar {
             decoratedMap(Map(position: $cameraPosition, selection: $selectedPinID) {
                 mapContents(usesSidebar: true)
-            }, usesSidebar: true, containerSize: containerSize)
+            }, usesSidebar: true)
         } else {
             decoratedMap(Map(position: $cameraPosition) {
                 mapContents(usesSidebar: false)
-            }, usesSidebar: false, containerSize: containerSize)
+            }, usesSidebar: false)
         }
     }
 
-    private func decoratedMap<V: View>(_ map: V, usesSidebar: Bool, containerSize: CGSize) -> some View {
+    private func decoratedMap<V: View>(_ map: V, usesSidebar: Bool) -> some View {
         map
-        .onMapCameraChange { context in
+        .overlay {
+            MapFitViewportReporter { frame, insets in
+                noteMapViewport(frame, safeArea: insets)
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
+        .onMapCameraChange(frequency: .onEnd) { context in
             visibleRegion = context.region
+            if programmaticCameraEvents > 0 {
+                programmaticCameraEvents -= 1
+                return
+            }
+            // A pan or zoom after the fit belongs to the rider until the
+            // next load, replan, or Apply. Sheet drags never reach here.
+            guard mapFitGeneration > 0 else { return }
+            riderAdjustedCamera = true
+            fitAwaitingChrome = false
         }
         .onChange(of: readyForPermissions, initial: true) { _, ready in
             // Wait for the splash (and first-run, when shown) to clear before
@@ -192,31 +211,21 @@ struct ContentView: View {
             }
         }
         .onChange(of: viewModel.legs) { _, legs in
-            // Whenever a route lands, frame the whole ride on screen. Without
-            // this the camera stays on the device location (user tracking),
-            // and the polyline is nowhere near the map.
+            // A new line is a load, a replan, or Apply. Fit once for that
+            // line. Dragging the sheet does not publish legs, so it leaves
+            // the camera where the rider put it.
             guard !legs.isEmpty else { return }
-            frameRoute(legs, bottomObscuredFraction: mapBottomObscuredFraction(usesSidebar: usesSidebar))
+            riderAdjustedCamera = false
+            fitRouteToVisibleMap(legs)
         }
-        .onChange(of: containerSize) { _, _ in
-            // Rotation rebuilds the map. A resize of the same map does not
-            // change `legs`, so frame again for the layout that is on screen.
-            guard !viewModel.legs.isEmpty else { return }
-            frameRoute(
-                viewModel.legs,
-                bottomObscuredFraction: mapBottomObscuredFraction(usesSidebar: usesSidebar)
-            )
-        }
-        .onChange(of: sheetDetent) { _, _ in
-            guard !usesSidebar, !viewModel.legs.isEmpty else { return }
-            frameRoute(viewModel.legs, bottomObscuredFraction: mapBottomObscuredFraction(usesSidebar: false))
+        .onChange(of: usesSidebar) { _, sidebar in
+            mapUsesSidebar = sidebar
         }
         .onAppear {
+            mapUsesSidebar = usesSidebar
             guard !viewModel.legs.isEmpty else { return }
-            frameRoute(
-                viewModel.legs,
-                bottomObscuredFraction: mapBottomObscuredFraction(usesSidebar: usesSidebar)
-            )
+            riderAdjustedCamera = false
+            fitRouteToVisibleMap(viewModel.legs)
         }
         .onChange(of: selectedPinID) { _, id in
             // Marker taps set the binding. Annotation buttons set it too.
@@ -270,12 +279,26 @@ struct ContentView: View {
                 .accessibilityHidden(framedRoute == nil)
                 .allowsHitTesting(false)
         }
-    }
-
-    /// Sheet layouts cover the bottom of the map. The sidebar (iPad
-    /// landscape and Mac) does not: the list is the other column.
-    private func mapBottomObscuredFraction(usesSidebar: Bool) -> Double {
-        usesSidebar ? 0 : Double(sheetObscuredFraction)
+        .overlay(alignment: .topLeading) {
+            // Whole points: "top,left,bottom,right". Stays readable before
+            // the first fit so a test can see generation leave zero.
+            Text(verbatim: mapFitPadding.accessibilityLabel)
+                .font(.system(size: 1))
+                .foregroundStyle(.clear)
+                .frame(width: 8, height: 8)
+                .accessibilityIdentifier(AccessibilityID.mapFitInsets)
+                .accessibilityLabel(mapFitPadding.accessibilityLabel)
+                .allowsHitTesting(false)
+        }
+        .overlay(alignment: .topLeading) {
+            Text(verbatim: "\(mapFitGeneration)")
+                .font(.system(size: 1))
+                .foregroundStyle(.clear)
+                .frame(width: 8, height: 8)
+                .accessibilityIdentifier(AccessibilityID.mapFitGeneration)
+                .accessibilityLabel("\(mapFitGeneration)")
+                .allowsHitTesting(false)
+        }
     }
 
     /// Sidebar pin tap highlights the matching row. Phone and portrait keep
@@ -476,6 +499,13 @@ struct ContentView: View {
                 .clipped()
         }
         .frame(maxWidth: .infinity)
+        .background {
+            MapFitFrameReporter { frame in
+                noteTopControlsFrame(frame)
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
     }
 
     /// Floats on the map, under the category chips, so a style switch is
@@ -710,6 +740,13 @@ struct ContentView: View {
             }
             }
         }
+        .background {
+            MapFitFrameReporter { frame in
+                noteSheetFrame(frame)
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
     }
 
     // MARK: - Actions & helpers
@@ -721,21 +758,108 @@ struct ContentView: View {
         )
     }
 
-    /// Frames the full route in the map's visible area. `.region` replaces
-    /// user tracking, which is what left the camera on the device location
-    /// with no route line. `bottomObscuredFraction` is the planning sheet
-    /// on iPhone and iPad portrait, and 0 when the list is a sidebar.
-    private func frameRoute(_ legs: [MKRoute], bottomObscuredFraction: Double) {
-        let coordinates = legs.flatMap { RouteGeometry.coordinates(of: $0.polyline) }
+    /// Frames the route and every applied stop in the map area above the
+    /// sheet and below the chip bar. `.region` replaces user tracking.
+    /// Called for a new line only — load, replan, and Apply — never because
+    /// the sheet detent moved.
+    private func fitRouteToVisibleMap(_ legs: [MKRoute]) {
+        let measurement = currentMapFitMeasurement()
+        guard measurement.mapSize.width > 1, measurement.mapSize.height > 1 else {
+            fitAwaitingChrome = true
+            return
+        }
+        guard mapFitChromeIsReady(measurement) else {
+            fitAwaitingChrome = true
+            return
+        }
+        let padding = MapFitInsets.padding(for: measurement)
+        var coordinates = legs.flatMap { RouteGeometry.coordinates(of: $0.polyline) }
+        for waypoint in viewModel.waypoints where waypoint.coordinate.isValidLocation {
+            coordinates.append(waypoint.coordinate)
+        }
         guard let frame = RouteMapFraming.region(
             containing: coordinates,
-            bottomObscuredFraction: bottomObscuredFraction
-        ) else { return }
-        guard frame.center.isValidLocation else { return }
+            mapSize: measurement.mapSize,
+            insets: padding
+        ), frame.center.isValidLocation else {
+            fitAwaitingChrome = false
+            return
+        }
+        fitAwaitingChrome = false
         framedRoute = frame
+        mapFitPadding = padding
+        mapFitGeneration += 1
+        programmaticCameraEvents += 1
         withAnimation(.easeInOut(duration: 0.6)) {
             cameraPosition = .region(MKCoordinateRegion(center: frame.center, span: frame.span))
         }
+    }
+
+    private func currentMapFitMeasurement() -> MapFitMeasurement {
+        MapFitMeasurement(
+            mapSize: mapGlobalFrame.size,
+            safeTop: mapSafeArea.top,
+            safeLeft: mapSafeArea.leading,
+            safeBottom: mapSafeArea.bottom,
+            safeRight: mapSafeArea.trailing,
+            topControls: MapFitInsets.mapLocalFrame(topControlsGlobalFrame, mapFrame: mapGlobalFrame),
+            sheet: MapFitInsets.mapLocalFrame(sheetGlobalFrame, mapFrame: mapGlobalFrame)
+        )
+    }
+
+    /// Sidebar layouts have no sheet on the map. Phone and iPad portrait
+    /// wait until the card has a real frame so the bottom inset matches it.
+    private func mapFitChromeIsReady(_ measurement: MapFitMeasurement) -> Bool {
+        guard measurement.mapSize.width > 1, measurement.mapSize.height > 1 else { return false }
+        guard measurement.topControls.height > 1 else { return false }
+        if mapUsesSidebar { return true }
+        return measurement.sheet.width > 1 && measurement.sheet.height > 1
+    }
+
+    private func followUpFitIfNeeded() {
+        guard fitAwaitingChrome, !riderAdjustedCamera else { return }
+        guard !viewModel.legs.isEmpty else { return }
+        fitRouteToVisibleMap(viewModel.legs)
+    }
+
+    private func noteMapViewport(_ frame: CGRect, safeArea: UIEdgeInsets) {
+        let insets = EdgeInsets(
+            top: safeArea.top,
+            leading: safeArea.left,
+            bottom: safeArea.bottom,
+            trailing: safeArea.right
+        )
+        let frameChanged = frame.width > 1 && framesDiffer(frame, mapGlobalFrame)
+        let safeChanged = insetsDiffer(insets, mapSafeArea)
+        if frameChanged { mapGlobalFrame = frame }
+        if safeChanged { mapSafeArea = insets }
+        if frameChanged || safeChanged { followUpFitIfNeeded() }
+    }
+
+    private func noteSheetFrame(_ frame: CGRect) {
+        guard frame.width > 1, frame.height > 1, framesDiffer(frame, sheetGlobalFrame) else { return }
+        sheetGlobalFrame = frame
+        followUpFitIfNeeded()
+    }
+
+    private func noteTopControlsFrame(_ frame: CGRect) {
+        guard frame.width > 1, frame.height > 1, framesDiffer(frame, topControlsGlobalFrame) else { return }
+        topControlsGlobalFrame = frame
+        followUpFitIfNeeded()
+    }
+
+    private func framesDiffer(_ lhs: CGRect, _ rhs: CGRect) -> Bool {
+        abs(lhs.minX - rhs.minX) > 1
+            || abs(lhs.minY - rhs.minY) > 1
+            || abs(lhs.width - rhs.width) > 1
+            || abs(lhs.height - rhs.height) > 1
+    }
+
+    private func insetsDiffer(_ lhs: EdgeInsets, _ rhs: EdgeInsets) -> Bool {
+        abs(lhs.top - rhs.top) > 0.5
+            || abs(lhs.leading - rhs.leading) > 0.5
+            || abs(lhs.bottom - rhs.bottom) > 0.5
+            || abs(lhs.trailing - rhs.trailing) > 0.5
     }
 
     /// Recenters the map on a coordinate, ignoring invalid / NaN coordinates
@@ -830,6 +954,119 @@ struct ContentView: View {
         if FeatureFlags.hotelsAlongRoute, viewModel.waypoints[index].isOvernight { return "bed.double.fill" }
         if index == viewModel.waypoints.count - 1 { return "flag.checkered" }
         return "mappin"
+    }
+}
+
+/// Window frame of a view, including one hosted in a sheet. A sheet's
+/// SwiftUI global space is not the map's, so the probe converts through
+/// UIKit. Not a focus container: iPad aborts when an empty one appears.
+private struct MapFitFrameReporter: UIViewRepresentable {
+    var onFrame: @MainActor (CGRect) -> Void
+
+    func makeUIView(context: Context) -> MapFitFrameProbe {
+        let view = MapFitFrameProbe()
+        view.onFrame = onFrame
+        return view
+    }
+
+    func updateUIView(_ uiView: MapFitFrameProbe, context: Context) {
+        uiView.onFrame = onFrame
+    }
+}
+
+/// Map window frame and the safe area still inside the map.
+private struct MapFitViewportReporter: UIViewRepresentable {
+    var onViewport: @MainActor (CGRect, UIEdgeInsets) -> Void
+
+    func makeUIView(context: Context) -> MapFitFrameProbe {
+        let view = MapFitFrameProbe()
+        view.onViewport = onViewport
+        return view
+    }
+
+    func updateUIView(_ uiView: MapFitFrameProbe, context: Context) {
+        uiView.onViewport = onViewport
+    }
+}
+
+/// Publishes its window frame from layout. Delivery is the next main-actor
+/// turn so a state write is not inside `layoutSubviews`.
+@MainActor
+private final class MapFitFrameProbe: UIView {
+    var onFrame: (@MainActor (CGRect) -> Void)?
+    var onViewport: (@MainActor (CGRect, UIEdgeInsets) -> Void)?
+    private var lastFrame = CGRect.null
+    private var lastSafeArea = UIEdgeInsets(top: -1, left: -1, bottom: -1, right: -1)
+    private var deliverScheduled = false
+    private var queuedFrame: CGRect?
+    private var queuedSafeArea: UIEdgeInsets?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        backgroundColor = .clear
+        isAccessibilityElement = false
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        isUserInteractionEnabled = false
+        backgroundColor = .clear
+        isAccessibilityElement = false
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        publish()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        publish()
+    }
+
+    override func safeAreaInsetsDidChange() {
+        super.safeAreaInsetsDidChange()
+        publish()
+    }
+
+    private func publish() {
+        guard let window else { return }
+        let frame = convert(bounds, to: window)
+        guard frame.width > 1, frame.height > 1 else { return }
+        let safe = safeAreaInsets
+        let frameChanged = lastFrame.isNull || framesDiffer(frame, lastFrame)
+        let safeChanged = !safeAreaEqual(safe, lastSafeArea)
+        guard frameChanged || safeChanged else { return }
+        lastFrame = frame
+        lastSafeArea = safe
+        queuedFrame = frame
+        queuedSafeArea = safe
+        guard !deliverScheduled else { return }
+        deliverScheduled = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.deliverScheduled = false
+            guard let frame = self.queuedFrame else { return }
+            self.onFrame?(frame)
+            if let safe = self.queuedSafeArea {
+                self.onViewport?(frame, safe)
+            }
+        }
+    }
+
+    private func safeAreaEqual(_ lhs: UIEdgeInsets, _ rhs: UIEdgeInsets) -> Bool {
+        abs(lhs.top - rhs.top) < 0.5
+            && abs(lhs.left - rhs.left) < 0.5
+            && abs(lhs.bottom - rhs.bottom) < 0.5
+            && abs(lhs.right - rhs.right) < 0.5
+    }
+
+    private func framesDiffer(_ lhs: CGRect, _ rhs: CGRect) -> Bool {
+        abs(lhs.minX - rhs.minX) > 1
+            || abs(lhs.minY - rhs.minY) > 1
+            || abs(lhs.width - rhs.width) > 1
+            || abs(lhs.height - rhs.height) > 1
     }
 }
 

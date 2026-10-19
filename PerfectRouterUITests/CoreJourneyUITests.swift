@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 
 /// Simulator coverage for the ride planner. The app is launched with
@@ -226,6 +227,24 @@ final class CoreJourneyUITests: XCTestCase {
         XCTAssertLessThan(parts[0], 42, "Camera latitude was not the stub ride: \(marker.label)")
         XCTAssertGreaterThan(parts[1], -84, "Camera longitude was not the stub ride: \(marker.label)")
         XCTAssertLessThan(parts[1], -80, "Camera longitude was not the stub ride: \(marker.label)")
+    }
+
+    /// Long stub ride, phone sheet. The fit advances and its bottom inset
+    /// matches the sheet. Dragging the sheet must not fit again.
+    func testPhoneMapFitInsetsMatchTheSheet() throws {
+        guard UIDevice.current.userInterfaceIdiom == .phone else {
+            throw XCTSkip("iPhone sheet fit runs on iPhone")
+        }
+        try assertPlannedRouteFitsAboveTheSheet()
+    }
+
+    /// Long stub ride, iPad portrait floating sheet.
+    func testPadPortraitMapFitInsetsMatchTheSheet() throws {
+        guard UIDevice.current.userInterfaceIdiom == .pad else {
+            throw XCTSkip("iPad portrait sheet fit runs on iPad")
+        }
+        XCUIDevice.shared.orientation = .portrait
+        try assertPlannedRouteFitsAboveTheSheet(requirePortrait: true)
     }
 
     func testSelectRecommendedChecksInRangeStopsAndSkipsOnRoute() {
@@ -1299,7 +1318,7 @@ final class CoreJourneyUITests: XCTestCase {
             "leaveLater", "routeStyle", "waypoint.", "noGas", "replan",
             "Plan Ride", "gas station", "Navigate", "Apply", "placeSearch",
             "rideHighlights", "Ride Highlights", "highlight.", "Tallulah", "Bare Overlook",
-            "routeMapFrame", "lastCompleted", "activeRouteStyle",
+            "routeMapFrame", "mapFitInsets", "mapFitGeneration", "lastCompleted", "activeRouteStyle",
             "noLodging", "hotelStop", "hotelLodgingState", "hotelDay", "Quality Inn", "Holiday Inn", "No lodging",
             "noHotelPicked", "chooseHotel", "rideDay", "Weatherford", "No hotel"
         ]
@@ -1444,5 +1463,126 @@ final class CoreJourneyUITests: XCTestCase {
             return scrolls.element(boundBy: scrolls.count - 1)
         }
         return app
+    }
+
+    /// Plans the long stub ride and checks the fit cleared the sheet.
+    /// Dragging the grabber afterwards must leave the generation alone.
+    private func assertPlannedRouteFitsAboveTheSheet(requirePortrait: Bool = false) throws {
+        let app = launch()
+        if requirePortrait {
+            XCUIDevice.shared.orientation = .portrait
+            let deadline = Date().addingTimeInterval(4)
+            while Date() < deadline, app.frame.width > app.frame.height {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            }
+            XCTAssertLessThan(
+                app.frame.width,
+                app.frame.height,
+                "iPad did not reach portrait before the route was planned"
+            )
+        }
+
+        let before = mapFitGeneration(in: app)
+        planFixedRoute(in: app)
+        let after = waitForMapFitGeneration(above: before, in: app)
+        var insets = mapFitInsets(in: app)
+        if insets.bottom < 40 {
+            RunLoop.current.run(until: Date().addingTimeInterval(1.2))
+            insets = mapFitInsets(in: app)
+        }
+        let sheetHeight = presentedPlanningSheetHeight(in: app)
+        let tolerance = max(80, sheetHeight * 0.2)
+        XCTAssertEqual(
+            insets.bottom,
+            sheetHeight,
+            accuracy: tolerance,
+            "mapFitInsets \(insets.label) bottom should match the sheet height \(sheetHeight). generation \(after)\n\(diagnosticTree(app))"
+        )
+        let settled = mapFitGeneration(in: app)
+        dragPlanningSheetDown(app)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.8))
+        XCTAssertEqual(
+            mapFitGeneration(in: app),
+            settled,
+            "Dragging the sheet refit the map. insets \(mapFitInsets(in: app).label)\n\(diagnosticTree(app))"
+        )
+    }
+
+    private func mapFitGeneration(in app: XCUIApplication) -> Int {
+        let marker = app.descendants(matching: .any)["mapFitGeneration"]
+        XCTAssertTrue(
+            marker.waitForExistence(timeout: 5),
+            "mapFitGeneration was not in the tree\n\(diagnosticTree(app))"
+        )
+        return Int(marker.label) ?? -1
+    }
+
+    private func waitForMapFitGeneration(above previous: Int, in app: XCUIApplication) -> Int {
+        let deadline = Date().addingTimeInterval(8)
+        var value = mapFitGeneration(in: app)
+        while Date() < deadline, value <= previous {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+            value = mapFitGeneration(in: app)
+        }
+        XCTAssertGreaterThan(
+            value,
+            previous,
+            "The route fit did not advance from \(previous)\n\(diagnosticTree(app))"
+        )
+        return value
+    }
+
+    private struct MapFitInsetReading {
+        var top: CGFloat
+        var left: CGFloat
+        var bottom: CGFloat
+        var right: CGFloat
+
+        var label: String { "\(top),\(left),\(bottom),\(right)" }
+    }
+
+    private func mapFitInsets(in app: XCUIApplication) -> MapFitInsetReading {
+        let marker = app.descendants(matching: .any)["mapFitInsets"]
+        XCTAssertTrue(
+            marker.waitForExistence(timeout: 5),
+            "mapFitInsets was not in the tree\n\(diagnosticTree(app))"
+        )
+        let parts = marker.label.split(separator: ",").compactMap { Double(String($0)) }
+        XCTAssertEqual(parts.count, 4, "mapFitInsets label \(marker.label)\n\(diagnosticTree(app))")
+        return MapFitInsetReading(
+            top: CGFloat(parts[0]),
+            left: CGFloat(parts[1]),
+            bottom: CGFloat(parts[2]),
+            right: CGFloat(parts[3])
+        )
+    }
+
+    /// Distance from the top of Plan Ride to the bottom of the screen. A
+    /// bottom-anchored phone sheet and iPad card both present at that height.
+    private func presentedPlanningSheetHeight(in app: XCUIApplication) -> CGFloat {
+        let bar = app.navigationBars["Plan Ride"]
+        if bar.exists, bar.frame.minY > 1 {
+            return app.frame.maxY - bar.frame.minY
+        }
+        let sheet = app.sheets.firstMatch
+        if sheet.exists, sheet.frame.height > 80 {
+            return sheet.frame.height
+        }
+        let list = planningList(in: app)
+        if list.frame.minY > 1 {
+            return app.frame.maxY - list.frame.minY
+        }
+        return list.frame.height
+    }
+
+    private func dragPlanningSheetDown(_ app: XCUIApplication) {
+        let grabber = app.buttons["Sheet Grabber"]
+        XCTAssertTrue(
+            grabber.waitForExistence(timeout: 2),
+            "The sheet grabber was missing, so the drag could not prove the camera stays put\n\(diagnosticTree(app))"
+        )
+        let start = grabber.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.72))
+        start.press(forDuration: 0.05, thenDragTo: end)
     }
 }

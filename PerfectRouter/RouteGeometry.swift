@@ -481,6 +481,36 @@ struct RouteMapFrame: Equatable {
         return (southEdge + fraction * latitudeDelta, northEdge)
     }
 
+    /// Whether `coordinate` lands in the band this frame leaves visible
+    /// once `insets` cover the chip bar and the sheet. The frame's span is
+    /// mapped linearly onto `mapSize`, which is how the fit builds it.
+    func contains(
+        _ coordinate: CLLocationCoordinate2D,
+        mapSize: CGSize,
+        insets: MapFitPadding
+    ) -> Bool {
+        guard mapSize.width > 1, mapSize.height > 1, coordinate.isValidLocation else { return false }
+        let north = latitude(atViewY: insets.top, mapHeight: mapSize.height)
+        let south = latitude(atViewY: mapSize.height - insets.bottom, mapHeight: mapSize.height)
+        let west = longitude(atViewX: insets.left, mapWidth: mapSize.width)
+        let east = longitude(atViewX: mapSize.width - insets.right, mapWidth: mapSize.width)
+        let slop = 0.02
+        return coordinate.latitude <= max(north, south) + slop
+            && coordinate.latitude >= min(north, south) - slop
+            && coordinate.longitude <= max(east, west) + slop
+            && coordinate.longitude >= min(east, west) - slop
+    }
+
+    private func latitude(atViewY y: CGFloat, mapHeight: CGFloat) -> Double {
+        let t = Double(y / mapHeight)
+        return centerLatitude + latitudeDelta / 2 - t * latitudeDelta
+    }
+
+    private func longitude(atViewX x: CGFloat, mapWidth: CGFloat) -> Double {
+        let t = Double(x / mapWidth)
+        return centerLongitude - longitudeDelta / 2 + t * longitudeDelta
+    }
+
     /// "lat,lon" with a fixed decimal point, so a UI test can read the
     /// camera without depending on the locale.
     var accessibilityLabel: String {
@@ -546,5 +576,115 @@ enum RouteMapFraming {
             latitudeDelta: latSpan,
             longitudeDelta: lonSpan
         )
+    }
+
+    /// Fits `coordinates` in the map region that remains after `insets`.
+    ///
+    /// The span grows so the padded route occupies the unobscured viewport,
+    /// then the center shifts toward the open side. A sheet that covers
+    /// almost the whole map cannot divide by a sliver: the viewport stays
+    /// at least a quarter of the map, and the center stays near the route
+    /// so MapKit never clamps the region onto a pole.
+    static func region(
+        containing coordinates: [CLLocationCoordinate2D],
+        mapSize: CGSize,
+        insets: MapFitPadding,
+        marginFraction: Double = RouteMapFraming.marginFraction
+    ) -> RouteMapFrame? {
+        let points = coordinates.filter(\.isValidLocation)
+        guard let first = points.first else { return nil }
+        guard mapSize.width > 1, mapSize.height > 1 else {
+            return region(containing: points, bottomObscuredFraction: 0, marginFraction: marginFraction)
+        }
+
+        var minLat = first.latitude
+        var maxLat = first.latitude
+        var minLon = first.longitude
+        var maxLon = first.longitude
+        for point in points.dropFirst() {
+            minLat = min(minLat, point.latitude)
+            maxLat = max(maxLat, point.latitude)
+            minLon = min(minLon, point.longitude)
+            maxLon = max(maxLon, point.longitude)
+        }
+
+        let margin = min(max(marginFraction, 0), 0.4)
+        var latSpan = max(maxLat - minLat, minimumSpan)
+        var lonSpan = max(maxLon - minLon, minimumSpan)
+        let growth = 1 + margin * 2
+        latSpan *= growth
+        lonSpan *= growth
+        let routeMidLat = (minLat + maxLat) / 2
+        let routeMidLon = (minLon + maxLon) / 2
+
+        let viewport = visibleViewport(mapSize: mapSize, insets: insets)
+        latSpan *= Double(mapSize.height / viewport.visible.height)
+        lonSpan *= Double(mapSize.width / viewport.visible.width)
+        // A span that crosses a pole makes MapKit clamp the camera onto
+        // the Arctic. Cap it before the center shift uses it.
+        latSpan = min(latSpan, 50)
+        lonSpan = min(lonSpan, 80)
+
+        let dy = (viewport.top - viewport.bottom) / 2
+        let dx = (viewport.left - viewport.right) / 2
+        var centerLat = routeMidLat + Double(dy / mapSize.height) * latSpan
+        var centerLon = routeMidLon - Double(dx / mapSize.width) * lonSpan
+
+        let latReach = max(maxLat - minLat, minimumSpan) * 0.85 + minimumSpan
+        centerLat = min(max(centerLat, routeMidLat - latReach), routeMidLat + latReach)
+        centerLat = min(max(centerLat, -75.0), 75.0)
+        centerLon = min(max(centerLon, -179.0), 179.0)
+
+        guard centerLat.isFinite, centerLon.isFinite, latSpan.isFinite, lonSpan.isFinite else { return nil }
+        guard latSpan > 0, lonSpan > 0 else { return nil }
+        return RouteMapFrame(
+            centerLatitude: centerLat,
+            centerLongitude: centerLon,
+            latitudeDelta: latSpan,
+            longitudeDelta: lonSpan
+        )
+    }
+
+    /// The viewport the camera actually uses. Reported insets can describe a
+    /// sheet that leaves only a sliver; the fit refuses to divide by that.
+    private static func visibleViewport(
+        mapSize: CGSize,
+        insets: MapFitPadding
+    ) -> (visible: CGSize, top: CGFloat, left: CGFloat, bottom: CGFloat, right: CGFloat) {
+        let minFraction: CGFloat = 0.25
+        var top = max(0, insets.top)
+        var left = max(0, insets.left)
+        var bottom = max(0, insets.bottom)
+        var right = max(0, insets.right)
+
+        func open(_ length: CGFloat, insetA: CGFloat, insetB: CGFloat, minimum: CGFloat) -> (CGFloat, CGFloat, CGFloat) {
+            var a = insetA
+            var b = insetB
+            var visible = length - a - b
+            if visible < minimum {
+                let overflow = minimum - max(visible, 0)
+                if b >= a {
+                    b = max(0, b - overflow)
+                } else {
+                    a = max(0, a - overflow)
+                }
+                visible = length - a - b
+                if visible < minimum {
+                    let extra = minimum - visible
+                    a = max(0, a - extra / 2)
+                    b = max(0, b - extra / 2)
+                    visible = length - a - b
+                }
+            }
+            return (max(visible, 1), a, b)
+        }
+
+        let height = open(mapSize.height, insetA: top, insetB: bottom, minimum: mapSize.height * minFraction)
+        let width = open(mapSize.width, insetA: left, insetB: right, minimum: mapSize.width * minFraction)
+        top = height.1
+        bottom = height.2
+        left = width.1
+        right = width.2
+        return (CGSize(width: width.0, height: height.0), top, left, bottom, right)
     }
 }

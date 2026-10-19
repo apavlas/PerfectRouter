@@ -33,6 +33,10 @@ enum AccessibilityID {
     static let rideHighlights = "rideHighlights"
     /// Camera center after a route is framed, as "latitude,longitude".
     static let routeMapFrame = "routeMapFrame"
+    /// Edge padding from the last route fit, as "top,left,bottom,right".
+    static let mapFitInsets = "mapFitInsets"
+    /// How many times the camera has been fit to a route.
+    static let mapFitGeneration = "mapFitGeneration"
 
     static func searchResult(_ name: String) -> String { "searchResult.\(name)" }
     static func waypoint(_ name: String) -> String { "waypoint.\(name)" }
