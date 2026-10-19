@@ -116,8 +116,8 @@ final class GasListGroupingTests: XCTestCase {
         )
         XCTAssertFalse(grouping.showsLegHeaders)
         XCTAssertFalse(grouping.showsDayHeaders)
-        XCTAssertEqual(grouping.days.first?.legs.first?.preview.map(\.name), ["Quick Stop"])
-        XCTAssertEqual(grouping.days.first?.legs.first?.overflow, [])
+        XCTAssertEqual(grouping.days.first?.legs.first?.preview.map(\.name) ?? [], ["Quick Stop"])
+        XCTAssertEqual(grouping.days.first?.legs.first?.overflow ?? [], [])
         let rows = grouping.visibleRows(listExpanded: true, collapsedDays: [], overflowLegs: [])
         XCTAssertEqual(rows, [.station(only)])
     }
@@ -137,7 +137,7 @@ final class GasListGroupingTests: XCTestCase {
             usesMetric: false
         )
         let leg = grouping.days.first?.legs.first
-        XCTAssertEqual(leg?.overflow.map(\.name), ["Dry"])
+        XCTAssertEqual(leg?.overflow.map(\.name) ?? [], ["Dry"])
         XCTAssertEqual(leg?.pastRange, true)
         XCTAssertTrue(grouping.pastRange)
         XCTAssertTrue(grouping.days.first?.pastRange == true)

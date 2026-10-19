@@ -7,7 +7,9 @@ import Foundation
 /// recommended stop is the end of that leg. A leg that runs past an overnight
 /// stays on the day where it starts. One leg has no day or leg chrome: the
 /// stations stay one list, the way a short ride already showed them.
-enum GasListGrouping: Equatable {
+///
+/// This is a value, not a namespace: the grouped days are stored on it.
+struct GasListGrouping: Equatable {
 
     /// The two alternates kept beside the recommended stop before Show more.
     static let nearestAlternateCount = 2
