@@ -378,6 +378,74 @@ final class GasListGroupingTests: XCTestCase {
         XCTAssertEqual(grouping.days.flatMap(\.legs)[2].pastRange, true)
     }
 
+    /// After Apply the fuel plan can come back empty. The applied pumps are
+    /// still the leg edges, Select recommended stays up, and each leg keeps
+    /// that pump plus two alternates and Show more.
+    func testAppliedFillsKeepLegGroupsAndSelectRecommended() {
+        let viewModel = RoutePlannerViewModel()
+        let line = stride(from: 0.0, through: 280, by: 40).map {
+            UITestFixture.coordinate(milesNorth: $0, eastMeters: 0)
+        }
+        func fill(_ name: String, miles: Double) -> Waypoint {
+            var waypoint = Waypoint(
+                name: name,
+                coordinate: UITestFixture.coordinate(milesNorth: miles, eastMeters: 0)
+            )
+            waypoint.isGasFill = true
+            return waypoint
+        }
+        viewModel.waypoints = [
+            Waypoint(name: "Start", coordinate: UITestFixture.coordinate(milesNorth: 0, eastMeters: 0)),
+            fill("QuikTrip", miles: 80),
+            fill("Shell", miles: 160),
+            Waypoint(name: "End", coordinate: UITestFixture.coordinate(milesNorth: 280, eastMeters: 0)),
+        ]
+        viewModel.plannedCorridor = [line]
+        viewModel.fuelStops = []
+        viewModel.fuelPlanEntries = []
+        viewModel.gasStations = [
+            gasStop("Alt 40", miles: 40),
+            gasStop("RaceTrac", miles: 60),
+            gasStop("Chevron", miles: 70),
+            gasStop("Extra", miles: 120),
+            gasStop("BP", miles: 140),
+            gasStop("Amoco", miles: 150),
+            gasStop("Marathon", miles: 190),
+        ]
+
+        XCTAssertTrue(viewModel.selectableRecommendedFuelStops.isEmpty)
+        XCTAssertTrue(viewModel.showsSelectRecommendedFuelButton)
+        XCTAssertFalse(viewModel.gasListExpanded)
+
+        let grouping = viewModel.gasListGrouping
+        XCTAssertTrue(grouping.showsLegHeaders)
+        let legs = grouping.days.flatMap(\.legs)
+        XCTAssertEqual(legs.map(\.number), [1, 2, 3])
+        XCTAssertEqual(legs.map { $0.preview.map(\.name) }, [
+            ["QuikTrip", "RaceTrac", "Chevron"],
+            ["Shell", "BP", "Amoco"],
+            ["Marathon"],
+        ])
+        XCTAssertEqual(legs[0].overflow.map(\.name), ["Alt 40"])
+        XCTAssertEqual(legs[1].overflow.map(\.name), ["Extra"])
+        XCTAssertTrue(legs[0].title.hasPrefix("Leg 1"))
+        XCTAssertTrue(legs[1].title.hasPrefix("Leg 2"))
+
+        viewModel.toggleGasList()
+        let showMore = viewModel.gasListRows.compactMap { row -> Int? in
+            if case .showMore(let legNumber, let expanded) = row {
+                XCTAssertFalse(expanded)
+                return legNumber
+            }
+            return nil
+        }
+        XCTAssertEqual(showMore, [1, 2])
+        XCTAssertTrue(viewModel.gasListRows.contains { row in
+            if case .legHeader = row { return true }
+            return false
+        })
+    }
+
     private func gasStop(_ name: String, miles: Double) -> SuggestedStop {
         SuggestedStop(
             name: name,

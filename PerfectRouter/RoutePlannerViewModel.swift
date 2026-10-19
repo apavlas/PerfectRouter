@@ -1583,15 +1583,45 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         return Array(addableSuggestions.prefix(15))
     }
 
-    /// Gas the Suggested Gas list can still offer, including the recommended
-    /// fill for each leg. A pump already on the route is left off so Apply
-    /// cannot add it twice. Fuel-plan rows stay in the summary; this pool is
-    /// what the day and leg groups draw.
+    /// Gas the Suggested Gas list draws, including each applied fill. The
+    /// fill stays in its leg as the recommended stop; other pumps already
+    /// on the route are left off so Apply cannot add them twice.
     var gasListStations: [SuggestedStop] {
-        let pool = suggestedStops.contains(where: { $0.category == .gas }) ? suggestedStops : gasStations
-        return pool
-            .filter { $0.category == .gas && !isStopOnRoute($0) }
-            .sorted { distanceFromStart(of: $0) < distanceFromStart(of: $1) }
+        let corridor = suggestedStops.contains(where: { $0.category == .gas }) ? suggestedStops : gasStations
+        var seen = Set<String>()
+        var pool: [SuggestedStop] = []
+        for stop in corridor where stop.category == .gas && !isStopOnRoute(stop) {
+            let key = Self.coordinateKey(stop.coordinate)
+            guard seen.insert(key).inserted else { continue }
+            pool.append(stop)
+        }
+        for stop in appliedGasFillStops {
+            let key = Self.coordinateKey(stop.coordinate)
+            guard seen.insert(key).inserted else { continue }
+            pool.append(stop)
+        }
+        return pool.sorted { distanceFromStart(of: $0) < distanceFromStart(of: $1) }
+    }
+
+    /// Pumps the rider already applied. Their mile marks are the fuel-leg
+    /// edges after a replan clears `fuelStops`, and each one is the
+    /// recommended row of the leg that ends on it.
+    private var appliedGasFillStops: [SuggestedStop] {
+        waypoints.compactMap { waypoint in
+            guard waypoint.isGasFill else { return nil }
+            return SuggestedStop(
+                name: waypoint.name,
+                coordinate: waypoint.coordinate,
+                category: .gas,
+                distanceAlongRoute: 0
+            )
+        }
+    }
+
+    private func isAppliedGasFill(_ stop: SuggestedStop) -> Bool {
+        waypoints.contains { waypoint in
+            waypoint.isGasFill && Self.sameCoordinate(waypoint.coordinate, stop.coordinate)
+        }
     }
 
     /// Day and fuel-leg groups for `gasListStations`. Empty when the corridor
@@ -1599,7 +1629,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     var gasListGrouping: GasListGrouping {
         let stations = gasListStations.map { stop -> GasListGrouping.Station in
             let distance = distanceFromStart(of: stop)
-            let recommended = fuelStops.contains { Self.sameFuelPlace($0, stop) }
+            let recommended = isAppliedGasFill(stop) || fuelStops.contains { Self.sameFuelPlace($0, stop) }
             let pastRange = isPastRangeFuelStop(stop) || isBeyondRemainingRange(distanceAlongRoute: distance)
             return GasListGrouping.Station(
                 id: stop.id,
@@ -1610,6 +1640,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             )
         }
         let fills = fuelStops.map { distanceFromStart(of: $0) }
+            + appliedGasFillStops.map { distanceFromStart(of: $0) }
         let spans = rideDays.map {
             GasListGrouping.DaySpan(
                 dayNumber: $0.dayNumber,
@@ -2081,6 +2112,13 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// Label for the one-tap control above the buffered gas rows.
     var selectRecommendedButtonTitle: String {
         "Select recommended"
+    }
+
+    /// The control stays above the gas list while that list is collapsed.
+    /// Applying the current recommendations leaves the corridor in
+    /// `gasListStations` and would otherwise remove the row.
+    var showsSelectRecommendedFuelButton: Bool {
+        !selectableRecommendedFuelStops.isEmpty || !gasListStations.isEmpty
     }
 
     /// Copy next to the small spinner. The flag is set on the tap, before

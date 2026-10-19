@@ -519,7 +519,7 @@ struct SuggestionsSection: View {
         // another property becomes one cell, and the header stops toggling.
         Section {
             if viewModel.selectedCategory == .gas {
-                if !viewModel.selectableRecommendedFuelStops.isEmpty {
+                if viewModel.showsSelectRecommendedFuelButton {
                     SelectRecommendedFuelButton(viewModel: viewModel)
                 } else {
                     FocusPlaceholderRow()
@@ -822,7 +822,9 @@ struct SuggestionsSection: View {
         pastRange: Bool,
         accessibility: RecommendedFuelAccessibility?
     ) -> some View {
+        let onRoute = stop.category == .gas && viewModel.isStopOnRoute(stop)
         let button = Button {
+            guard !onRoute else { return }
             focusFromSidebar(stop)
             if stop.category == .gas {
                 viewModel.toggleBufferedGasStop(stop)
@@ -838,17 +840,24 @@ struct SuggestionsSection: View {
                     caption: caption,
                     rowIdentifier: accessibility?.identifier ?? gasCandidateIdentifier(stop)
                 )
-                if pastRange {
+                if onRoute {
+                    Text("Added")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                } else if pastRange {
                     PastYourRangeLabel()
                 }
-                Image(systemName: stop.category == .gas && viewModel.isGasBuffered(stop)
-                      ? "checkmark.circle.fill"
-                      : "plus.circle.fill")
-                    .foregroundStyle(stop.category == .gas && viewModel.isGasBuffered(stop) ? Color.green : Color.blue)
-                    .accessibilityHidden(true)
+                if !onRoute {
+                    Image(systemName: stop.category == .gas && viewModel.isGasBuffered(stop)
+                          ? "checkmark.circle.fill"
+                          : "plus.circle.fill")
+                        .foregroundStyle(stop.category == .gas && viewModel.isGasBuffered(stop) ? Color.green : Color.blue)
+                        .accessibilityHidden(true)
+                }
             }
         }
         .buttonStyle(.plain)
+        .disabled(onRoute)
 
         if let accessibility {
             listedStop(button.fuelRowAccessibility(accessibility), stop: stop)
@@ -901,8 +910,12 @@ struct CollapsibleSectionHeader: View {
                     .rotationEffect(.degrees(expanded ? 90 : 0))
                     .accessibilityHidden(true)
             }
+            // The title is short on a wide iPad sheet. Without a full-width
+            // shape, a tap on the rest of the collapsed row misses the button.
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.borderless)
         .accessibilityIdentifier(identifier)
         .accessibilityLabel(label)
     }
