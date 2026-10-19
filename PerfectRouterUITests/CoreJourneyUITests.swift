@@ -138,6 +138,115 @@ final class CoreJourneyUITests: XCTestCase {
         assertNoEmptyGasMessage(in: app)
     }
 
+    /// Suggested Gas starts open, groups the stub ride by the day a leg
+    /// starts, and keeps a check when the rider closes the list. Apply does
+    /// not open a section the rider closed, or close one they opened.
+    func testSuggestedGasListCollapsesByDayAndLegWithoutLosingChecks() {
+        let app = launch()
+        planFixedRoute(in: app)
+
+        let highlights = revealPlanningRow("highlightsListHeader", in: app)
+        XCTAssertTrue(highlights.label.contains("Highlights"), highlights.label)
+        XCTAssertTrue(highlights.label.contains("(2)"), highlights.label)
+        XCTAssertTrue(highlights.label.contains("expanded"), highlights.label)
+        XCTAssertTrue(revealPlanningRow("rideHighlights", in: app).exists, diagnosticTree(app))
+        scrollUntilInsidePlanningList(highlights, in: app)
+        highlights.tap()
+        XCTAssertTrue(revealPlanningRow("highlightsListHeader", in: app).label.contains("collapsed"))
+
+        let header = revealPlanningRow("gasListHeader", in: app)
+        XCTAssertTrue(header.label.contains("Suggested Gas Stops"), header.label)
+        XCTAssertTrue(header.label.contains("("), header.label)
+        XCTAssertTrue(header.label.contains("expanded"), header.label)
+        XCTAssertTrue(revealPlanningRow("gasDay.1", in: app).exists, diagnosticTree(app))
+        XCTAssertTrue(revealPlanningRow("gasDay.2", in: app).exists, diagnosticTree(app))
+        assertPlanningRowAbsent("gasDay.3", in: app)
+        XCTAssertTrue(revealPlanningRow("gasLeg.1", in: app).label.contains("Leg 1"), diagnosticTree(app))
+        XCTAssertTrue(revealPlanningRow("gasLeg.2", in: app).exists, diagnosticTree(app))
+        XCTAssertTrue(revealPlanningRow("gasLeg.3", in: app).label.contains("Leg 3"), diagnosticTree(app))
+        assertPlanningRowAbsent("gasCandidate.Alt 15", in: app)
+
+        let more = revealPlanningRow("gasLegShowMore.1", in: app)
+        scrollUntilInsidePlanningList(more, in: app)
+        more.tap()
+        XCTAssertTrue(revealPlanningRow("gasCandidate.Alt 15", in: app).exists, diagnosticTree(app))
+
+        let dayTwo = revealPlanningRow("gasDay.2", in: app)
+        scrollUntilInsidePlanningList(dayTwo, in: app)
+        dayTwo.tap()
+        XCTAssertTrue(revealPlanningRow("gasDay.2", in: app).label.contains("collapsed"))
+        assertPlanningRowAbsent("gasLeg.3", in: app)
+        XCTAssertTrue(revealPlanningRow("gasLeg.2", in: app).exists, diagnosticTree(app))
+
+        let pilot = revealPlanningRow("fuelStop.Pilot Madison.unchecked", in: app)
+        scrollUntilInsidePlanningList(pilot, in: app)
+        pilot.tap()
+        XCTAssertTrue(revealPlanningRow("fuelStop.Pilot Madison.checked", in: app).exists, diagnosticTree(app))
+
+        let gasHeader = revealPlanningRow("gasListHeader", in: app)
+        scrollUntilInsidePlanningList(gasHeader, in: app)
+        gasHeader.tap()
+        XCTAssertTrue(revealPlanningRow("gasListHeader", in: app).label.contains("collapsed"))
+        XCTAssertTrue(revealPlanningRow("selectRecommended", in: app).exists, diagnosticTree(app))
+        assertPlanningRowAbsent("gasLeg.1", in: app)
+        XCTAssertTrue(revealPlanningRow("fuelStop.Pilot Madison.checked", in: app).exists, diagnosticTree(app))
+
+        let closed = revealPlanningRow("gasListHeader", in: app)
+        scrollUntilInsidePlanningList(closed, in: app)
+        closed.tap()
+        XCTAssertTrue(revealPlanningRow("gasListHeader", in: app).label.contains("expanded"))
+        XCTAssertTrue(revealPlanningRow("fuelStop.Pilot Madison.checked", in: app).exists, diagnosticTree(app))
+        XCTAssertTrue(revealPlanningRow("gasDay.2", in: app).label.contains("collapsed"))
+        XCTAssertTrue(revealPlanningRow("gasCandidate.Alt 15", in: app).exists, diagnosticTree(app))
+
+        let apply = revealPlanningRow("applyStops", in: app)
+        XCTAssertTrue(apply.label.contains("Apply 1 stop"), apply.label)
+        tapApply(in: app)
+        waitForBannerToFinish(in: app)
+        assertWaypointListed("Pilot Madison", in: app)
+        XCTAssertFalse(
+            waypointNames(in: app).contains("Shell Knoxville"),
+            diagnosticTree(app)
+        )
+        let gasAfter = reveal("gasListHeader", in: app)
+        XCTAssertTrue(gasAfter.label.contains("expanded"), gasAfter.label)
+        let dayAfter = reveal("gasDay.2", in: app)
+        XCTAssertTrue(dayAfter.label.contains("collapsed"), dayAfter.label)
+        let highlightsAfter = reveal("highlightsListHeader", in: app)
+        XCTAssertTrue(highlightsAfter.label.contains("collapsed"), highlightsAfter.label)
+    }
+
+    /// Food and Highlights use the same counted header. Food starts open
+    /// until a food stop is on the ride. Highlights start open.
+    func testFoodAndHighlightsHeadersCollapse() {
+        let app = launch()
+        planFixedRoute(in: app)
+
+        let highlights = revealPlanningRow("highlightsListHeader", in: app)
+        XCTAssertTrue(highlights.label.contains("Highlights (2)"), highlights.label)
+        XCTAssertTrue(highlights.label.contains("expanded"), highlights.label)
+        XCTAssertTrue(revealPlanningRow("rideHighlights", in: app).exists)
+        XCTAssertTrue(revealPlanningRow("highlight.Tallulah Gorge.name", in: app).exists, diagnosticTree(app))
+        scrollUntilInsidePlanningList(highlights, in: app)
+        highlights.tap()
+        assertPlanningRowAbsent("highlight.Tallulah Gorge.name", in: app)
+        let closedHighlights = revealPlanningRow("highlightsListHeader", in: app)
+        XCTAssertTrue(closedHighlights.label.contains("collapsed"), closedHighlights.label)
+        scrollUntilInsidePlanningList(closedHighlights, in: app)
+        closedHighlights.tap()
+        XCTAssertTrue(revealPlanningRow("highlight.Tallulah Gorge.name", in: app).exists, diagnosticTree(app))
+
+        selectCategory("Food", in: app)
+        let noFood = app.staticTexts["No food stops found near this route."]
+        XCTAssertTrue(noFood.waitForExistence(timeout: 8), diagnosticTree(app))
+        let food = revealPlanningRow("foodListHeader", in: app)
+        XCTAssertTrue(food.label.contains("Food"), food.label)
+        XCTAssertTrue(food.label.contains("expanded"), food.label)
+        scrollUntilInsidePlanningList(food, in: app)
+        food.tap()
+        XCTAssertTrue(revealPlanningRow("foodListHeader", in: app).label.contains("collapsed"))
+    }
+
     func testRideHighlightDescriptionIsClippedUnderTheNameAndExpands() {
         let app = launch()
         planFixedRoute(in: app)
@@ -1076,6 +1185,45 @@ final class CoreJourneyUITests: XCTestCase {
         )
     }
 
+    /// The row never appeared, including after a pass down the list and back.
+    private func assertPlanningRowAbsent(
+        _ id: String,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        scrollToTop(app, expandSheet: false)
+        let probe = scrollPlanningListUntilExists(id, in: app, maxSwipes: 10, expandSheet: false)
+        XCTAssertFalse(
+            probe.exists,
+            "\(id) was on the planning list\n\(diagnosticTree(app))",
+            file: file,
+            line: line
+        )
+    }
+
+    /// Map chips sit above the sheet. A large detent covers them on iPhone,
+    /// so the sheet is lowered before the tap and opened again after.
+    private func selectCategory(_ name: String, in app: XCUIApplication) {
+        let chip = app.buttons[name].firstMatch
+        if !chip.exists || !chip.isHittable {
+            let grabber = app.buttons["Sheet Grabber"]
+            if grabber.exists {
+                let start = grabber.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                let bottom = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9))
+                start.press(forDuration: 0.05, thenDragTo: bottom)
+                RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+            }
+        }
+        XCTAssertTrue(chip.waitForExistence(timeout: 3), diagnosticTree(app))
+        if chip.isHittable {
+            chip.tap()
+        } else {
+            chip.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        }
+        expandPlanningSheet(app)
+    }
+
     /// Brings a planning-list row into the accessibility tree.
     ///
     /// Scrolls `planningList` only. Dragging the sheet grabber on iPad resizes
@@ -1299,6 +1447,8 @@ final class CoreJourneyUITests: XCTestCase {
             "leaveLater", "routeStyle", "waypoint.", "noGas", "replan",
             "Plan Ride", "gas station", "Navigate", "Apply", "placeSearch",
             "rideHighlights", "Ride Highlights", "highlight.", "Tallulah", "Bare Overlook",
+            "gasListHeader", "gasDay", "gasLeg", "gasCandidate", "foodListHeader", "highlightsListHeader",
+            "Suggested Gas", "Alt ",
             "routeMapFrame", "lastCompleted", "activeRouteStyle",
             "noLodging", "hotelStop", "hotelLodgingState", "hotelDay", "Quality Inn", "Holiday Inn", "No lodging",
             "noHotelPicked", "chooseHotel", "rideDay", "Weatherford", "No hotel"

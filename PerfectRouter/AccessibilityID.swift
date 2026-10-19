@@ -31,6 +31,16 @@ enum AccessibilityID {
     static func hotelDay(_ day: Int) -> String { "hotelDay.\(day)" }
     static let navigate = "navigate"
     static let rideHighlights = "rideHighlights"
+    /// Suggested Gas header. The label includes the count and expanded or collapsed.
+    static let gasListHeader = "gasListHeader"
+    static let foodListHeader = "foodListHeader"
+    static let highlightsListHeader = "highlightsListHeader"
+
+    static func gasDay(_ day: Int) -> String { "gasDay.\(day)" }
+    static func gasLeg(_ leg: Int) -> String { "gasLeg.\(leg)" }
+    static func gasLegShowMore(_ leg: Int) -> String { "gasLegShowMore.\(leg)" }
+    /// A gas candidate that is not already a `fuelStop.<name>` row.
+    static func gasCandidate(_ name: String) -> String { "gasCandidate.\(name)" }
     /// Camera center after a route is framed, as "latitude,longitude".
     static let routeMapFrame = "routeMapFrame"
 

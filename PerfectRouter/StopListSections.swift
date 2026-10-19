@@ -515,7 +515,9 @@ struct SuggestionsSection: View {
     @Environment(\.planningUsesSidebar) private var planningUsesSidebar
 
     var body: some View {
-        Section("Suggested \(viewModel.selectedCategory.rawValue) Stops") {
+        // Rows are written in this builder. A `Group` or stack returned from
+        // another property becomes one cell, and the header stops toggling.
+        Section {
             if viewModel.selectedCategory == .gas {
                 if !viewModel.selectableRecommendedFuelStops.isEmpty {
                     SelectRecommendedFuelButton(viewModel: viewModel)
@@ -582,14 +584,137 @@ struct SuggestionsSection: View {
             } else {
                 FocusPlaceholderRow()
             }
-            if !viewModel.suggestionListStops.isEmpty {
+            if viewModel.selectedCategory == .gas, !viewModel.gasListStations.isEmpty {
+                let grouping = viewModel.gasListGrouping
+                let expanded = viewModel.gasListExpanded
+                CollapsibleSectionHeader(
+                    title: CollapsibleListCopy.gasTitle(count: grouping.stationCount),
+                    expanded: expanded,
+                    identifier: AccessibilityID.gasListHeader,
+                    label: CollapsibleListCopy.stateLabel(
+                        title: CollapsibleListCopy.gasTitle(count: grouping.stationCount),
+                        expanded: expanded,
+                        pastRange: grouping.pastRange
+                    ),
+                    showsPastRange: !expanded && grouping.pastRange,
+                    action: { viewModel.toggleGasList() }
+                )
+                if expanded, !viewModel.gasListRows.isEmpty {
+                    let stops = Dictionary(
+                        viewModel.gasListStations.map { ($0.id, $0) },
+                        uniquingKeysWith: { first, _ in first }
+                    )
+                    ForEach(viewModel.gasListRows) { row in
+                        gasListRow(row, stops: stops)
+                    }
+                } else {
+                    FocusPlaceholderRow()
+                }
+            } else if viewModel.selectedCategory == .food {
+                let foodStops = viewModel.suggestionListStops.filter { $0.category == .food }
+                let expanded = viewModel.foodListExpanded
+                CollapsibleSectionHeader(
+                    title: CollapsibleListCopy.foodTitle(count: foodStops.count),
+                    expanded: expanded,
+                    identifier: AccessibilityID.foodListHeader,
+                    label: CollapsibleListCopy.stateLabel(
+                        title: CollapsibleListCopy.foodTitle(count: foodStops.count),
+                        expanded: expanded
+                    ),
+                    showsPastRange: false,
+                    action: { viewModel.toggleFoodList() }
+                )
+                if expanded, !foodStops.isEmpty {
+                    ForEach(foodStops) { stop in
+                        suggestionButton(stop)
+                    }
+                } else {
+                    FocusPlaceholderRow()
+                }
+            } else if !viewModel.suggestionListStops.isEmpty {
                 ForEach(viewModel.suggestionListStops) { stop in
                     suggestionButton(stop)
                 }
             } else {
                 FocusPlaceholderRow()
             }
+        } header: {
+            suggestionSectionHeader
         }
+    }
+
+    /// Gas and food draw their own counted header as a row, so the section
+    /// title is not a second copy. Other categories keep the plain title.
+    @ViewBuilder
+    private var suggestionSectionHeader: some View {
+        if viewModel.selectedCategory == .gas || viewModel.selectedCategory == .food {
+            Text(verbatim: " ")
+                .font(.system(size: 1))
+                .foregroundStyle(.clear)
+                .frame(maxWidth: .infinity, minHeight: 1, maxHeight: 1)
+                .accessibilityHidden(true)
+        } else {
+            Text("Suggested \(viewModel.selectedCategory.rawValue) Stops")
+        }
+    }
+
+    /// Suggested Gas rows. Select recommended and Apply stay above these, so
+    /// they remain on screen while the station rows are collapsed. The same
+    /// rows are the sheet on iPhone and iPad portrait and the sidebar on
+    /// iPad landscape and Mac.
+    @ViewBuilder
+    private func gasListRow(
+        _ row: GasListGrouping.Row,
+        stops: [UUID: SuggestedStop]
+    ) -> some View {
+        switch row {
+        case .dayHeader(let day):
+            let expanded = viewModel.isGasDayExpanded(day.dayNumber)
+            CollapsibleSectionHeader(
+                title: CollapsibleListCopy.dayTitle(day.dayNumber),
+                expanded: expanded,
+                identifier: AccessibilityID.gasDay(day.dayNumber),
+                label: CollapsibleListCopy.stateLabel(
+                    title: CollapsibleListCopy.dayTitle(day.dayNumber),
+                    expanded: expanded,
+                    pastRange: day.pastRange
+                ),
+                showsPastRange: !expanded && day.pastRange,
+                action: { viewModel.toggleGasDay(day.dayNumber) }
+            )
+        case .legHeader(let leg):
+            legHeader(leg)
+        case .station(let station):
+            if let stop = stops[station.id] {
+                suggestionButton(stop)
+            } else {
+                FocusPlaceholderRow()
+            }
+        case .showMore(let legNumber, let expanded):
+            Button(CollapsibleListCopy.showMoreTitle(expanded: expanded)) {
+                viewModel.toggleGasLegOverflow(legNumber)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier(AccessibilityID.gasLegShowMore(legNumber))
+        }
+    }
+
+    private func legHeader(_ leg: GasListGrouping.Leg) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(leg.title)
+                .font(.subheadline.weight(.semibold))
+                .multilineTextAlignment(.leading)
+                .accessibilityIdentifier(AccessibilityID.gasLeg(leg.number))
+                .accessibilityLabel(GasListGrouping.legAccessibilityLabel(
+                    title: leg.title,
+                    pastRange: leg.pastRange
+                ))
+            Spacer(minLength: 8)
+            if leg.pastRange {
+                PastYourRangeLabel()
+            }
+        }
+        .accessibilityElement(children: .contain)
     }
 
     /// The distance line is always present, so the row stack does not gain
@@ -667,7 +792,16 @@ struct SuggestionsSection: View {
     private func listedStop<V: View>(_ row: V, stop: SuggestedStop) -> some View {
         row
             .sidebarStopHighlight(selected: viewModel.highlightedStopID == stop.id)
-            .id(stop.id)
+            .id(listIdentity(for: stop))
+    }
+
+    /// The summary fuel row already uses the stop id. A second row with that
+    /// id makes the list drop one of them when the gas group also shows it.
+    private func listIdentity(for stop: SuggestedStop) -> AnyHashable {
+        if stop.category == .gas, viewModel.isShownAsFuelPlanRow(stop) {
+            return "gas-list-\(stop.id.uuidString)"
+        }
+        return stop.id
     }
 
     private func focusFromSidebar(_ stop: SuggestedStop) {
@@ -695,14 +829,14 @@ struct SuggestionsSection: View {
             } else {
                 viewModel.addStop(from: stop)
             }
-        } label: {
+            } label: {
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: stop.category.systemImage)
                     .accessibilityHidden(true)
                 FuelStopTextColumn(
                     title: title,
                     caption: caption,
-                    rowIdentifier: accessibility?.identifier ?? ""
+                    rowIdentifier: accessibility?.identifier ?? gasCandidateIdentifier(stop)
                 )
                 if pastRange {
                     PastYourRangeLabel()
@@ -718,9 +852,59 @@ struct SuggestionsSection: View {
 
         if let accessibility {
             listedStop(button.fuelRowAccessibility(accessibility), stop: stop)
+        } else if stop.category == .gas {
+            listedStop(
+                button.accessibilityIdentifier(AccessibilityID.gasCandidate(stop.name)),
+                stop: stop
+            )
         } else {
             listedStop(button, stop: stop)
         }
+    }
+
+    /// Stations that are not fuel-plan rows keep a stable id. Recommended
+    /// rows keep `fuelStop.<name>.checked`.
+    private func gasCandidateIdentifier(_ stop: SuggestedStop) -> String {
+        guard stop.category == .gas else { return "" }
+        return AccessibilityID.gasCandidate(stop.name)
+    }
+}
+
+/// Counted header with a chevron. Tapping it only changes the section's
+/// open state. It does not check or uncheck a stop.
+struct CollapsibleSectionHeader: View {
+    var title: String
+    var expanded: Bool
+    var identifier: String
+    var label: String
+    var showsPastRange: Bool
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .multilineTextAlignment(.leading)
+                    // The list cell exposes this title, the same way a fuel
+                    // row exposes its name. The label carries the count and
+                    // whether the section is open.
+                    .accessibilityIdentifier(identifier)
+                    .accessibilityLabel(label)
+                Spacer(minLength: 8)
+                if showsPastRange {
+                    PastYourRangeLabel()
+                }
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                    .rotationEffect(.degrees(expanded ? 90 : 0))
+                    .accessibilityHidden(true)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(identifier)
+        .accessibilityLabel(label)
     }
 }
 
