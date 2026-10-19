@@ -209,10 +209,13 @@ final class CoreJourneyUITests: XCTestCase {
             diagnosticTree(app)
         )
         let gasAfter = reveal("gasListHeader", in: app)
+        XCTAssertTrue(gasAfter.exists, diagnosticTree(app))
         XCTAssertTrue(gasAfter.label.contains("expanded"), gasAfter.label)
         let dayAfter = reveal("gasDay.2", in: app)
+        XCTAssertTrue(dayAfter.exists, diagnosticTree(app))
         XCTAssertTrue(dayAfter.label.contains("collapsed"), dayAfter.label)
         let highlightsAfter = reveal("highlightsListHeader", in: app)
+        XCTAssertTrue(highlightsAfter.exists, diagnosticTree(app))
         XCTAssertTrue(highlightsAfter.label.contains("collapsed"), highlightsAfter.label)
     }
 
@@ -1374,32 +1377,51 @@ final class CoreJourneyUITests: XCTestCase {
     }
 
     /// Brings `id` on screen. Does not fail; callers assert and attach the tree.
-    private func reveal(_ id: String, in app: XCUIApplication, timeout: TimeInterval = 20, expandSheet: Bool = true) -> XCUIElement {
-        revealEither([id], in: app, timeout: timeout, expandSheet: expandSheet)
+    ///
+    /// Walks down by nudge until the row exists or the list stops moving.
+    /// A wall-clock limit expired on iPad while the open gas list was still
+    /// above the row: each nudge takes longer than the clock allowed for.
+    private func reveal(_ id: String, in app: XCUIApplication, expandSheet: Bool = true) -> XCUIElement {
+        revealEither([id], in: app, expandSheet: expandSheet)
     }
 
-    private func revealEither(_ ids: [String], in app: XCUIApplication, timeout: TimeInterval, expandSheet: Bool = true) -> XCUIElement {
+    private func revealEither(_ ids: [String], in app: XCUIApplication, expandSheet: Bool = true) -> XCUIElement {
         if expandSheet { expandPlanningSheet(app) }
         scrollToTop(app, expandSheet: expandSheet)
-        let deadline = Date().addingTimeInterval(timeout)
-        var down = 0
-        while Date() < deadline {
-            for id in ids {
-                let element = identified(id, in: app)
-                if element.exists { return element }
-            }
-            // A half-list swipe jumps over the highlight rows. They are short,
-            // and the poll only sees the list between drags.
-            if down >= 40 {
-                scrollToTop(app, expandSheet: expandSheet)
-                down = 0
-            } else {
-                nudgePlanningList(in: app, up: true)
-                down += 1
-            }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.12))
-        }
+        if let found = firstExisting(ids, in: app) { return found }
+        if let found = nudgeUntilListed(ids, in: app) { return found }
+        scrollToTop(app, expandSheet: expandSheet)
+        if let found = firstExisting(ids, in: app) { return found }
+        if let found = nudgeUntilListed(ids, in: app) { return found }
         return identified(ids[0], in: app)
+    }
+
+    private func firstExisting(_ ids: [String], in app: XCUIApplication) -> XCUIElement? {
+        for id in ids {
+            let element = identified(id, in: app)
+            if element.exists { return element }
+        }
+        return nil
+    }
+
+    /// Short nudges, not half-list swipes: a long drag jumps the highlight rows.
+    /// Stops at the list end, when the lowest button stops moving.
+    private func nudgeUntilListed(_ ids: [String], in app: XCUIApplication) -> XCUIElement? {
+        var lastProbe = ""
+        var stalled = 0
+        for _ in 0..<48 {
+            nudgePlanningList(in: app, up: true)
+            if let found = firstExisting(ids, in: app) { return found }
+            let probe = lowestPlanningButton(in: app)
+            if !probe.isEmpty, probe == lastProbe {
+                stalled += 1
+                if stalled >= 2 { return nil }
+            } else {
+                stalled = 0
+            }
+            lastProbe = probe
+        }
+        return firstExisting(ids, in: app)
     }
 
     private struct FuelScan: CustomStringConvertible {
