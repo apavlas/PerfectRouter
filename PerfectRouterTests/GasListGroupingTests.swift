@@ -85,6 +85,33 @@ final class GasListGroupingTests: XCTestCase {
         XCTAssertFalse(grouping.days.contains { $0.dayNumber == 3 })
     }
 
+    /// The header mile is the recommended fill, which is the first row of
+    /// that leg. The next leg, which only starts at that fill, uses its own
+    /// window end instead of repeating the mile.
+    func testLegMileIsTheFillAndTheNextLegDoesNotRepeatIt() {
+        let grouping = GasListGrouping.make(
+            stations: [
+                station("Pilot", miles: 1192, recommended: true),
+                station("Alt A", miles: 1022),
+                station("Alt B", miles: 1023),
+                station("Later", miles: 1300),
+            ],
+            fillDistances: [1192 * mile],
+            daySpans: [span(1, from: 0, to: 1500)],
+            totalDistance: 1500 * mile,
+            usesMetric: false
+        )
+        let legs = grouping.days.flatMap(\.legs)
+        XCTAssertEqual(legs.map(\.title), [
+            "Leg 1 · ~1192 mi",
+            "Leg 2 · ~1500 mi",
+        ])
+        XCTAssertEqual(legs[0].preview.map(\.name), ["Pilot", "Alt A", "Alt B"])
+        XCTAssertEqual(legs[0].preview.first?.distance ?? -1, 1192 * mile, accuracy: 1)
+        XCTAssertEqual(legs[1].preview.map(\.name), ["Later"])
+        XCTAssertFalse(legs[1].title.contains("1192"))
+    }
+
     func testAMileOnTheOvernightBelongsToTheDayThatStartsThere() {
         let grouping = GasListGrouping.make(
             stations: [
@@ -502,10 +529,73 @@ final class GasListGroupingTests: XCTestCase {
         })
     }
 
-    private func gasStop(_ name: String, miles: Double) -> SuggestedStop {
+    /// After Apply, a refreshed search pin for the same pump is not a second
+    /// candidate. The applied stop is the recommended row, its id survives
+    /// the next read, and the header count does not grow by the fill count.
+    func testAppliedFillShowsOnceAndTheRowResolves() {
+        let viewModel = RoutePlannerViewModel()
+        let line = stride(from: 0.0, through: 280, by: 40).map {
+            UITestFixture.coordinate(milesNorth: $0, eastMeters: 0)
+        }
+        func fill(_ name: String, miles: Double) -> Waypoint {
+            var waypoint = Waypoint(
+                name: name,
+                coordinate: UITestFixture.coordinate(milesNorth: miles, eastMeters: 0)
+            )
+            waypoint.isGasFill = true
+            return waypoint
+        }
+        viewModel.waypoints = [
+            Waypoint(name: "Start", coordinate: UITestFixture.coordinate(milesNorth: 0, eastMeters: 0)),
+            fill("QuikTrip", miles: 80),
+            fill("Shell", miles: 160),
+            Waypoint(name: "End", coordinate: UITestFixture.coordinate(milesNorth: 280, eastMeters: 0)),
+        ]
+        viewModel.plannedCorridor = [line]
+        viewModel.fuelStops = []
+        viewModel.fuelPlanEntries = []
+        viewModel.gasStations = [
+            gasStop("QuikTrip", miles: 80.2, eastMeters: 400),
+            gasStop("Shell", miles: 160.2, eastMeters: 400),
+            gasStop("Alt 40", miles: 40),
+            gasStop("RaceTrac", miles: 60),
+            gasStop("Chevron", miles: 70),
+            gasStop("Extra", miles: 120),
+            gasStop("BP", miles: 140),
+            gasStop("Amoco", miles: 150),
+            gasStop("Marathon", miles: 190),
+        ]
+
+        let listed = viewModel.gasListStations
+        XCTAssertEqual(listed.filter { $0.name == "QuikTrip" }.count, 1)
+        XCTAssertEqual(listed.filter { $0.name == "Shell" }.count, 1)
+        XCTAssertEqual(listed.count, 9, "Two applied fills replace their search pins instead of adding to the 7 alternates")
+
+        let grouping = viewModel.gasListGrouping
+        XCTAssertEqual(grouping.stationCount, listed.count)
+        let resolved = Dictionary(uniqueKeysWithValues: viewModel.gasListStations.map { ($0.id, $0) })
+        let legs = grouping.days.flatMap(\.legs)
+        XCTAssertEqual(legs.map { $0.preview.first?.name }, ["QuikTrip", "Shell", "Marathon"])
+        for leg in legs {
+            for station in leg.preview + leg.overflow {
+                XCTAssertNotNil(resolved[station.id], "\(station.name) must resolve on the next read")
+            }
+            XCTAssertFalse(leg.overflow.contains { $0.name == "QuikTrip" || $0.name == "Shell" })
+        }
+
+        let quik = try XCTUnwrap(listed.first { $0.name == "QuikTrip" })
+        let alternate = try XCTUnwrap(listed.first { $0.name == "RaceTrac" })
+        XCTAssertEqual(viewModel.gasSuggestionIdentifier(for: quik), AccessibilityID.fuelStop("QuikTrip", checked: true))
+        XCTAssertFalse(viewModel.gasSuggestionIdentifier(for: quik).hasPrefix("gasCandidate"))
+        XCTAssertEqual(viewModel.gasSuggestionIdentifier(for: alternate), AccessibilityID.gasCandidate("RaceTrac"))
+        XCTAssertTrue(viewModel.isAppliedGasFill(quik))
+        XCTAssertFalse(viewModel.isAppliedGasFill(alternate))
+    }
+
+    private func gasStop(_ name: String, miles: Double, eastMeters: Double = 800) -> SuggestedStop {
         SuggestedStop(
             name: name,
-            coordinate: UITestFixture.coordinate(milesNorth: miles, eastMeters: 800),
+            coordinate: UITestFixture.coordinate(milesNorth: miles, eastMeters: eastMeters),
             category: .gas,
             distanceAlongRoute: miles * mile
         )

@@ -1584,18 +1584,23 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     }
 
     /// Gas the Suggested Gas list draws, including each applied fill. The
-    /// fill stays in its leg as the recommended stop; other pumps already
-    /// on the route are left off so Apply cannot add them twice.
+    /// fill stays in its leg as the recommended stop. A search pin for that
+    /// same pump is left out, so Apply does not add a second candidate or
+    /// raise the header count.
     var gasListStations: [SuggestedStop] {
         let corridor = suggestedStops.contains(where: { $0.category == .gas }) ? suggestedStops : gasStations
+        let fills = appliedGasFillStops
         var seen = Set<String>()
         var pool: [SuggestedStop] = []
         for stop in corridor where stop.category == .gas && !isStopOnRoute(stop) {
+            if fills.contains(where: { appliedFill($0, matches: stop) }) {
+                continue
+            }
             let key = Self.coordinateKey(stop.coordinate)
             guard seen.insert(key).inserted else { continue }
             pool.append(stop)
         }
-        for stop in appliedGasFillStops {
+        for stop in fills {
             let key = Self.coordinateKey(stop.coordinate)
             guard seen.insert(key).inserted else { continue }
             pool.append(stop)
@@ -1603,25 +1608,64 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         return pool.sorted { distanceFromStart(of: $0) < distanceFromStart(of: $1) }
     }
 
-    /// Pumps the rider already applied. Their mile marks are the fuel-leg
-    /// edges after a replan clears `fuelStops`, and each one is the
-    /// recommended row of the leg that ends on it.
+    /// Accessibility id for one Suggested Gas row. An applied fill keeps the
+    /// fuel-stop id. Alternates stay `gasCandidate`.
+    func gasSuggestionIdentifier(for stop: SuggestedStop) -> String {
+        if let label = fuelRowLabel(for: stop), !label.identifier.isEmpty {
+            return label.identifier
+        }
+        if isAppliedGasFill(stop) {
+            return AccessibilityID.fuelStop(stop.name, checked: true)
+        }
+        return AccessibilityID.gasCandidate(stop.name)
+    }
+
+    /// Pumps the rider already applied. The waypoint id is stable across
+    /// reads, so the leg row resolves to this stop instead of an empty
+    /// placeholder. Their mile marks are the fuel-leg edges after a replan
+    /// clears `fuelStops`, and each one is the recommended row of the leg
+    /// that ends on it.
     private var appliedGasFillStops: [SuggestedStop] {
-        waypoints.compactMap { waypoint in
+        waypoints.enumerated().compactMap { index, waypoint in
             guard waypoint.isGasFill else { return nil }
+            let along = waypointDistance(at: index)
             return SuggestedStop(
                 name: waypoint.name,
                 coordinate: waypoint.coordinate,
                 category: .gas,
-                distanceAlongRoute: 0
+                distanceAlongRoute: along,
+                id: waypoint.id
             )
         }
     }
 
-    private func isAppliedGasFill(_ stop: SuggestedStop) -> Bool {
+    /// A corridor pin for a pump already on the route. The coordinate key
+    /// matches an exact apply. A later search can move that pin by a few
+    /// hundred meters and keep the name; within a mile it is still the
+    /// applied stop, not another candidate. A same-name station at the next
+    /// exit stays an alternate.
+    private func appliedFill(_ fill: SuggestedStop, matches stop: SuggestedStop) -> Bool {
+        if Self.sameCoordinate(fill.coordinate, stop.coordinate) { return true }
+        guard fill.name == stop.name else { return false }
+        return Self.metersBetween(fill.coordinate, stop.coordinate) <= Self.appliedFillMatchMeters
+    }
+
+    func isAppliedGasFill(_ stop: SuggestedStop) -> Bool {
         waypoints.contains { waypoint in
             waypoint.isGasFill && Self.sameCoordinate(waypoint.coordinate, stop.coordinate)
         }
+    }
+
+    /// MapKit can shift a pump's pin after a replan. A mile still separates
+    /// that pin from the next exit's station.
+    private static let appliedFillMatchMeters: CLLocationDistance = 1_609
+
+    private static func metersBetween(
+        _ lhs: CLLocationCoordinate2D,
+        _ rhs: CLLocationCoordinate2D
+    ) -> CLLocationDistance {
+        CLLocation(latitude: lhs.latitude, longitude: lhs.longitude)
+            .distance(from: CLLocation(latitude: rhs.latitude, longitude: rhs.longitude))
     }
 
     /// Day and fuel-leg groups for `gasListStations`. Empty when the corridor

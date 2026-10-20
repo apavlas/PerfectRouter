@@ -85,8 +85,8 @@ struct GasListGrouping: Equatable {
     var stationCount: Int
     var pastRange: Bool
 
-    /// "Leg 3 · ~498 mi". The mile is the recommended fill, or the start of
-    /// the window when that leg has no pick.
+    /// "Leg 3 · ~498 mi". The mile is the recommended fill. A leg with no
+    /// pick uses the end of its window, so it does not repeat the previous fill.
     static func legTitle(
         number: Int,
         markerMeters: CLLocationDistance,
@@ -250,7 +250,7 @@ struct GasListGrouping: Equatable {
         let overflow = alternates
             .filter { !keptIDs.contains($0.id) }
             .sorted { $0.distance < $1.distance }
-        let marker = recommended?.distance ?? start
+        let marker = recommended?.distance ?? end
         return Leg(
             number: number,
             dayNumber: dayNumber,

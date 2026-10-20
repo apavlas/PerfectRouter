@@ -139,7 +139,9 @@ enum RouteStyle: String, CaseIterable, Identifiable {
 
 /// A recommended stop found near the route corridor.
 struct SuggestedStop: Identifiable {
-    let id = UUID()
+    /// Stable for a search result. An applied fill uses the waypoint id so
+    /// the gas list can find the same row on the next read.
+    let id: UUID
     let mapItem: MKMapItem
     let category: StopCategory
     /// Distance from the route start, in meters, measured by projecting
@@ -167,7 +169,9 @@ struct SuggestedStop: Identifiable {
          category: StopCategory,
          distanceAlongRoute: CLLocationDistance,
          detourMeters: CLLocationDistance = 0,
-         placeDescription: String? = nil) {
+         placeDescription: String? = nil,
+         id: UUID? = nil) {
+        self.id = id ?? UUID()
         self.mapItem = mapItem
         self.category = category
         self.distanceAlongRoute = distanceAlongRoute
@@ -215,13 +219,15 @@ extension SuggestedStop {
          coordinate: CLLocationCoordinate2D,
          category: StopCategory,
          distanceAlongRoute: CLLocationDistance,
-         detourMeters: CLLocationDistance = 0) {
+         detourMeters: CLLocationDistance = 0,
+         id: UUID? = nil) {
         let mapItem = MKMapItem(placemark: MKPlacemark(coordinate: coordinate))
         mapItem.name = name
         self.init(mapItem: mapItem,
                   category: category,
                   distanceAlongRoute: distanceAlongRoute,
-                  detourMeters: detourMeters)
+                  detourMeters: detourMeters,
+                  id: id)
     }
 
     /// Same stop, with a new distance from the start. The id stays put so

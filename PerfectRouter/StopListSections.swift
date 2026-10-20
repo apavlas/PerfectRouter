@@ -822,7 +822,8 @@ struct SuggestionsSection: View {
         pastRange: Bool,
         accessibility: RecommendedFuelAccessibility?
     ) -> some View {
-        let onRoute = stop.category == .gas && viewModel.isStopOnRoute(stop)
+        let appliedFill = stop.category == .gas && viewModel.isAppliedGasFill(stop)
+        let onRoute = appliedFill || (stop.category == .gas && viewModel.isStopOnRoute(stop))
         let button = Button {
             guard !onRoute else { return }
             focusFromSidebar(stop)
@@ -838,7 +839,7 @@ struct SuggestionsSection: View {
                 FuelStopTextColumn(
                     title: title,
                     caption: caption,
-                    rowIdentifier: accessibility?.identifier ?? gasCandidateIdentifier(stop)
+                    rowIdentifier: accessibility?.identifier ?? viewModel.gasSuggestionIdentifier(for: stop)
                 )
                 if onRoute {
                     Text("Added")
@@ -863,19 +864,12 @@ struct SuggestionsSection: View {
             listedStop(button.fuelRowAccessibility(accessibility), stop: stop)
         } else if stop.category == .gas {
             listedStop(
-                button.accessibilityIdentifier(AccessibilityID.gasCandidate(stop.name)),
+                button.accessibilityIdentifier(viewModel.gasSuggestionIdentifier(for: stop)),
                 stop: stop
             )
         } else {
             listedStop(button, stop: stop)
         }
-    }
-
-    /// Stations that are not fuel-plan rows keep a stable id. Recommended
-    /// rows keep `fuelStop.<name>.checked`.
-    private func gasCandidateIdentifier(_ stop: SuggestedStop) -> String {
-        guard stop.category == .gas else { return "" }
-        return AccessibilityID.gasCandidate(stop.name)
     }
 }
 
