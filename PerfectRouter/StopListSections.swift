@@ -910,12 +910,14 @@ struct CollapsibleSectionHeader: View {
                     .rotationEffect(.degrees(expanded ? 90 : 0))
                     .accessibilityHidden(true)
             }
-            // The title is short on a wide iPad sheet. Without a full-width
-            // shape, a tap on the rest of the collapsed row misses the button.
+            // The title is short on a wide iPad sheet. The shape makes the
+            // rest of this row the button. Borderless would hand the whole
+            // list row to this control, and on iPhone that steal reaches
+            // the Apply button above the header.
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(.plain)
         .accessibilityIdentifier(identifier)
         .accessibilityLabel(label)
     }

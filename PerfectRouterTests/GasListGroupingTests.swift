@@ -378,6 +378,62 @@ final class GasListGroupingTests: XCTestCase {
         XCTAssertEqual(grouping.days.flatMap(\.legs)[2].pastRange, true)
     }
 
+    /// Checking a pump and tapping Apply inserts that waypoint. A replan
+    /// that then clears the fuel plan must not flatten the legs or hide
+    /// Select recommended.
+    func testApplyCheckedGasStopKeepsTheWaypointAndTheLegs() {
+        let viewModel = RoutePlannerViewModel()
+        let line = stride(from: 0.0, through: 280, by: 40).map {
+            UITestFixture.coordinate(milesNorth: $0, eastMeters: 0)
+        }
+        viewModel.waypoints = [
+            Waypoint(name: "Start", coordinate: UITestFixture.coordinate(milesNorth: 0, eastMeters: 0)),
+            Waypoint(name: "End", coordinate: UITestFixture.coordinate(milesNorth: 280, eastMeters: 0)),
+        ]
+        viewModel.plannedCorridor = [line]
+        let quik = gasStop("QuikTrip", miles: 80)
+        let shell = gasStop("Shell", miles: 160)
+        viewModel.fuelStops = [quik, shell]
+        viewModel.fuelPlanEntries = [.recommended(quik), .recommended(shell)]
+        viewModel.gasStations = [
+            gasStop("Alt 40", miles: 40),
+            gasStop("RaceTrac", miles: 60),
+            gasStop("Chevron", miles: 70),
+            quik,
+            gasStop("Extra", miles: 120),
+            gasStop("BP", miles: 140),
+            gasStop("Amoco", miles: 150),
+            shell,
+            gasStop("Marathon", miles: 190),
+        ]
+
+        viewModel.toggleBufferedGasStop(quik)
+        XCTAssertEqual(viewModel.bufferedGasStops.map(\.name), ["QuikTrip"])
+        viewModel.applyBufferedGasStops()
+
+        XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "QuikTrip", "End"])
+        XCTAssertTrue(viewModel.waypoints[1].isGasFill)
+        XCTAssertTrue(viewModel.bufferedGasStops.isEmpty)
+
+        // The replan drops the old recommendations. The applied fill remains
+        // the leg boundary, and Select recommended stays with the corridor.
+        viewModel.fuelStops = []
+        viewModel.fuelPlanEntries = []
+        XCTAssertTrue(viewModel.selectableRecommendedFuelStops.isEmpty)
+        XCTAssertTrue(viewModel.showsSelectRecommendedFuelButton)
+        XCTAssertFalse(viewModel.gasListExpanded)
+
+        viewModel.toggleGasList()
+        let legs = viewModel.gasListGrouping.days.flatMap(\.legs)
+        XCTAssertTrue(viewModel.gasListGrouping.showsLegHeaders)
+        XCTAssertEqual(legs.first?.preview.map(\.name), ["QuikTrip", "RaceTrac", "Chevron"])
+        XCTAssertEqual(legs.first?.overflow.map(\.name), ["Alt 40"])
+        XCTAssertTrue(viewModel.gasListRows.contains { row in
+            if case .showMore(let legNumber, _) = row { return legNumber == 1 }
+            return false
+        })
+    }
+
     /// After Apply the fuel plan can come back empty. The applied pumps are
     /// still the leg edges, Select recommended stays up, and each leg keeps
     /// that pump plus two alternates and Show more.
