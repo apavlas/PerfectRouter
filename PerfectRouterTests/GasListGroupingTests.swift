@@ -87,14 +87,15 @@ final class GasListGroupingTests: XCTestCase {
 
     /// The header mile is the recommended fill, which is the first row of
     /// that leg. The next leg, which only starts at that fill, uses its own
-    /// window end instead of repeating the mile.
+    /// window end instead of repeating the mile. Later sits nearer the
+    /// destination than the fill, so it stays on that trailing leg.
     func testLegMileIsTheFillAndTheNextLegDoesNotRepeatIt() {
         let grouping = GasListGrouping.make(
             stations: [
                 station("Pilot", miles: 1192, recommended: true),
                 station("Alt A", miles: 1022),
                 station("Alt B", miles: 1023),
-                station("Later", miles: 1300),
+                station("Later", miles: 1450),
             ],
             fillDistances: [1192 * mile],
             daySpans: [span(1, from: 0, to: 1500)],
@@ -114,7 +115,8 @@ final class GasListGroupingTests: XCTestCase {
 
     /// A pump a few miles past an applied stop stays with that stop. It is
     /// not an alternate of the next leg just because the gap ahead is empty.
-    /// The open tail after the last fill is left on that trailing leg.
+    /// Stations closer to the route end than to the last fill stay on the
+    /// trailing leg.
     func testAlternatesStayWithTheCloserAppliedStop() {
         let grouping = GasListGrouping.make(
             stations: [
@@ -149,11 +151,39 @@ final class GasListGroupingTests: XCTestCase {
         XCTAssertTrue(legs[3].overflow.isEmpty)
     }
 
+    /// The last fill keeps the pumps just past it. The final leg, which has
+    /// no applied stop, keeps the pumps closer to the destination.
+    func testPumpsJustPastTheLastFillStayOnThatLeg() {
+        let grouping = GasListGrouping.make(
+            stations: [
+                station("Phillips 66", miles: 1192, recommended: true),
+                station("Conoco", miles: 1193),
+                station("Old Route 66", miles: 1200),
+                station("Farther", miles: 1250),
+            ],
+            fillDistances: [1192 * mile],
+            daySpans: [span(1, from: 0, to: 1264)],
+            totalDistance: 1264 * mile,
+            usesMetric: false
+        )
+        let legs = grouping.days.flatMap(\.legs)
+        XCTAssertEqual(legs.map(\.title), [
+            "Leg 1 · ~1192 mi",
+            "Leg 2 · ~1264 mi",
+        ])
+        XCTAssertEqual(legs[0].preview.map(\.name), ["Phillips 66", "Conoco", "Old Route 66"])
+        XCTAssertTrue(legs[0].overflow.isEmpty)
+        XCTAssertEqual(legs[1].preview.map(\.name), ["Farther"])
+        XCTAssertFalse(legs[1].preview.contains { $0.name == "Conoco" || $0.name == "Old Route 66" })
+    }
+
+    /// The leg that starts on an overnight belongs to the day that starts
+    /// there. Morning is in the half of that stretch nearer the destination.
     func testAMileOnTheOvernightBelongsToTheDayThatStartsThere() {
         let grouping = GasListGrouping.make(
             stations: [
                 station("Evening", miles: 90, recommended: true),
-                station("Morning", miles: 100),
+                station("Morning", miles: 160),
             ],
             fillDistances: [90 * mile],
             daySpans: [

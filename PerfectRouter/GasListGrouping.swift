@@ -3,13 +3,14 @@ import Foundation
 
 /// How the Suggested Gas list is cut into riding days and fuel legs.
 ///
-/// A fuel leg belongs to one recommended fill. Between two fills, a station
-/// stays with the fill it is closer to, so a pump a few miles past a stop
-/// is not listed as the next leg's alternate. The open tail after the last
-/// fill has no applied stop and keeps every station past that fill. A leg
-/// that runs past an overnight stays on the day where it starts. One leg
-/// has no day or leg chrome: the stations stay one list, the way a short
-/// ride already showed them.
+/// A fuel leg belongs to one recommended fill. A station stays with the
+/// fill it is closer to, including a pump a few miles past that fill, so
+/// the next leg does not list it as an alternate. The midpoint of the gap
+/// is the boundary, and a tie stays with the later leg. The open tail
+/// after the last fill keeps the stations closer to the route end than to
+/// that fill. A leg that runs past an overnight stays on the day where it
+/// starts. One leg has no day or leg chrome: the stations stay one list,
+/// the way a short ride already showed them.
 ///
 /// This is a value, not a namespace: the grouped days are stored on it.
 struct GasListGrouping: Equatable {
@@ -273,9 +274,15 @@ struct GasListGrouping: Equatable {
         )
     }
 
-    /// Between fills, the station joins the closer applied stop. A tie stays
-    /// with the later stop. Past the last fill there is no applied stop, so
-    /// the open tail keeps the window that runs to the route end.
+    /// Half a long gap is a few meters longer than the other half, because
+    /// the geodesic mile stretches as latitude changes. A one-meter tie sent
+    /// the midpoint pump to the earlier stop.
+    private static let midpointTieMeters: CLLocationDistance = 1_609
+
+    /// The station joins the closer edge. Edges are the applied fills, plus
+    /// the route end when the ride continues past the last fill. A tie stays
+    /// with the later edge, so the middle of a leg is that leg's alternate
+    /// and a pump just past the last fill stays on that fill's leg.
     private static func bucketIndex(
         for distance: CLLocationDistance,
         edges: [CLLocationDistance],
@@ -283,21 +290,30 @@ struct GasListGrouping: Equatable {
         tolerance: CLLocationDistance
     ) -> Int? {
         guard edges.count >= 2 else { return nil }
-        if fillEdges.isEmpty || distance > (fillEdges.last ?? 0) + tolerance {
+        guard !fillEdges.isEmpty else {
             return windowIndex(for: distance, edges: edges, tolerance: tolerance)
         }
-        var chosen = 0
-        var chosenGap = CLLocationDistance.greatestFiniteMagnitude
-        for (offset, fill) in fillEdges.enumerated() {
-            let gap = abs(distance - fill)
-            let closer = gap + 1 < chosenGap
-            let tiedLater = abs(gap - chosenGap) <= 1 && fill > fillEdges[chosen]
+        let tailBucket: Int? = edges.count == fillEdges.count + 2 ? fillEdges.count : nil
+        var chosenBucket = 0
+        var chosenAt = fillEdges[0]
+        var chosenGap = abs(distance - chosenAt)
+        func consider(bucket: Int, at edge: CLLocationDistance) {
+            let gap = abs(distance - edge)
+            let closer = gap + midpointTieMeters < chosenGap
+            let tiedLater = abs(gap - chosenGap) <= midpointTieMeters && edge > chosenAt
             if closer || tiedLater {
                 chosenGap = gap
-                chosen = offset
+                chosenAt = edge
+                chosenBucket = bucket
             }
         }
-        return chosen
+        for (offset, fill) in fillEdges.enumerated() {
+            consider(bucket: offset, at: fill)
+        }
+        if let tailBucket, let end = edges.last {
+            consider(bucket: tailBucket, at: end)
+        }
+        return chosenBucket
     }
 
     /// First window includes the origin. Later windows start after the fill

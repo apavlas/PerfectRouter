@@ -700,19 +700,74 @@ final class CoreJourneyUITests: XCTestCase {
     private func tapApply(in app: XCUIApplication) {
         let buttons = app.buttons.matching(identifier: "applyStops")
         XCTAssertTrue(buttons.firstMatch.waitForExistence(timeout: 3))
-        var swipes = 0
-        while swipes < 14 {
-            for index in 0..<buttons.count {
-                let button = buttons.element(boundBy: index)
-                if button.isHittable {
-                    button.tap()
-                    return
-                }
+        // The summary Apply sits under the Plan Ride bar. XCTest still calls
+        // that frame hittable, and a center tap lands on the bar. The checked
+        // stop stays checked and the waypoint marker never changes.
+        var previousFrames = ""
+        var stuck = 0
+        for _ in 0..<16 {
+            recoverCollapsedPhoneSheet(app)
+            if let button = uncoveredApplyButton(in: app) {
+                button.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+                return
             }
-            swipePlanningList(in: app, up: true)
-            swipes += 1
+            let frames = applyButtonFrameDescription(in: app)
+            if frames == previousFrames {
+                stuck += 1
+            } else {
+                stuck = 0
+                previousFrames = frames
+            }
+            let chrome = planningChromeBottom(in: app)
+            let onScreen = onScreenApplyButtons(in: app)
+            let overlapped = !onScreen.isEmpty && onScreen.allSatisfy { $0.frame.minY < chrome }
+            swipePlanningList(in: app, up: onScreen.isEmpty || !overlapped || stuck >= 2)
         }
         XCTFail("Apply was not on screen\n\n\(diagnosticTree(app))")
+    }
+
+    /// Bottom of the Plan Ride bar. Rows drawn underneath it are not tappable.
+    private func planningChromeBottom(in app: XCUIApplication) -> CGFloat {
+        let bar = app.navigationBars["Plan Ride"]
+        guard bar.exists else { return 0 }
+        return bar.frame.maxY
+    }
+
+    /// An Apply button whose whole frame is below the navigation bar, so the
+    /// center tap hits the button.
+    private func uncoveredApplyButton(in app: XCUIApplication) -> XCUIElement? {
+        let chrome = planningChromeBottom(in: app)
+        let list = planningList(in: app)
+        var match: XCUIElement?
+        for button in onScreenApplyButtons(in: app) {
+            guard button.frame.minY >= chrome + 1 else { continue }
+            guard button.frame.maxY <= app.frame.maxY - 4 else { continue }
+            if list.exists, list.frame.height > 40 {
+                guard button.frame.midY > list.frame.minY, button.frame.midY < list.frame.maxY - 4 else { continue }
+            }
+            if match == nil || button.frame.minY > (match?.frame.minY ?? 0) {
+                match = button
+            }
+        }
+        return match
+    }
+
+    private func onScreenApplyButtons(in app: XCUIApplication) -> [XCUIElement] {
+        let buttons = app.buttons.matching(identifier: "applyStops")
+        var onScreen: [XCUIElement] = []
+        for index in 0..<buttons.count {
+            let button = buttons.element(boundBy: index)
+            guard button.exists, button.frame.height > 20, button.frame.width > 40 else { continue }
+            guard app.frame.intersects(button.frame) else { continue }
+            onScreen.append(button)
+        }
+        return onScreen
+    }
+
+    private func applyButtonFrameDescription(in app: XCUIApplication) -> String {
+        onScreenApplyButtons(in: app)
+            .map { "\(Int($0.frame.minY)):\(Int($0.frame.height))" }
+            .joined(separator: ",")
     }
 
     private func tapSelectRecommended(in app: XCUIApplication) {
