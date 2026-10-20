@@ -3,10 +3,13 @@ import Foundation
 
 /// How the Suggested Gas list is cut into riding days and fuel legs.
 ///
-/// A fuel leg is the stretch from one recommended fill to the next. The
-/// recommended stop is the end of that leg. A leg that runs past an overnight
-/// stays on the day where it starts. One leg has no day or leg chrome: the
-/// stations stay one list, the way a short ride already showed them.
+/// A fuel leg belongs to one recommended fill. Between two fills, a station
+/// stays with the fill it is closer to, so a pump a few miles past a stop
+/// is not listed as the next leg's alternate. The open tail after the last
+/// fill has no applied stop and keeps every station past that fill. A leg
+/// that runs past an overnight stays on the day where it starts. One leg
+/// has no day or leg chrome: the stations stay one list, the way a short
+/// ride already showed them.
 ///
 /// This is a value, not a namespace: the grouped days are stored on it.
 struct GasListGrouping: Equatable {
@@ -148,11 +151,13 @@ struct GasListGrouping: Equatable {
         let farthest = finite.map(\.distance).max() ?? 0
         let routeEnd = max(totalDistance.isFinite ? totalDistance : 0, farthest)
         var edges: [CLLocationDistance] = [0]
+        var fillEdges: [CLLocationDistance] = []
         for fill in fillDistances.sorted() where fill.isFinite {
             guard fill > tolerance, fill + tolerance < routeEnd || fill <= routeEnd else { continue }
             guard let last = edges.last, fill > last + tolerance else { continue }
             guard fill + tolerance < routeEnd else { continue }
             edges.append(fill)
+            fillEdges.append(fill)
         }
         if routeEnd > (edges.last ?? 0) + tolerance {
             edges.append(routeEnd)
@@ -160,7 +165,12 @@ struct GasListGrouping: Equatable {
 
         var buckets = Array(repeating: [Station](), count: max(edges.count - 1, 0))
         for station in finite.sorted(by: { $0.distance < $1.distance }) {
-            guard let index = bucketIndex(for: station.distance, edges: edges, tolerance: tolerance) else {
+            guard let index = bucketIndex(
+                for: station.distance,
+                edges: edges,
+                fillEdges: fillEdges,
+                tolerance: tolerance
+            ) else {
                 continue
             }
             buckets[index].append(station)
@@ -263,10 +273,37 @@ struct GasListGrouping: Equatable {
         )
     }
 
+    /// Between fills, the station joins the closer applied stop. A tie stays
+    /// with the later stop. Past the last fill there is no applied stop, so
+    /// the open tail keeps the window that runs to the route end.
+    private static func bucketIndex(
+        for distance: CLLocationDistance,
+        edges: [CLLocationDistance],
+        fillEdges: [CLLocationDistance],
+        tolerance: CLLocationDistance
+    ) -> Int? {
+        guard edges.count >= 2 else { return nil }
+        if fillEdges.isEmpty || distance > (fillEdges.last ?? 0) + tolerance {
+            return windowIndex(for: distance, edges: edges, tolerance: tolerance)
+        }
+        var chosen = 0
+        var chosenGap = CLLocationDistance.greatestFiniteMagnitude
+        for (offset, fill) in fillEdges.enumerated() {
+            let gap = abs(distance - fill)
+            let closer = gap + 1 < chosenGap
+            let tiedLater = abs(gap - chosenGap) <= 1 && fill > fillEdges[chosen]
+            if closer || tiedLater {
+                chosenGap = gap
+                chosen = offset
+            }
+        }
+        return chosen
+    }
+
     /// First window includes the origin. Later windows start after the fill
     /// that closed the previous one, so the recommended stop stays in the
     /// leg that ends on it.
-    private static func bucketIndex(
+    private static func windowIndex(
         for distance: CLLocationDistance,
         edges: [CLLocationDistance],
         tolerance: CLLocationDistance

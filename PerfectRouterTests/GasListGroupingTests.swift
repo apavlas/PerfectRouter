@@ -76,12 +76,12 @@ final class GasListGroupingTests: XCTestCase {
             "Leg 2 · ~150 mi",
             "Leg 3 · ~230 mi",
         ])
-        XCTAssertEqual(legs[0].preview.map(\.name), ["Pilot Madison", "Quick Stop", "Alt 55"])
-        XCTAssertEqual(legs[0].overflow.map(\.name), ["Home Fuel", "Alt 15", "Alt 25"])
+        XCTAssertEqual(legs[0].preview.map(\.name), ["Pilot Madison", "Alt 55", "Alt 100"])
+        XCTAssertEqual(legs[0].overflow.map(\.name), ["Home Fuel", "Alt 15", "Alt 25", "Quick Stop"])
         XCTAssertEqual(legs[1].preview.map(\.name), ["On Route Fuel", "Alt 120", "Alt 140"])
-        XCTAssertEqual(legs[1].overflow.map(\.name), ["Alt 100"])
+        XCTAssertEqual(legs[1].overflow.map(\.name), ["Alt 180"])
         XCTAssertEqual(legs[2].preview.map(\.name), ["Shell Knoxville", "Alt 200", "Alt 210"])
-        XCTAssertEqual(legs[2].overflow.map(\.name), ["Alt 180"])
+        XCTAssertEqual(legs[2].overflow.map(\.name), [])
         XCTAssertFalse(grouping.days.contains { $0.dayNumber == 3 })
     }
 
@@ -110,6 +110,43 @@ final class GasListGroupingTests: XCTestCase {
         XCTAssertEqual(legs[0].preview.first?.distance ?? -1, 1192 * mile, accuracy: 1)
         XCTAssertEqual(legs[1].preview.map(\.name), ["Later"])
         XCTAssertFalse(legs[1].title.contains("1192"))
+    }
+
+    /// A pump a few miles past an applied stop stays with that stop. It is
+    /// not an alternate of the next leg just because the gap ahead is empty.
+    /// The open tail after the last fill is left on that trailing leg.
+    func testAlternatesStayWithTheCloserAppliedStop() {
+        let grouping = GasListGrouping.make(
+            stations: [
+                station("Stop A", miles: 850, recommended: true),
+                station("Early", miles: 1000),
+                station("Stop B", miles: 1020, recommended: true),
+                station("Alt 1022", miles: 1022),
+                station("Alt 1029", miles: 1029),
+                station("Near C", miles: 1150),
+                station("Closer C", miles: 1170),
+                station("Stop C", miles: 1191, recommended: true),
+                station("Tail", miles: 1300),
+            ],
+            fillDistances: [850, 1020, 1191].map { $0 * mile },
+            daySpans: [span(1, from: 0, to: 1400)],
+            totalDistance: 1400 * mile,
+            usesMetric: false
+        )
+        let legs = grouping.days.flatMap(\.legs)
+        XCTAssertEqual(legs.map(\.title), [
+            "Leg 1 · ~850 mi",
+            "Leg 2 · ~1020 mi",
+            "Leg 3 · ~1191 mi",
+            "Leg 4 · ~1400 mi",
+        ])
+        XCTAssertEqual(legs[1].preview.map(\.name), ["Stop B", "Alt 1022", "Alt 1029"])
+        XCTAssertEqual(legs[1].overflow.map(\.name), ["Early"])
+        XCTAssertEqual(legs[2].preview.map(\.name), ["Stop C", "Near C", "Closer C"])
+        XCTAssertFalse(legs[2].preview.contains { $0.name == "Alt 1022" || $0.name == "Alt 1029" })
+        XCTAssertFalse(legs[2].overflow.contains { $0.name == "Alt 1022" || $0.name == "Alt 1029" })
+        XCTAssertEqual(legs[3].preview.map(\.name), ["Tail"])
+        XCTAssertTrue(legs[3].overflow.isEmpty)
     }
 
     func testAMileOnTheOvernightBelongsToTheDayThatStartsThere() {
