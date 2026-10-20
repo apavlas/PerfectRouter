@@ -505,13 +505,35 @@ struct RouteMapFrame: Equatable {
     func viewPoint(for coordinate: CLLocationCoordinate2D, mapSize: CGSize) -> CGPoint? {
         guard mapSize.width > 1, mapSize.height > 1, coordinate.isValidLocation else { return nil }
         guard latitudeDelta > 0, longitudeDelta > 0 else { return nil }
-        let rect = MKMapRectForCoordinateRegion(MKCoordinateRegion(center: center, span: span))
+        let rect = mapRect
         guard rect.size.width > 1, rect.size.height > 1 else { return nil }
         let projected = MKMapPoint(coordinate)
         let x = (projected.x - rect.origin.x) / rect.size.width * Double(mapSize.width)
         let y = (projected.y - rect.origin.y) / rect.size.height * Double(mapSize.height)
         guard x.isFinite, y.isFinite else { return nil }
         return CGPoint(x: x, y: y)
+    }
+
+    /// The region's bounding box in map points. Built from the corner
+    /// coordinates because there is no `MKMapRect` initializer that takes a
+    /// region.
+    private var mapRect: MKMapRect {
+        let north = centerLatitude + latitudeDelta / 2
+        let south = centerLatitude - latitudeDelta / 2
+        let west = centerLongitude - longitudeDelta / 2
+        let east = centerLongitude + longitudeDelta / 2
+        let northwest = MKMapPoint(CLLocationCoordinate2D(latitude: north, longitude: west))
+        let southeast = MKMapPoint(CLLocationCoordinate2D(latitude: south, longitude: east))
+        return MKMapRect(
+            origin: MKMapPoint(
+                x: min(northwest.x, southeast.x),
+                y: min(northwest.y, southeast.y)
+            ),
+            size: MKMapSize(
+                width: abs(southeast.x - northwest.x),
+                height: abs(southeast.y - northwest.y)
+            )
+        )
     }
 
     /// "lat,lon" with a fixed decimal point, so a UI test can read the
@@ -661,7 +683,7 @@ enum RouteMapFraming {
         fitted = clampToWorld(fitted)
         guard fitted.size.width > 1, fitted.size.height > 1 else { return nil }
 
-        let region = MKCoordinateRegionForMapRect(fitted)
+        let region = MKCoordinateRegion(fitted)
         guard region.center.isValidLocation else { return nil }
         guard region.span.latitudeDelta > 0, region.span.longitudeDelta > 0 else { return nil }
         guard region.span.latitudeDelta.isFinite, region.span.longitudeDelta.isFinite else { return nil }

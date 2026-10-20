@@ -1355,8 +1355,7 @@ private final class MapFitFrameProbe: UIView {
     /// and converting only as far as the window leaves the card at the wrong y.
     private func screenFrame(_ rect: CGRect, of view: UIView, window: UIWindow) -> CGRect {
         let inWindow = view.convert(rect, to: window)
-        guard let screen = window.screen else { return inWindow }
-        return window.convert(inWindow, to: screen.coordinateSpace)
+        return window.convert(inWindow, to: window.screen.coordinateSpace)
     }
 
     private func safeAreaEqual(_ lhs: UIEdgeInsets, _ rhs: UIEdgeInsets) -> Bool {
