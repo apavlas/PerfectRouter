@@ -490,13 +490,6 @@ struct ContentView: View {
                 .clipped()
         }
         .frame(maxWidth: .infinity)
-        .background {
-            MapFitFrameReporter { frame in
-                noteTopControlsFrame(frame)
-            }
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
-        }
     }
 
     /// Floats on the map, under the category chips, so a style switch is
@@ -555,11 +548,19 @@ struct ContentView: View {
                             )
                             .foregroundStyle(viewModel.selectedCategory == category ? .white : .primary)
                     }
+                    .accessibilityIdentifier(AccessibilityID.categoryChip(category.rawValue))
                 }
             }
             .padding(.horizontal)
         }
         .padding(.vertical, 8)
+        .background {
+            MapFitFrameReporter { frame in
+                noteTopControlsFrame(frame)
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
     }
 
     // MARK: - Bottom sheet
@@ -792,10 +793,13 @@ struct ContentView: View {
         for waypoint in viewModel.waypoints where waypoint.coordinate.isValidLocation {
             coordinates.append(waypoint.coordinate)
         }
+        // Glyph clearance is for the camera only. The published insets stay
+        // the measured chrome, which the fit test compares to the grabber.
+        let cameraInsets = MapFitInsets.cameraInsets(around: padding)
         guard let frame = RouteMapFraming.region(
             containing: coordinates,
             mapSize: measurement.mapSize,
-            insets: padding
+            insets: cameraInsets
         ), frame.center.isValidLocation else {
             fitAwaitingChrome = false
             didFitCurrentLegs = true
@@ -1146,12 +1150,22 @@ private final class MapFitFrameProbe: UIView {
     private func chromeFrame(clippedTo screen: CGRect) -> CGRect {
         guard let window else { return .zero }
         let own = screenFrame(bounds, of: self, window: window).intersection(screen)
-        if isChipBar(own, screen: screen) { return own }
+        let parentFrame: CGRect
         if let parent = superview {
-            let parentFrame = screenFrame(parent.bounds, of: parent, window: window).intersection(screen)
-            if isChipBar(parentFrame, screen: screen) { return parentFrame }
+            parentFrame = screenFrame(parent.bounds, of: parent, window: window).intersection(screen)
+        } else {
+            parentFrame = .zero
         }
-        if let row = topClusterFrame(clippedTo: screen) { return row }
+        let buttons = topClusterFrame(clippedTo: screen) ?? .zero
+        // A status-bar-sized probe is not the chip row. Prefer it only when
+        // it reaches the category buttons.
+        if isChipBar(own, screen: screen), own.maxY >= buttons.maxY - 2 { return own }
+        if isChipBar(parentFrame, screen: screen), parentFrame.maxY >= buttons.maxY - 2 {
+            return parentFrame
+        }
+        if buttons.height > 16 { return buttons }
+        if isChipBar(own, screen: screen) { return own }
+        if isChipBar(parentFrame, screen: screen) { return parentFrame }
         return .zero
     }
 
@@ -1163,60 +1177,48 @@ private final class MapFitFrameProbe: UIView {
             && frame.maxY < screen.height * 0.35
     }
 
-    /// Union of the category chips. Buttons and their scroll view sit in a
-    /// short row near the top; the sheet's navigation bar is lower.
+    /// Union of the category chips. A background probe on iPad can be the
+    /// whole map; the buttons themselves stay in a short row at the top.
+    /// List rows that repeat the names sit inside the sheet, below that row.
     private func topClusterFrame(clippedTo screen: CGRect) -> CGRect? {
-        guard window != nil else { return nil }
+        guard let window else { return nil }
         let names: Set<String> = ["Gas", "Food", "Coffee", "Scenic", "Sights"]
         var union = CGRect.null
         func consider(_ view: UIView) {
-            guard view !== self, let host = view.window else { return }
-            let frame = screenFrame(view.bounds, of: view, window: host).intersection(screen)
-            let inChipZone = frame.minY < screen.height * 0.22 && frame.maxY < 220
-            let row = frame.height >= 28 && frame.height <= 120
-                && frame.width >= screen.width * 0.45 && inChipZone
+            guard view !== self else { return }
             let label = view.accessibilityLabel ?? ""
-            let named = names.contains(label)
-            let button = frame.height >= 30 && frame.height <= 72
-                && frame.width >= 44 && frame.width <= 240
-                && inChipZone
-                && (named || view is UIControl)
-            guard row || button else { return }
+            let identifier = view.accessibilityIdentifier ?? ""
+            let named = names.contains(label) || identifier.hasPrefix("categoryChip")
+            guard named else { return }
+            let access = view.accessibilityFrame.intersection(screen)
+            let converted: CGRect
+            if let host = view.window {
+                converted = screenFrame(view.bounds, of: view, window: host).intersection(screen)
+            } else {
+                converted = .zero
+            }
+            let frame = access.width > 20 && access.height > 16 ? access : converted
+            guard frame.width > 20, frame.height > 16, frame.height < 80 else { return }
+            guard frame.minY < 140, frame.maxY < 180 else { return }
             union = union.isNull ? frame : union.union(frame)
         }
         func walk(_ view: UIView, depth: Int) {
-            guard depth < 16, !(view is MKMapView), !viewIsInSheet(view) else { return }
+            guard depth < 40, !(view is MKMapView) else { return }
+            if depth > 0, let host = view.window {
+                let frame = screenFrame(view.bounds, of: view, window: host)
+                // The planning card. Its rows reuse the chip names.
+                if frame.minY > screen.height * 0.18, frame.height > screen.height * 0.3 {
+                    return
+                }
+            }
             consider(view)
             for subview in view.subviews {
                 walk(subview, depth: depth + 1)
             }
         }
-        var ancestor: UIView? = superview
-        var hops = 0
-        while let view = ancestor, hops < 6 {
-            walk(view, depth: 0)
-            if !union.isNull { break }
-            if let host = view.window {
-                let frame = screenFrame(view.bounds, of: view, window: host).intersection(screen)
-                if frame.height > screen.height * 0.85, hops > 0 { break }
-            }
-            ancestor = view.superview
-            hops += 1
-        }
-        guard !union.isNull, union.height > 20, union.height <= 180 else { return nil }
+        walk(window, depth: 0)
+        guard !union.isNull, union.height > 16, union.height <= 140 else { return nil }
         return union.intersection(screen)
-    }
-
-    private func viewIsInSheet(_ view: UIView) -> Bool {
-        var responder: UIResponder? = view
-        while let current = responder {
-            if let controller = current as? UIViewController,
-               controller.sheetPresentationController != nil {
-                return true
-            }
-            responder = current.next
-        }
-        return false
     }
 
     private var isInsideSheet: Bool {

@@ -452,6 +452,57 @@ final class MapFitInsetsTests: XCTestCase {
         }
     }
 
+    /// iPad portrait: the card starts at y=270 and the marker hangs below
+    /// its coordinate. The camera shifts south of Georgia to put that glyph
+    /// in the band; the published label stays on the ride.
+    func testIPadPortraitPinsClearTheChipsAndTheCard() {
+        let map = CGSize(width: 834, height: 1210)
+        let cardTop: CGFloat = 270
+        let chips = CGRect(x: 0, y: 24, width: map.width, height: 64)
+        let chrome = MapFitInsets.padding(for: MapFitMeasurement(
+            mapSize: map,
+            safeTop: 24,
+            topControls: chips,
+            sheet: CGRect(x: 0, y: cardTop, width: map.width, height: map.height - cardTop)
+        ))
+        XCTAssertEqual(chrome.bottom, map.height - cardTop + MapFitInsets.margin, accuracy: 0.5)
+        XCTAssertGreaterThanOrEqual(chrome.top, chips.maxY + MapFitInsets.margin - 0.5)
+        let coordinates = stubLine()
+        guard let frame = RouteMapFraming.region(
+            containing: coordinates,
+            mapSize: map,
+            insets: MapFitInsets.cameraInsets(around: chrome)
+        ) else {
+            XCTFail("Expected a frame")
+            return
+        }
+        let bandBottom = map.height - chrome.bottom
+        for coordinate in coordinates {
+            guard let point = frame.viewPoint(for: coordinate, mapSize: map) else {
+                XCTFail("Expected a projection")
+                return
+            }
+            XCTAssertGreaterThanOrEqual(point.y, chrome.top)
+            XCTAssertLessThanOrEqual(
+                point.y + MapFitInsets.pinClearance,
+                bandBottom,
+                "The pin glyph at \(point.y) crosses the band that ends at \(bandBottom)"
+            )
+            XCTAssertLessThan(point.y + MapFitInsets.pinClearance, cardTop)
+        }
+        let parts = frame.accessibilityLabel.split(separator: ",").compactMap { Double(String($0)) }
+        XCTAssertEqual(parts.count, 2, frame.accessibilityLabel)
+        XCTAssertGreaterThan(parts[0], 30, frame.accessibilityLabel)
+        XCTAssertLessThan(parts[0], 42, frame.accessibilityLabel)
+        XCTAssertGreaterThan(parts[1], -84, frame.accessibilityLabel)
+        XCTAssertLessThan(parts[1], -80, frame.accessibilityLabel)
+        XCTAssertLessThan(
+            frame.centerLatitude,
+            30,
+            "Camera latitude \(frame.centerLatitude) is still over the stub. The card leaves the open band at the top of the screen, so the camera has to sit south of the ride."
+        )
+    }
+
     private func stubLine() -> [CLLocationCoordinate2D] {
         [
             UITestFixture.origin,

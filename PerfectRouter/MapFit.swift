@@ -49,6 +49,21 @@ enum MapFitInsets {
     /// Gap between the fitted route and the chip bar, sheet, or screen edge.
     static let margin: CGFloat = 16
 
+    /// Extra padding around the coordinates so a marker glyph stays inside
+    /// the band. The anchor is the coordinate; the pin hangs below it.
+    static let pinClearance: CGFloat = 36
+
+    /// Insets passed to the camera. The published chrome insets stay as
+    /// measured; this only keeps the glyph off the chips and the sheet.
+    static func cameraInsets(around chrome: MapFitPadding) -> MapFitPadding {
+        MapFitPadding(
+            top: chrome.top + pinClearance,
+            left: chrome.left,
+            bottom: chrome.bottom + pinClearance,
+            right: chrome.right
+        )
+    }
+
     /// `frame` expressed in the map view's coordinates. Zero when either
     /// rect has not been laid out.
     static func mapLocalFrame(_ frame: CGRect, mapFrame: CGRect) -> CGRect {

@@ -214,7 +214,8 @@ final class CoreJourneyUITests: XCTestCase {
     }
 
     /// The camera leaves the device location and fits the stub ride. The
-    /// label is the framed center ("lat,lon"). Ontario is north of 42°.
+    /// label is that ride's center ("lat,lon"), which stays over the stub
+    /// when the sheet shifts the camera south of it. Ontario is north of 42°.
     func testRouteMapFramesTheStubRide() {
         let app = launch()
         planFixedRoute(in: app)

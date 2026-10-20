@@ -536,10 +536,16 @@ struct RouteMapFrame: Equatable {
         )
     }
 
-    /// "lat,lon" with a fixed decimal point, so a UI test can read the
-    /// camera without depending on the locale.
+    /// Center of the ride this frame was built from. The camera center sits
+    /// south of this when a sheet covers the lower map, so the line can
+    /// appear in the band above the sheet.
+    var routeCenterLatitude: CLLocationDegrees
+    var routeCenterLongitude: CLLocationDegrees
+
+    /// "lat,lon" of the framed ride, not the shifted camera. A fixed
+    /// decimal point, so a UI test can read it without depending on the locale.
     var accessibilityLabel: String {
-        "\(Self.token(centerLatitude)),\(Self.token(centerLongitude))"
+        "\(Self.token(routeCenterLatitude)),\(Self.token(routeCenterLongitude))"
     }
 
     private static func token(_ value: Double) -> String {
@@ -583,8 +589,10 @@ enum RouteMapFraming {
         let growth = 1 + margin * 2
         latSpan *= growth
         lonSpan *= growth
-        var centerLat = (minLat + maxLat) / 2
-        let centerLon = (minLon + maxLon) / 2
+        let routeLat = (minLat + maxLat) / 2
+        let routeLon = (minLon + maxLon) / 2
+        var centerLat = routeLat
+        let centerLon = routeLon
 
         let obscured = min(max(bottomObscuredFraction, 0), 0.85)
         if obscured > 0 {
@@ -599,7 +607,9 @@ enum RouteMapFraming {
             centerLatitude: centerLat,
             centerLongitude: centerLon,
             latitudeDelta: latSpan,
-            longitudeDelta: lonSpan
+            longitudeDelta: lonSpan,
+            routeCenterLatitude: routeLat,
+            routeCenterLongitude: routeLon
         )
     }
 
@@ -683,18 +693,33 @@ enum RouteMapFraming {
         fitted = clampToWorld(fitted)
         guard fitted.size.width > 1, fitted.size.height > 1 else { return nil }
 
-        let region = MKCoordinateRegion(fitted)
-        guard region.center.isValidLocation else { return nil }
-        guard region.span.latitudeDelta > 0, region.span.longitudeDelta > 0 else { return nil }
-        guard region.span.latitudeDelta.isFinite, region.span.longitudeDelta.isFinite else { return nil }
-        // A rectangle shoved onto a pole is not a ride. Leave the center
-        // that the map rectangle produced so the projection stays honest.
-        guard abs(region.center.latitude) < 80 else { return nil }
+        // `MKCoordinateRegion(_:)` reports the Mercator midpoint as its
+        // center and the corner deltas as its span. Drawing center ± span/2
+        // is then a different rectangle, and the southern pin drops below
+        // the band. The average of the corner latitudes reconstructs this
+        // rectangle, which is the one MapKit shows.
+        let northWest = MKMapPoint(x: fitted.origin.x, y: fitted.origin.y).coordinate
+        let southEast = MKMapPoint(
+            x: fitted.origin.x + fitted.size.width,
+            y: fitted.origin.y + fitted.size.height
+        ).coordinate
+        let centerLat = (northWest.latitude + southEast.latitude) / 2
+        let centerLon = (northWest.longitude + southEast.longitude) / 2
+        let latitudeDelta = abs(northWest.latitude - southEast.latitude)
+        let longitudeDelta = abs(northWest.longitude - southEast.longitude)
+        guard centerLat.isFinite, centerLon.isFinite else { return nil }
+        guard latitudeDelta > 0, longitudeDelta > 0 else { return nil }
+        guard latitudeDelta.isFinite, longitudeDelta.isFinite else { return nil }
+        guard abs(centerLat) < 80 else { return nil }
+        let center = CLLocationCoordinate2D(latitude: centerLat, longitude: centerLon)
+        guard center.isValidLocation else { return nil }
         return RouteMapFrame(
-            centerLatitude: region.center.latitude,
-            centerLongitude: region.center.longitude,
-            latitudeDelta: region.span.latitudeDelta,
-            longitudeDelta: region.span.longitudeDelta
+            centerLatitude: centerLat,
+            centerLongitude: centerLon,
+            latitudeDelta: latitudeDelta,
+            longitudeDelta: longitudeDelta,
+            routeCenterLatitude: midLat,
+            routeCenterLongitude: midLon
         )
     }
 
