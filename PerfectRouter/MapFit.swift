@@ -96,12 +96,65 @@ enum MapFitInsets {
             }
         }
 
-        return MapFitPadding(
-            top: min(max(0, top), map.height),
-            left: min(max(0, left + margin), map.width),
-            bottom: min(max(0, bottom), map.height),
-            right: min(max(0, right + margin), map.width)
+        return fitting(
+            MapFitPadding(
+                top: min(max(0, top), map.height),
+                left: min(max(0, left + margin), map.width),
+                bottom: min(max(0, bottom), map.height),
+                right: min(max(0, right + margin), map.width)
+            ),
+            in: map
         )
+    }
+
+    /// Shrinks the larger edge until the padding fits inside the map and
+    /// leaves at least `minimumBand` points open. A measured sheet that
+    /// still covers the whole screen must not publish a top and bottom
+    /// that add up to more than the map.
+    static func fitting(
+        _ padding: MapFitPadding,
+        in map: CGSize,
+        minimumBand: CGFloat = 1
+    ) -> MapFitPadding {
+        guard map.width > 1, map.height > 1 else { return padding }
+        var top = max(0, padding.top)
+        var left = max(0, padding.left)
+        var bottom = max(0, padding.bottom)
+        var right = max(0, padding.right)
+        let band = min(max(minimumBand, 1), min(map.height, map.width) - 1)
+        shrink(first: &top, second: &bottom, limit: map.height - band)
+        shrink(first: &left, second: &right, limit: map.width - band)
+        return MapFitPadding(top: top, left: left, bottom: bottom, right: right)
+    }
+
+    /// The resting card leaves a band between the chip bar and its top.
+    /// The large hosting view starts under the status bar, overlaps the
+    /// chips, and does not.
+    static func leavesABand(_ measurement: MapFitMeasurement, minimum: CGFloat = 72) -> Bool {
+        let map = measurement.mapSize
+        guard map.width > 1, map.height > 1 else { return false }
+        guard measurement.topControls.width > 1, measurement.topControls.height > 1 else { return false }
+        let sheet = measurement.sheet
+        let mapRect = CGRect(origin: .zero, size: map)
+        guard sheet.width > 1, sheet.height > 1, sheet.intersects(mapRect) else { return false }
+        let padding = padding(for: measurement)
+        let band = map.height - padding.top - padding.bottom
+        guard band >= minimum else { return false }
+        return sheet.minY >= measurement.topControls.maxY - 4
+    }
+
+    private static func shrink(first: inout CGFloat, second: inout CGFloat, limit: CGFloat) {
+        let overflow = first + second - limit
+        guard overflow > 0 else { return }
+        if second >= first {
+            let taken = min(second, overflow)
+            second -= taken
+            first = max(0, first - (overflow - taken))
+        } else {
+            let taken = min(first, overflow)
+            first -= taken
+            second = max(0, second - (overflow - taken))
+        }
     }
 
     /// Pads from the sheet's visible top, never from the view's raw height.

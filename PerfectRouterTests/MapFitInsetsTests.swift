@@ -243,17 +243,169 @@ final class MapFitInsetsTests: XCTestCase {
 
     func testSheetThatCoversAlmostTheWholeMapDoesNotPanToTheArctic() {
         let coordinates = stubLine()
-        let mid = (coordinates[0].latitude + coordinates[1].latitude) / 2
-        let frame = RouteMapFraming.region(
+        let map = CGSize(width: 834, height: 1194)
+        let padding = MapFitPadding(top: 40, left: 16, bottom: 1100, right: 16)
+        guard let frame = RouteMapFraming.region(
             containing: coordinates,
-            mapSize: CGSize(width: 834, height: 1194),
-            insets: MapFitPadding(top: 40, left: 16, bottom: 1100, right: 16)
+            mapSize: map,
+            insets: padding
+        ) else {
+            XCTFail("Expected a frame")
+            return
+        }
+        XCTAssertLessThan(abs(frame.centerLatitude), 75)
+        XCTAssertGreaterThan(frame.centerLatitude, -70)
+        for coordinate in coordinates {
+            XCTAssertTrue(
+                frame.contains(coordinate, mapSize: map, insets: padding),
+                "\(coordinate.latitude) left the sliver above the sheet"
+            )
+        }
+    }
+
+    /// A sheet that stays at the large detent never leaves a band. The
+    /// fallback still frames the ride over its own coordinates.
+    func testLargeDetentFallbackKeepsTheStubRideOnTheMap() {
+        let map = CGSize(width: 402, height: 874)
+        let raw = MapFitInsets.padding(for: MapFitMeasurement(
+            mapSize: map,
+            topControls: CGRect(x: 0, y: 59, width: map.width, height: 56),
+            sheet: CGRect(x: 0, y: 62, width: map.width, height: 812)
+        ))
+        let padding = MapFitInsets.fitting(raw, in: map, minimumBand: map.height * 0.35)
+        XCTAssertLessThan(padding.top + padding.bottom, map.height)
+        guard let frame = RouteMapFraming.region(
+            containing: stubLine(),
+            mapSize: map,
+            insets: padding
+        ) else {
+            XCTFail("Expected a frame")
+            return
+        }
+        XCTAssertGreaterThan(frame.centerLatitude, 30)
+        XCTAssertLessThan(frame.centerLatitude, 42)
+        XCTAssertGreaterThan(frame.centerLongitude, -84)
+        XCTAssertLessThan(frame.centerLongitude, -80)
+    }
+
+    func testPaddingFitsInsideTheScreen() {
+        let map = CGSize(width: 402, height: 874)
+        let padding = MapFitInsets.padding(for: MapFitMeasurement(
+            mapSize: map,
+            topControls: CGRect(x: 0, y: 59, width: map.width, height: 56),
+            sheet: CGRect(x: 0, y: 62, width: map.width, height: 812)
+        ))
+        XCTAssertLessThan(padding.top + padding.bottom, map.height)
+        XCTAssertLessThan(padding.left + padding.right, map.width)
+    }
+
+    func testLargeHostDoesNotLeaveABandAndTheMediumCardDoes() {
+        let map = CGSize(width: 402, height: 874)
+        let chips = CGRect(x: 0, y: 59, width: map.width, height: 56)
+        let large = MapFitMeasurement(
+            mapSize: map,
+            topControls: chips,
+            sheet: CGRect(x: 0, y: 62, width: map.width, height: 812)
         )
-        XCTAssertNotNil(frame)
-        XCTAssertEqual(frame?.centerLatitude ?? 0, mid, accuracy: 5)
-        XCTAssertLessThan(abs(frame?.centerLatitude ?? 90), 70)
-        XCTAssertGreaterThan(frame?.centerLatitude ?? 0, 25)
-        XCTAssertLessThan(frame?.centerLatitude ?? 0, 45)
+        XCTAssertFalse(MapFitInsets.leavesABand(large))
+
+        let medium = MapFitMeasurement(
+            mapSize: map,
+            topControls: chips,
+            sheet: CGRect(x: 0, y: 410, width: map.width, height: 464)
+        )
+        XCTAssertTrue(MapFitInsets.leavesABand(medium))
+        let padding = MapFitInsets.padding(for: medium)
+        XCTAssertLessThan(padding.top + padding.bottom, map.height)
+        XCTAssertEqual(padding.bottom, map.height - 410 + MapFitInsets.margin, accuracy: 0.5)
+    }
+
+    func testIPadHostFrameDoesNotLeaveABandAndTheFloatingCardDoes() {
+        let map = CGSize(width: 834, height: 1210)
+        let chips = CGRect(x: 0, y: 28, width: map.width, height: 58)
+        let host = MapFitMeasurement(
+            mapSize: map,
+            topControls: chips,
+            sheet: CGRect(x: 0, y: 105, width: map.width, height: 1105)
+        )
+        XCTAssertFalse(MapFitInsets.leavesABand(host))
+
+        let cardTop: CGFloat = 270
+        let card = MapFitMeasurement(
+            mapSize: map,
+            topControls: chips,
+            sheet: CGRect(x: 0, y: cardTop, width: map.width, height: map.height - cardTop)
+        )
+        XCTAssertTrue(MapFitInsets.leavesABand(card))
+        let padding = MapFitInsets.padding(for: card)
+        XCTAssertLessThan(padding.top + padding.bottom, map.height)
+        XCTAssertEqual(padding.bottom, map.height - cardTop + MapFitInsets.margin, accuracy: 0.5)
+    }
+
+    /// Augusta to Amarillo is a few degrees tall and about twenty wide.
+    /// On a portrait phone MapKit used to widen the latitude until the ride
+    /// sat on the sheet. The whole box has to land in the inset band.
+    func testEastWestRideProjectsIntoThePhoneBand() {
+        let map = CGSize(width: 402, height: 874)
+        let augusta = CLLocationCoordinate2D(latitude: 33.4735, longitude: -81.9748)
+        let amarillo = CLLocationCoordinate2D(latitude: 35.2220, longitude: -101.8313)
+        let padding = MapFitPadding(top: 180, left: 16, bottom: 486, right: 16)
+        XCTAssertLessThan(padding.top + padding.bottom, map.height)
+        guard let frame = RouteMapFraming.region(
+            containing: [augusta, amarillo],
+            mapSize: map,
+            insets: padding
+        ) else {
+            XCTFail("Expected a frame")
+            return
+        }
+        let bandTop = padding.top
+        let bandBottom = map.height - padding.bottom
+        for coordinate in [augusta, amarillo] {
+            XCTAssertTrue(frame.contains(coordinate, mapSize: map, insets: padding))
+            guard let point = frame.viewPoint(for: coordinate, mapSize: map) else {
+                XCTFail("Expected a projection")
+                return
+            }
+            XCTAssertGreaterThanOrEqual(point.y, bandTop - 8)
+            XCTAssertLessThanOrEqual(point.y, bandBottom + 8, "Pin at \(point.y) is on the sheet, band ends at \(bandBottom)")
+        }
+        XCTAssertLessThan(frame.centerLatitude, 33, "The camera stayed on the route instead of shifting into the band")
+        XCTAssertGreaterThan(frame.centerLatitude, 10)
+    }
+
+    func testEastWestRideProjectsAboveACenteredIPadCard() {
+        let map = CGSize(width: 834, height: 1210)
+        let cardTop: CGFloat = 270
+        let padding = MapFitInsets.padding(for: MapFitMeasurement(
+            mapSize: map,
+            safeTop: 24,
+            topControls: CGRect(x: 0, y: 28, width: map.width, height: 58),
+            sheet: CGRect(x: 80, y: cardTop, width: map.width - 160, height: 655)
+        ))
+        XCTAssertLessThan(padding.top + padding.bottom, map.height)
+        XCTAssertEqual(padding.bottom, map.height - cardTop + MapFitInsets.margin, accuracy: 0.5)
+        let augusta = CLLocationCoordinate2D(latitude: 33.4735, longitude: -81.9748)
+        let amarillo = CLLocationCoordinate2D(latitude: 35.2220, longitude: -101.8313)
+        guard let frame = RouteMapFraming.region(
+            containing: [augusta, amarillo],
+            mapSize: map,
+            insets: padding
+        ) else {
+            XCTFail("Expected a frame")
+            return
+        }
+        let bandBottom = map.height - padding.bottom
+        for coordinate in [augusta, amarillo] {
+            XCTAssertTrue(frame.contains(coordinate, mapSize: map, insets: padding))
+            guard let point = frame.viewPoint(for: coordinate, mapSize: map) else {
+                XCTFail("Expected a projection")
+                return
+            }
+            XCTAssertGreaterThanOrEqual(point.y, padding.top - 8)
+            XCTAssertLessThan(point.y, cardTop, "Pin at \(point.y) is behind the card that starts at \(cardTop)")
+            XCTAssertLessThanOrEqual(point.y, bandBottom + 8)
+        }
     }
 
     private func stubLine() -> [CLLocationCoordinate2D] {

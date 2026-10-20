@@ -1564,6 +1564,20 @@ final class CoreJourneyUITests: XCTestCase {
             16,
             "mapFitInsets \(insets.label) did not pad the top of the map"
         )
+        XCTAssertLessThan(
+            insets.top + insets.bottom,
+            app.frame.height,
+            "mapFitInsets \(insets.label) are taller than the \(app.frame.height)pt screen\n\(diagnosticTree(app))"
+        )
+        XCTAssertLessThan(
+            insets.left + insets.right,
+            app.frame.width,
+            "mapFitInsets \(insets.label) are wider than the \(app.frame.width)pt screen\n\(diagnosticTree(app))"
+        )
+        let bandTop = insets.top
+        let bandBottom = app.frame.height - insets.bottom
+        assertInBand(origin, name: "Test Origin", from: bandTop, to: bandBottom, in: app)
+        assertInBand(destination, name: "Test Destination", from: bandTop, to: bandBottom, in: app)
         let settled = mapFitGeneration(in: app)
         dragPlanningSheetDown(app)
         RunLoop.current.run(until: Date().addingTimeInterval(0.8))
@@ -1578,6 +1592,27 @@ final class CoreJourneyUITests: XCTestCase {
         XCTAssertEqual(originAfter.midY, origin.midY, accuracy: 24, "The drag moved Test Origin\n\(diagnosticTree(app))")
         XCTAssertEqual(destinationAfter.midX, destination.midX, accuracy: 24, "The drag moved Test Destination\n\(diagnosticTree(app))")
         XCTAssertEqual(destinationAfter.midY, destination.midY, accuracy: 24, "The drag moved Test Destination\n\(diagnosticTree(app))")
+    }
+
+    /// The pin is the route endpoint. Its frame has to sit in the band the
+    /// published insets describe, not only somewhere above the grabber.
+    private func assertInBand(
+        _ frame: CGRect,
+        name: String,
+        from bandTop: CGFloat,
+        to bandBottom: CGFloat,
+        in app: XCUIApplication
+    ) {
+        XCTAssertGreaterThanOrEqual(
+            frame.minY,
+            bandTop - 28,
+            "\(name) is above the fitted band. pin \(frame) band \(bandTop)...\(bandBottom)\n\(diagnosticTree(app))"
+        )
+        XCTAssertLessThanOrEqual(
+            frame.maxY,
+            bandBottom + 12,
+            "\(name) is below the fitted band. pin \(frame) band \(bandTop)...\(bandBottom)\n\(diagnosticTree(app))"
+        )
     }
 
     private func assertPin(
@@ -1652,8 +1687,10 @@ final class CoreJourneyUITests: XCTestCase {
     ///
     /// A fast drag toward mid-screen keeps its velocity. On iPad portrait that
     /// skips medium and snaps to the smallest card (grabber near 0.68 of a
-    /// 1210pt screen), which unloads `placeSearch`. A slow release next to
-    /// medium settles there, and a compact landing is dragged back up.
+    /// 1210pt screen), which unloads `placeSearch`. The same overshoot happens
+    /// on iPhone, where the grabber starts at the large detent. A slow release
+    /// at 0.46 of the height settles on medium (between 0.22 and 0.64). A
+    /// compact landing, grabber below 0.60, is dragged back up to 0.42.
     private func collapsePlanningSheet(_ app: XCUIApplication) {
         let grabber = app.buttons["Sheet Grabber"]
         XCTAssertTrue(

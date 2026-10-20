@@ -481,34 +481,37 @@ struct RouteMapFrame: Equatable {
         return (southEdge + fraction * latitudeDelta, northEdge)
     }
 
-    /// Whether `coordinate` lands in the band this frame leaves visible
-    /// once `insets` cover the chip bar and the sheet. The frame's span is
-    /// mapped linearly onto `mapSize`, which is how the fit builds it.
+    /// Whether `coordinate` lands in the band `insets` leave visible.
+    /// MapKit draws the region as a Mercator rectangle fitted to `mapSize`,
+    /// so a wide route on a tall phone is not a linear latitude scale.
     func contains(
         _ coordinate: CLLocationCoordinate2D,
         mapSize: CGSize,
         insets: MapFitPadding
     ) -> Bool {
-        guard mapSize.width > 1, mapSize.height > 1, coordinate.isValidLocation else { return false }
-        let north = latitude(atViewY: insets.top, mapHeight: mapSize.height)
-        let south = latitude(atViewY: mapSize.height - insets.bottom, mapHeight: mapSize.height)
-        let west = longitude(atViewX: insets.left, mapWidth: mapSize.width)
-        let east = longitude(atViewX: mapSize.width - insets.right, mapWidth: mapSize.width)
-        let slop = 0.02
-        return coordinate.latitude <= max(north, south) + slop
-            && coordinate.latitude >= min(north, south) - slop
-            && coordinate.longitude <= max(east, west) + slop
-            && coordinate.longitude >= min(east, west) - slop
+        guard let point = viewPoint(for: coordinate, mapSize: mapSize) else { return false }
+        let fitted = MapFitInsets.fitting(insets, in: mapSize)
+        let slop: CGFloat = 8
+        let visible = CGRect(
+            x: fitted.left - slop,
+            y: fitted.top - slop,
+            width: mapSize.width - fitted.left - fitted.right + slop * 2,
+            height: mapSize.height - fitted.top - fitted.bottom + slop * 2
+        )
+        return visible.width > 1 && visible.height > 1 && visible.contains(point)
     }
 
-    private func latitude(atViewY y: CGFloat, mapHeight: CGFloat) -> Double {
-        let t = Double(y / mapHeight)
-        return centerLatitude + latitudeDelta / 2 - t * latitudeDelta
-    }
-
-    private func longitude(atViewX x: CGFloat, mapWidth: CGFloat) -> Double {
-        let t = Double(x / mapWidth)
-        return centerLongitude - longitudeDelta / 2 + t * longitudeDelta
+    /// Where MapKit puts `coordinate` when this region fills `mapSize`.
+    func viewPoint(for coordinate: CLLocationCoordinate2D, mapSize: CGSize) -> CGPoint? {
+        guard mapSize.width > 1, mapSize.height > 1, coordinate.isValidLocation else { return nil }
+        guard latitudeDelta > 0, longitudeDelta > 0 else { return nil }
+        let rect = MKMapRectForCoordinateRegion(MKCoordinateRegion(center: center, span: span))
+        guard rect.size.width > 1, rect.size.height > 1 else { return nil }
+        let projected = MKMapPoint(coordinate)
+        let x = (projected.x - rect.origin.x) / rect.size.width * Double(mapSize.width)
+        let y = (projected.y - rect.origin.y) / rect.size.height * Double(mapSize.height)
+        guard x.isFinite, y.isFinite else { return nil }
+        return CGPoint(x: x, y: y)
     }
 
     /// "lat,lon" with a fixed decimal point, so a UI test can read the
@@ -580,11 +583,13 @@ enum RouteMapFraming {
 
     /// Fits `coordinates` in the map region that remains after `insets`.
     ///
-    /// The span grows so the padded route occupies the unobscured viewport,
-    /// then the center shifts toward the open side. A sheet that covers
-    /// almost the whole map cannot divide by a sliver: the viewport stays
-    /// at least a quarter of the map, and the center stays near the route
-    /// so MapKit never clamps the region onto a pole.
+    /// MapKit shows an `MKCoordinateRegion` as one Mercator rectangle fitted
+    /// to the whole map view. Scaling latitude and longitude separately, then
+    /// shifting the center in degrees, leaves an east-west ride at the screen
+    /// center: the portrait view has to widen the latitude span to keep the
+    /// longitude on screen, and that extra span swallows the shift. This fit
+    /// builds the map rectangle MapKit will actually draw, with the route in
+    /// the unobscured band and the rectangle's aspect matching the view.
     static func region(
         containing coordinates: [CLLocationCoordinate2D],
         mapSize: CGSize,
@@ -609,82 +614,79 @@ enum RouteMapFraming {
         }
 
         let margin = min(max(marginFraction, 0), 0.4)
-        var latSpan = max(maxLat - minLat, minimumSpan)
-        var lonSpan = max(maxLon - minLon, minimumSpan)
         let growth = 1 + margin * 2
-        latSpan *= growth
-        lonSpan *= growth
-        let routeMidLat = (minLat + maxLat) / 2
-        let routeMidLon = (minLon + maxLon) / 2
+        let midLat = (minLat + maxLat) / 2
+        let midLon = (minLon + maxLon) / 2
+        let latExtent = max(maxLat - minLat, minimumSpan) * growth
+        let lonExtent = max(maxLon - minLon, minimumSpan) * growth
+        let north = midLat + latExtent / 2
+        let south = midLat - latExtent / 2
+        let west = midLon - lonExtent / 2
+        let east = midLon + lonExtent / 2
+        let northwest = MKMapPoint(CLLocationCoordinate2D(latitude: north, longitude: west))
+        let southeast = MKMapPoint(CLLocationCoordinate2D(latitude: south, longitude: east))
+        let routeRect = MKMapRect(
+            origin: MKMapPoint(
+                x: min(northwest.x, southeast.x),
+                y: min(northwest.y, southeast.y)
+            ),
+            size: MKMapSize(
+                width: abs(southeast.x - northwest.x),
+                height: abs(southeast.y - northwest.y)
+            )
+        )
+        guard routeRect.size.width > 1, routeRect.size.height > 1 else { return nil }
 
-        let viewport = visibleViewport(mapSize: mapSize, insets: insets)
-        latSpan *= Double(mapSize.height / viewport.visible.height)
-        lonSpan *= Double(mapSize.width / viewport.visible.width)
-        // A span that crosses a pole makes MapKit clamp the camera onto
-        // the Arctic. Cap it before the center shift uses it.
-        latSpan = min(latSpan, 50)
-        lonSpan = min(lonSpan, 80)
+        let fittedInsets = MapFitInsets.fitting(insets, in: mapSize)
+        let visibleWidth = max(mapSize.width - fittedInsets.left - fittedInsets.right, 1)
+        let visibleHeight = max(mapSize.height - fittedInsets.top - fittedInsets.bottom, 1)
+        let scale = max(
+            routeRect.size.width / Double(visibleWidth),
+            routeRect.size.height / Double(visibleHeight)
+        )
+        guard scale.isFinite, scale > 0 else { return nil }
 
-        let dy = (viewport.top - viewport.bottom) / 2
-        let dx = (viewport.left - viewport.right) / 2
-        var centerLat = routeMidLat + Double(dy / mapSize.height) * latSpan
-        var centerLon = routeMidLon - Double(dx / mapSize.width) * lonSpan
+        let fittedWidth = Double(mapSize.width) * scale
+        let fittedHeight = Double(mapSize.height) * scale
+        let visibleCenterX = Double(fittedInsets.left) + Double(visibleWidth) / 2
+        let visibleCenterY = Double(fittedInsets.top) + Double(visibleHeight) / 2
+        let dx = visibleCenterX - Double(mapSize.width) / 2
+        let dy = visibleCenterY - Double(mapSize.height) / 2
+        let cameraX = routeRect.midX - dx * scale
+        let cameraY = routeRect.midY - dy * scale
+        var fitted = MKMapRect(
+            origin: MKMapPoint(x: cameraX - fittedWidth / 2, y: cameraY - fittedHeight / 2),
+            size: MKMapSize(width: fittedWidth, height: fittedHeight)
+        )
+        fitted = clampToWorld(fitted)
+        guard fitted.size.width > 1, fitted.size.height > 1 else { return nil }
 
-        let latReach = max(maxLat - minLat, minimumSpan) * 0.85 + minimumSpan
-        centerLat = min(max(centerLat, routeMidLat - latReach), routeMidLat + latReach)
-        centerLat = min(max(centerLat, -75.0), 75.0)
-        centerLon = min(max(centerLon, -179.0), 179.0)
-
-        guard centerLat.isFinite, centerLon.isFinite, latSpan.isFinite, lonSpan.isFinite else { return nil }
-        guard latSpan > 0, lonSpan > 0 else { return nil }
+        let region = MKCoordinateRegionForMapRect(fitted)
+        guard region.center.isValidLocation else { return nil }
+        guard region.span.latitudeDelta > 0, region.span.longitudeDelta > 0 else { return nil }
+        guard region.span.latitudeDelta.isFinite, region.span.longitudeDelta.isFinite else { return nil }
+        // A rectangle shoved onto a pole is not a ride. Leave the center
+        // that the map rectangle produced so the projection stays honest.
+        guard abs(region.center.latitude) < 80 else { return nil }
         return RouteMapFrame(
-            centerLatitude: centerLat,
-            centerLongitude: centerLon,
-            latitudeDelta: latSpan,
-            longitudeDelta: lonSpan
+            centerLatitude: region.center.latitude,
+            centerLongitude: region.center.longitude,
+            latitudeDelta: region.span.latitudeDelta,
+            longitudeDelta: region.span.longitudeDelta
         )
     }
 
-    /// The viewport the camera actually uses. Reported insets can describe a
-    /// sheet that leaves only a sliver; the fit refuses to divide by that.
-    private static func visibleViewport(
-        mapSize: CGSize,
-        insets: MapFitPadding
-    ) -> (visible: CGSize, top: CGFloat, left: CGFloat, bottom: CGFloat, right: CGFloat) {
-        let minFraction: CGFloat = 0.25
-        var top = max(0, insets.top)
-        var left = max(0, insets.left)
-        var bottom = max(0, insets.bottom)
-        var right = max(0, insets.right)
-
-        func open(_ length: CGFloat, insetA: CGFloat, insetB: CGFloat, minimum: CGFloat) -> (CGFloat, CGFloat, CGFloat) {
-            var a = insetA
-            var b = insetB
-            var visible = length - a - b
-            if visible < minimum {
-                let overflow = minimum - max(visible, 0)
-                if b >= a {
-                    b = max(0, b - overflow)
-                } else {
-                    a = max(0, a - overflow)
-                }
-                visible = length - a - b
-                if visible < minimum {
-                    let extra = minimum - visible
-                    a = max(0, a - extra / 2)
-                    b = max(0, b - extra / 2)
-                    visible = length - a - b
-                }
-            }
-            return (max(visible, 1), a, b)
-        }
-
-        let height = open(mapSize.height, insetA: top, insetB: bottom, minimum: mapSize.height * minFraction)
-        let width = open(mapSize.width, insetA: left, insetB: right, minimum: mapSize.width * minFraction)
-        top = height.1
-        bottom = height.2
-        left = width.1
-        right = width.2
-        return (CGSize(width: width.0, height: height.0), top, left, bottom, right)
+    /// Keeps the camera's map rectangle on the world map. Shifting it is
+    /// enough for a ride; a rectangle bigger than the world is shrunk.
+    private static func clampToWorld(_ rect: MKMapRect) -> MKMapRect {
+        let world = MKMapRect.world
+        var rect = rect
+        if rect.size.width > world.size.width { rect.size.width = world.size.width }
+        if rect.size.height > world.size.height { rect.size.height = world.size.height }
+        if rect.origin.x < world.origin.x { rect.origin.x = world.origin.x }
+        if rect.maxX > world.maxX { rect.origin.x = world.maxX - rect.size.width }
+        if rect.origin.y < world.origin.y { rect.origin.y = world.origin.y }
+        if rect.maxY > world.maxY { rect.origin.y = world.maxY - rect.size.height }
+        return rect
     }
 }
