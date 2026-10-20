@@ -532,7 +532,7 @@ final class GasListGroupingTests: XCTestCase {
     /// After Apply, a refreshed search pin for the same pump is not a second
     /// candidate. The applied stop is the recommended row, its id survives
     /// the next read, and the header count does not grow by the fill count.
-    func testAppliedFillShowsOnceAndTheRowResolves() {
+    func testAppliedFillShowsOnceAndTheRowResolves() throws {
         let viewModel = RoutePlannerViewModel()
         let line = stride(from: 0.0, through: 280, by: 40).map {
             UITestFixture.coordinate(milesNorth: $0, eastMeters: 0)
