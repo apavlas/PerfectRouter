@@ -209,7 +209,9 @@ enum MapFitInsets {
 
     /// How far the chip bar covers the map from the top. A bar that sits
     /// entirely above the map (the list column already gave the map that
-    /// space) contributes only the safe area.
+    /// space) contributes only the safe area. A background laid out at the
+    /// map's height is not the chip row either: counting it makes the top
+    /// inset swallow the band above a floating card.
     private static func topObstruction(
         _ controls: CGRect,
         safeTop: CGFloat,
@@ -218,6 +220,22 @@ enum MapFitInsets {
         let safe = max(0, safeTop)
         guard controls.width > 1, controls.height > 1 else { return safe }
         guard controls.maxY > 1, controls.minY < mapHeight else { return safe }
+        if controls.height > 180 { return safe }
         return max(safe, controls.maxY)
+    }
+
+    /// Minimum open band when the sheet is still the large detent and the
+    /// real gap above it is a sliver. A medium sheet or a floating card
+    /// returns nil: those keep the route above the grabber, and shrinking
+    /// the bottom inset would slide the ride down behind the card.
+    static func largeDetentFallbackBand(for measurement: MapFitMeasurement) -> CGFloat? {
+        let map = measurement.mapSize
+        guard map.height > 1, map.width > 1 else { return nil }
+        guard !leavesABand(measurement) else { return nil }
+        let sheet = measurement.sheet
+        if sheet.height > 1, sheet.minY > map.height * 0.15 {
+            return nil
+        }
+        return map.height * 0.35
     }
 }

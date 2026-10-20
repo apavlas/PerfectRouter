@@ -374,6 +374,50 @@ final class MapFitInsetsTests: XCTestCase {
         XCTAssertGreaterThan(frame.centerLatitude, 10)
     }
 
+    /// A background probe that fills the map is not the chip bar. Counting
+    /// it shrinks the bottom inset and drops the ride behind the floating card.
+    func testFullMapChipProbeDoesNotCoverTheBandAboveAFloatingCard() {
+        let map = CGSize(width: 834, height: 1210)
+        let cardTop: CGFloat = 270
+        let measurement = MapFitMeasurement(
+            mapSize: map,
+            safeTop: 24,
+            topControls: CGRect(x: 0, y: 0, width: map.width, height: map.height),
+            sheet: CGRect(x: 0, y: cardTop, width: map.width, height: map.height - cardTop)
+        )
+        let padding = MapFitInsets.padding(for: measurement)
+        XCTAssertEqual(padding.bottom, map.height - cardTop + MapFitInsets.margin, accuracy: 0.5)
+        XCTAssertEqual(padding.top, 24 + MapFitInsets.margin, accuracy: 0.5)
+        XCTAssertLessThan(padding.top + padding.bottom, map.height)
+        XCTAssertGreaterThan(map.height - padding.top - padding.bottom, 100)
+        XCTAssertNil(MapFitInsets.largeDetentFallbackBand(for: measurement))
+        let bandBottom = map.height - padding.bottom
+        XCTAssertLessThanOrEqual(bandBottom, cardTop)
+    }
+
+    func testLargeDetentFallbackDoesNotApplyToAFloatingCard() {
+        let map = CGSize(width: 834, height: 1210)
+        let floating = MapFitMeasurement(
+            mapSize: map,
+            safeTop: 24,
+            topControls: CGRect(x: 0, y: 24, width: map.width, height: 56),
+            sheet: CGRect(x: 0, y: 270, width: map.width, height: map.height - 270)
+        )
+        XCTAssertNil(MapFitInsets.largeDetentFallbackBand(for: floating))
+
+        let large = MapFitMeasurement(
+            mapSize: CGSize(width: 402, height: 874),
+            safeTop: 59,
+            topControls: CGRect(x: 0, y: 59, width: 402, height: 56),
+            sheet: CGRect(x: 0, y: 62, width: 402, height: 812)
+        )
+        XCTAssertEqual(
+            MapFitInsets.largeDetentFallbackBand(for: large) ?? 0,
+            874 * 0.35,
+            accuracy: 0.5
+        )
+    }
+
     func testEastWestRideProjectsAboveACenteredIPadCard() {
         let map = CGSize(width: 834, height: 1210)
         let cardTop: CGFloat = 270
