@@ -476,6 +476,9 @@ final class GasListGroupingTests: XCTestCase {
         viewModel.applyBufferedGasStops()
 
         XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "QuikTrip", "End"])
+        XCTAssertEqual(viewModel.committedWaypointMarker, "Start|QuikTrip|End")
+        XCTAssertTrue(viewModel.isCalculating)
+        XCTAssertEqual(viewModel.lastCompletedReplanGeneration, 0)
         XCTAssertTrue(viewModel.waypoints[1].isGasFill)
         XCTAssertTrue(viewModel.bufferedGasStops.isEmpty)
 

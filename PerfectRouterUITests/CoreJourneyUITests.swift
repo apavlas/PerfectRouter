@@ -205,11 +205,16 @@ final class CoreJourneyUITests: XCTestCase {
 
         let apply = revealPlanningRow("applyStops", in: app)
         XCTAssertTrue(apply.label.contains("Apply 1 stop"), apply.label)
+        let before = completedReplanGeneration(in: app)
         tapApply(in: app)
-        waitForBannerToFinish(in: app)
-        assertWaypointListed("Pilot Madison", in: app)
+        // Apply inserts the waypoint before the banner is drawn. Two quiet
+        // polls used to return while that banner was still idle, and the
+        // next grabber drag then waited out the replan. Success is the
+        // committed marker plus a published line.
+        assertStopCommitted("Pilot Madison", replanned: "Fastest", since: before, in: app)
+        assertWaypointListed("Pilot Madison", in: app, expandSheet: false)
         XCTAssertFalse(
-            waypointNames(in: app).contains("Shell Knoxville"),
+            waypointNames(in: app, expandSheet: false).contains("Shell Knoxville"),
             diagnosticTree(app)
         )
         let gasAfter = reveal("gasListHeader", in: app)
@@ -907,6 +912,71 @@ final class CoreJourneyUITests: XCTestCase {
         completedReplan(in: app)?.generation ?? 0
     }
 
+    /// Names from the sheet marker that tracks `waypoints`. Nil when that
+    /// element is not in the tree yet. Does not scroll or drag the grabber.
+    private func committedWaypointNames(in app: XCUIApplication) -> [String]? {
+        let marker = identified("committedWaypoints", in: app)
+        guard marker.exists else { return nil }
+        let fromValue = marker.value as? String
+        let raw: String
+        if let fromValue, !fromValue.isEmpty {
+            raw = fromValue
+        } else {
+            raw = marker.label
+        }
+        guard !raw.isEmpty else { return nil }
+        if raw == "none" { return [] }
+        return raw.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+    }
+
+    /// Apply has put `name` on the ride, and that ride's line has published.
+    /// The deadline only fails the test. A quiet banner is not success.
+    private func assertStopCommitted(
+        _ name: String,
+        replanned style: String,
+        since before: Int,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let deadline = Date().addingTimeInterval(30)
+        var lastNames: [String]?
+        while Date() < deadline {
+            if let names = committedWaypointNames(in: app) {
+                lastNames = names
+            }
+            let committed = lastNames?.contains(name) ?? false
+            let published = replanDidComplete(style, since: before, in: app)
+            if committed && published { return }
+            if published, lastNames != nil, !committed { break }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.12))
+        }
+        let shown = lastNames?.joined(separator: "|") ?? "missing"
+        let committed = lastNames?.contains(name) ?? false
+        if !committed {
+            XCTFail(
+                """
+                Apply did not commit \(name) into route waypoints.
+                Committed: \(shown)
+                \(diagnosticTree(app))
+                """,
+                file: file,
+                line: line
+            )
+            return
+        }
+        XCTFail(
+            """
+            \(name) was committed but the replan did not publish.
+            Committed: \(shown)
+            Since generation: \(before)
+            \(diagnosticTree(app))
+            """,
+            file: file,
+            line: line
+        )
+    }
+
     private func waitForBannerToFinish(in app: XCUIApplication) {
         let deadline = Date().addingTimeInterval(25)
         var quiet = 0
@@ -1127,10 +1197,10 @@ final class CoreJourneyUITests: XCTestCase {
         return true
     }
 
-    private func waypointNames(in app: XCUIApplication) -> [String] {
+    private func waypointNames(in app: XCUIApplication, expandSheet: Bool = true) -> [String] {
         dismissKeyboard(app)
-        expandPlanningSheet(app)
-        scrollToTop(app)
+        if expandSheet { expandPlanningSheet(app) }
+        scrollToTop(app, expandSheet: expandSheet)
         var ordered: [String] = []
         func visibleNames() -> [String] {
             let elements = app.descendants(matching: .any)
@@ -1208,23 +1278,26 @@ final class CoreJourneyUITests: XCTestCase {
     private func assertWaypointListed(
         _ name: String,
         in app: XCUIApplication,
+        expandSheet: Bool = true,
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
-        expandPlanningSheet(app)
-        scrollToTop(app)
-        var names = waypointNames(in: app)
+        if expandSheet { expandPlanningSheet(app) }
+        scrollToTop(app, expandSheet: expandSheet)
+        var names = waypointNames(in: app, expandSheet: expandSheet)
         if !names.contains(name) {
-            scrollToTop(app)
-            names = waypointNames(in: app)
+            scrollToTop(app, expandSheet: expandSheet)
+            names = waypointNames(in: app, expandSheet: expandSheet)
         }
         let pins = ["Pilot Madison", "On Route Fuel", "Shell Knoxville", "Quick Stop", "Home Fuel"]
             .filter { mapShowsStation($0, in: app) }
+        let committed = committedWaypointNames(in: app)?.joined(separator: "|") ?? "missing"
         XCTAssertTrue(
             names.contains(name),
             """
             \(name) was not a route row.
             Route rows: \(names)
+            Committed waypoints: \(committed)
             Map pins: \(pins)
             \(diagnosticTree(app))
             """,
@@ -1533,7 +1606,7 @@ final class CoreJourneyUITests: XCTestCase {
             "rideHighlights", "Ride Highlights", "highlight.", "Tallulah", "Bare Overlook",
             "gasListHeader", "gasDay", "gasLeg", "gasCandidate", "foodListHeader", "highlightsListHeader",
             "Suggested Gas", "Alt ",
-            "routeMapFrame", "lastCompleted", "activeRouteStyle",
+            "routeMapFrame", "lastCompleted", "activeRouteStyle", "committedWaypoints",
             "noLodging", "hotelStop", "hotelLodgingState", "hotelDay", "Quality Inn", "Holiday Inn", "No lodging",
             "noHotelPicked", "chooseHotel", "rideDay", "Weatherford", "No hotel"
         ]

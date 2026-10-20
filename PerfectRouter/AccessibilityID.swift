@@ -13,6 +13,10 @@ enum AccessibilityID {
     /// for the last line that actually published. The banner itself is gone
     /// as soon as that publish finishes.
     static let lastCompletedReplanStyle = "lastCompletedReplanStyle"
+    /// Waypoint names in ride order, joined by `|`, or `none` when the ride
+    /// is empty. Mounted outside the lazy list, and updated when Apply
+    /// commits the stop, before the replan publishes the new line.
+    static let committedWaypoints = "committedWaypoints"
     static let routeStylePicker = "routeStylePicker"
     static let activeRouteStyle = "activeRouteStyle"
     static let tankRangeSlider = "tankRangeSlider"

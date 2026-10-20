@@ -617,6 +617,14 @@ struct ContentView: View {
                         .accessibilityLabel("\(viewModel.lastCompletedReplanStyle)|\(viewModel.lastCompletedReplanGeneration)")
                         .accessibilityValue("\(viewModel.lastCompletedReplanStyle)|\(viewModel.lastCompletedReplanGeneration)")
                         .focusable()
+                    Text(verbatim: viewModel.committedWaypointMarker)
+                        .font(.system(size: 1))
+                        .foregroundStyle(.clear)
+                        .frame(maxWidth: .infinity, minHeight: 1, maxHeight: 1)
+                        .accessibilityIdentifier(AccessibilityID.committedWaypoints)
+                        .accessibilityLabel(viewModel.committedWaypointMarker)
+                        .accessibilityValue(viewModel.committedWaypointMarker)
+                        .focusable()
                 }
                 .accessibilityElement(children: .contain)
             }

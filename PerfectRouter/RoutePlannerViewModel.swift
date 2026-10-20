@@ -564,6 +564,15 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     private(set) var lastCompletedReplanStyle: String = ""
     private(set) var lastCompletedReplanGeneration: Int = 0
 
+    /// Ride order, joined by `|`. `none` when there are no waypoints.
+    /// Apply replaces `waypoints` before `scheduleRecalculation`, so this
+    /// string already contains the new stop while
+    /// `lastCompletedReplanGeneration` is still the previous line.
+    var committedWaypointMarker: String {
+        let names = waypoints.map(\.name).joined(separator: "|")
+        return names.isEmpty ? "none" : names
+    }
+
     /// Distinct from "searching". Only `.empty` may say there are no stations.
     /// A cancel leaves this alone (the replacement search owns the screen).
     private(set) var gasLoadState: GasLoadState = .pending {
