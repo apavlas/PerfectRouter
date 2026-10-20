@@ -523,8 +523,17 @@ final class GasListGroupingTests: XCTestCase {
         viewModel.toggleGasList()
         let legs = viewModel.gasListGrouping.days.flatMap(\.legs)
         XCTAssertTrue(viewModel.gasListGrouping.showsLegHeaders)
-        XCTAssertEqual(legs.first?.preview.map(\.name), ["QuikTrip", "RaceTrac", "Chevron"])
-        XCTAssertEqual(legs.first?.overflow.map(\.name), ["Alt 40"])
+        // Shell was only a recommendation, and the replan cleared it, so the
+        // only applied stop is QuikTrip. Extra at 120 mi is closer to that
+        // stop than to the route end. Chevron and RaceTrac are the two
+        // nearest alternates, so Extra stays on this leg behind Show more.
+        XCTAssertEqual(legs.map { $0.preview.map(\.name) }, [
+            ["QuikTrip", "RaceTrac", "Chevron"],
+            ["Shell", "Marathon"],
+        ])
+        XCTAssertEqual(legs[0].overflow.map(\.name), ["Alt 40", "Extra"])
+        XCTAssertEqual(legs[1].overflow.map(\.name), ["BP", "Amoco"])
+        XCTAssertFalse(legs[0].preview.contains { $0.name == "Extra" })
         XCTAssertTrue(viewModel.gasListRows.contains { row in
             if case .showMore(let legNumber, _) = row { return legNumber == 1 }
             return false
