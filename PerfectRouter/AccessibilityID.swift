@@ -45,8 +45,15 @@ enum AccessibilityID {
     static func gasLegShowMore(_ leg: Int) -> String { "gasLegShowMore.\(leg)" }
     /// A gas candidate that is not already a `fuelStop.<name>` row.
     static func gasCandidate(_ name: String) -> String { "gasCandidate.\(name)" }
-    /// Camera center after a route is framed, as "latitude,longitude".
+    /// Center of the ride the camera was fitted to, as "latitude,longitude".
+    /// The camera itself sits south of this when the sheet covers the map.
     static let routeMapFrame = "routeMapFrame"
+
+    static func categoryChip(_ name: String) -> String { "categoryChip.\(name)" }
+    /// Edge padding from the last route fit, as "top,left,bottom,right".
+    static let mapFitInsets = "mapFitInsets"
+    /// How many times the camera has been fit to a route.
+    static let mapFitGeneration = "mapFitGeneration"
 
     static func searchResult(_ name: String) -> String { "searchResult.\(name)" }
     static func waypoint(_ name: String) -> String { "waypoint.\(name)" }
