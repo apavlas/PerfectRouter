@@ -53,6 +53,19 @@ enum UITestFixture {
         Place(name: "Pilot Madison", milesNorth: 80, eastMeters: 800, searchable: false, gasStation: true),
         Place(name: "On Route Fuel", milesNorth: 150, eastMeters: 0, searchable: true, gasStation: true),
         Place(name: "Shell Knoxville", milesNorth: 230, eastMeters: 800, searchable: false, gasStation: true),
+        // Extra pumps in each tank window, all closer than that window's
+        // recommended fill, so the 100-mile plan stays Pilot / On Route /
+        // Shell. Each leg then has more than the recommended stop and two
+        // alternates, which is what Show more is for.
+        Place(name: "Alt 15", milesNorth: 15, eastMeters: 800, searchable: false, gasStation: true),
+        Place(name: "Alt 25", milesNorth: 25, eastMeters: 800, searchable: false, gasStation: true),
+        Place(name: "Alt 55", milesNorth: 55, eastMeters: 800, searchable: false, gasStation: true),
+        Place(name: "Alt 100", milesNorth: 100, eastMeters: 800, searchable: false, gasStation: true),
+        Place(name: "Alt 120", milesNorth: 120, eastMeters: 800, searchable: false, gasStation: true),
+        Place(name: "Alt 140", milesNorth: 140, eastMeters: 800, searchable: false, gasStation: true),
+        Place(name: "Alt 180", milesNorth: 180, eastMeters: 800, searchable: false, gasStation: true),
+        Place(name: "Alt 200", milesNorth: 200, eastMeters: 800, searchable: false, gasStation: true),
+        Place(name: "Alt 210", milesNorth: 210, eastMeters: 800, searchable: false, gasStation: true),
         Place(name: "Test Destination", milesNorth: routeMiles, eastMeters: 0, searchable: true, gasStation: false),
     ]
 

@@ -142,6 +142,133 @@ final class CoreJourneyUITests: XCTestCase {
         assertNoEmptyGasMessage(in: app)
     }
 
+    /// Suggested Gas starts open, groups the stub ride by the day a leg
+    /// starts, and keeps a check when the rider closes the list. Apply does
+    /// not open a section the rider closed, or close one they opened.
+    func testSuggestedGasListCollapsesByDayAndLegWithoutLosingChecks() {
+        let app = launch()
+        planFixedRoute(in: app)
+
+        let highlights = revealPlanningRow("highlightsListHeader", in: app)
+        XCTAssertTrue(highlights.label.contains("Highlights"), highlights.label)
+        XCTAssertTrue(highlights.label.contains("(2)"), highlights.label)
+        XCTAssertTrue(highlights.label.contains("expanded"), highlights.label)
+        XCTAssertTrue(revealPlanningRow("rideHighlights", in: app).exists, diagnosticTree(app))
+        scrollUntilInsidePlanningList(highlights, in: app)
+        highlights.tap()
+        XCTAssertTrue(revealPlanningRow("highlightsListHeader", in: app).label.contains("collapsed"))
+
+        let header = revealPlanningRow("gasListHeader", in: app)
+        XCTAssertTrue(header.label.contains("Suggested Gas Stops"), header.label)
+        XCTAssertTrue(header.label.contains("("), header.label)
+        XCTAssertTrue(header.label.contains("expanded"), header.label)
+        XCTAssertTrue(revealPlanningRow("gasDay.1", in: app).exists, diagnosticTree(app))
+        XCTAssertTrue(revealPlanningRow("gasDay.2", in: app).exists, diagnosticTree(app))
+        assertPlanningRowAbsent("gasDay.3", in: app)
+        XCTAssertTrue(revealPlanningRow("gasLeg.1", in: app).label.contains("Leg 1"), diagnosticTree(app))
+        XCTAssertTrue(revealPlanningRow("gasLeg.2", in: app).exists, diagnosticTree(app))
+        XCTAssertTrue(revealPlanningRow("gasLeg.3", in: app).label.contains("Leg 3"), diagnosticTree(app))
+        assertPlanningRowAbsent("gasCandidate.Alt 15", in: app)
+
+        let more = revealPlanningRow("gasLegShowMore.1", in: app)
+        scrollUntilInsidePlanningList(more, in: app)
+        more.tap()
+        XCTAssertTrue(revealPlanningRow("gasCandidate.Alt 15", in: app).exists, diagnosticTree(app))
+
+        let dayTwo = revealPlanningRow("gasDay.2", in: app)
+        scrollUntilInsidePlanningList(dayTwo, in: app)
+        dayTwo.tap()
+        XCTAssertTrue(revealPlanningRow("gasDay.2", in: app).label.contains("collapsed"))
+        assertPlanningRowAbsent("gasLeg.3", in: app)
+        XCTAssertTrue(revealPlanningRow("gasLeg.2", in: app).exists, diagnosticTree(app))
+
+        let pilot = revealPlanningRow("fuelStop.Pilot Madison.unchecked", in: app)
+        scrollUntilInsidePlanningList(pilot, in: app)
+        pilot.tap()
+        XCTAssertTrue(revealPlanningRow("fuelStop.Pilot Madison.checked", in: app).exists, diagnosticTree(app))
+
+        let gasHeader = revealPlanningRow("gasListHeader", in: app)
+        scrollUntilInsidePlanningList(gasHeader, in: app)
+        gasHeader.tap()
+        XCTAssertTrue(revealPlanningRow("gasListHeader", in: app).label.contains("collapsed"))
+        XCTAssertTrue(revealPlanningRow("selectRecommended", in: app).exists, diagnosticTree(app))
+        assertPlanningRowAbsent("gasLeg.1", in: app)
+        XCTAssertTrue(revealPlanningRow("fuelStop.Pilot Madison.checked", in: app).exists, diagnosticTree(app))
+
+        // A downward swipe at the top of the list can drop the iPhone sheet
+        // to the collapsed detent. The header is still in the list; the
+        // short sheet is what hides it.
+        recoverCollapsedPhoneSheet(app)
+        let closed = revealPlanningRow("gasListHeader", in: app)
+        scrollUntilInsidePlanningList(closed, in: app)
+        closed.tap()
+        XCTAssertTrue(revealPlanningRow("gasListHeader", in: app).label.contains("expanded"))
+        XCTAssertTrue(revealPlanningRow("fuelStop.Pilot Madison.checked", in: app).exists, diagnosticTree(app))
+        XCTAssertTrue(revealPlanningRow("gasDay.2", in: app).label.contains("collapsed"))
+        XCTAssertTrue(revealPlanningRow("gasCandidate.Alt 15", in: app).exists, diagnosticTree(app))
+
+        let apply = revealPlanningRow("applyStops", in: app)
+        XCTAssertTrue(apply.label.contains("Apply 1 stop"), apply.label)
+        let before = completedReplanGeneration(in: app)
+        tapApply(in: app)
+        // Apply inserts the waypoint before the banner is drawn. Two quiet
+        // polls used to return while that banner was still idle, and the
+        // next grabber drag then waited out the replan. Success is the
+        // committed marker plus a published line.
+        assertStopCommitted("Pilot Madison", replanned: "Fastest", since: before, in: app)
+        assertWaypointListed("Pilot Madison", in: app, expandSheet: false)
+        XCTAssertFalse(
+            waypointNames(in: app, expandSheet: false).contains("Shell Knoxville"),
+            diagnosticTree(app)
+        )
+        let gasAfter = reveal("gasListHeader", in: app)
+        XCTAssertTrue(gasAfter.exists, diagnosticTree(app))
+        XCTAssertTrue(gasAfter.label.contains("expanded"), gasAfter.label)
+        let dayAfter = reveal("gasDay.2", in: app)
+        XCTAssertTrue(dayAfter.exists, diagnosticTree(app))
+        XCTAssertTrue(dayAfter.label.contains("collapsed"), dayAfter.label)
+        let highlightsAfter = reveal("highlightsListHeader", in: app)
+        XCTAssertTrue(highlightsAfter.exists, diagnosticTree(app))
+        XCTAssertTrue(highlightsAfter.label.contains("collapsed"), highlightsAfter.label)
+    }
+
+    /// Food and Highlights use the same counted header. Food starts open
+    /// until a food stop is on the ride. Highlights start open.
+    func testFoodAndHighlightsHeadersCollapse() {
+        let app = launch()
+        planFixedRoute(in: app)
+
+        let highlights = revealPlanningRow("highlightsListHeader", in: app)
+        XCTAssertTrue(highlights.label.contains("Highlights (2)"), highlights.label)
+        XCTAssertTrue(highlights.label.contains("expanded"), highlights.label)
+        XCTAssertTrue(revealPlanningRow("rideHighlights", in: app).exists)
+        XCTAssertTrue(revealPlanningRow("highlight.Tallulah Gorge.name", in: app).exists, diagnosticTree(app))
+        scrollUntilInsidePlanningList(highlights, in: app)
+        highlights.tap()
+        assertPlanningRowAbsent("highlight.Tallulah Gorge.name", in: app)
+        let closedHighlights = revealPlanningRow("highlightsListHeader", in: app)
+        XCTAssertTrue(closedHighlights.label.contains("collapsed"), closedHighlights.label)
+        scrollUntilInsidePlanningList(closedHighlights, in: app)
+        closedHighlights.tap()
+        XCTAssertTrue(revealPlanningRow("highlight.Tallulah Gorge.name", in: app).exists, diagnosticTree(app))
+
+        selectCategory("Food", in: app)
+        // Food is the suggestions section under Highlights. On iPhone the
+        // expanded highlight cards fill the sheet, so the food header and the
+        // empty-state line are below the fold and absent from the lazy list
+        // until scrolled. The header exists only after the Food chip sets the
+        // category, which is how this confirms the tap.
+        let food = revealPlanningRow("foodListHeader", in: app)
+        XCTAssertTrue(food.exists, diagnosticTree(app))
+        XCTAssertTrue(food.label.contains("Food"), food.label)
+        XCTAssertTrue(food.label.contains("expanded"), food.label)
+        scrollUntilInsidePlanningList(food, in: app)
+        food.tap()
+        let collapsedFood = revealPlanningRow("foodListHeader", in: app)
+        XCTAssertTrue(collapsedFood.exists, diagnosticTree(app))
+        XCTAssertTrue(collapsedFood.label.contains("collapsed"), collapsedFood.label)
+    }
+
     func testRideHighlightDescriptionIsClippedUnderTheNameAndExpands() {
         let app = launch()
         planFixedRoute(in: app)
@@ -613,19 +740,74 @@ final class CoreJourneyUITests: XCTestCase {
     private func tapApply(in app: XCUIApplication) {
         let buttons = app.buttons.matching(identifier: "applyStops")
         XCTAssertTrue(buttons.firstMatch.waitForExistence(timeout: 3))
-        var swipes = 0
-        while swipes < 14 {
-            for index in 0..<buttons.count {
-                let button = buttons.element(boundBy: index)
-                if button.isHittable {
-                    button.tap()
-                    return
-                }
+        // The summary Apply sits under the Plan Ride bar. XCTest still calls
+        // that frame hittable, and a center tap lands on the bar. The checked
+        // stop stays checked and the waypoint marker never changes.
+        var previousFrames = ""
+        var stuck = 0
+        for _ in 0..<16 {
+            recoverCollapsedPhoneSheet(app)
+            if let button = uncoveredApplyButton(in: app) {
+                button.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+                return
             }
-            swipePlanningList(in: app, up: true)
-            swipes += 1
+            let frames = applyButtonFrameDescription(in: app)
+            if frames == previousFrames {
+                stuck += 1
+            } else {
+                stuck = 0
+                previousFrames = frames
+            }
+            let chrome = planningChromeBottom(in: app)
+            let onScreen = onScreenApplyButtons(in: app)
+            let overlapped = !onScreen.isEmpty && onScreen.allSatisfy { $0.frame.minY < chrome }
+            swipePlanningList(in: app, up: onScreen.isEmpty || !overlapped || stuck >= 2)
         }
         XCTFail("Apply was not on screen\n\n\(diagnosticTree(app))")
+    }
+
+    /// Bottom of the Plan Ride bar. Rows drawn underneath it are not tappable.
+    private func planningChromeBottom(in app: XCUIApplication) -> CGFloat {
+        let bar = app.navigationBars["Plan Ride"]
+        guard bar.exists else { return 0 }
+        return bar.frame.maxY
+    }
+
+    /// An Apply button whose whole frame is below the navigation bar, so the
+    /// center tap hits the button.
+    private func uncoveredApplyButton(in app: XCUIApplication) -> XCUIElement? {
+        let chrome = planningChromeBottom(in: app)
+        let list = planningList(in: app)
+        var match: XCUIElement?
+        for button in onScreenApplyButtons(in: app) {
+            guard button.frame.minY >= chrome + 1 else { continue }
+            guard button.frame.maxY <= app.frame.maxY - 4 else { continue }
+            if list.exists, list.frame.height > 40 {
+                guard button.frame.midY > list.frame.minY, button.frame.midY < list.frame.maxY - 4 else { continue }
+            }
+            if match == nil || button.frame.minY > (match?.frame.minY ?? 0) {
+                match = button
+            }
+        }
+        return match
+    }
+
+    private func onScreenApplyButtons(in app: XCUIApplication) -> [XCUIElement] {
+        let buttons = app.buttons.matching(identifier: "applyStops")
+        var onScreen: [XCUIElement] = []
+        for index in 0..<buttons.count {
+            let button = buttons.element(boundBy: index)
+            guard button.exists, button.frame.height > 20, button.frame.width > 40 else { continue }
+            guard app.frame.intersects(button.frame) else { continue }
+            onScreen.append(button)
+        }
+        return onScreen
+    }
+
+    private func applyButtonFrameDescription(in app: XCUIApplication) -> String {
+        onScreenApplyButtons(in: app)
+            .map { "\(Int($0.frame.minY)):\(Int($0.frame.height))" }
+            .joined(separator: ",")
     }
 
     private func tapSelectRecommended(in app: XCUIApplication) {
@@ -641,28 +823,17 @@ final class CoreJourneyUITests: XCTestCase {
     // MARK: - Route style
 
     private func selectRouteStyle(_ style: String, in app: XCUIApplication) -> Int {
-        let deadline = Date().addingTimeInterval(20)
-        var down = 0
-        var picker: XCUIElement?
-        while Date() < deadline {
-            let byID = identified("routeStylePicker", in: app)
-            if byID.exists {
-                picker = byID
-                break
-            }
-            let byLabel = app.buttons["Route style"]
-            if byLabel.exists {
-                picker = byLabel
-                break
-            }
-            if down >= 14 {
-                scrollToTop(app)
-                down = 0
-            } else {
-                swipePlanningList(in: app, up: true)
-                down += 1
-            }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.12))
+        expandPlanningSheet(app)
+        // Suggested Gas starts open, above this picker, until a fuel stop is
+        // applied. A 20s clock ran out on iPad after a handful of swipes,
+        // one drag short of the row.
+        var picker = routeStyleControl(in: app)
+        if picker == nil {
+            picker = scrollDownToRouteStyle(in: app)
+        }
+        if picker == nil {
+            scrollToTop(app, expandSheet: false)
+            picker = routeStyleControl(in: app) ?? scrollDownToRouteStyle(in: app)
         }
         guard let picker else {
             XCTFail("Route style control did not appear.\n\n\(diagnosticTree(app))")
@@ -670,7 +841,7 @@ final class CoreJourneyUITests: XCTestCase {
         }
         let before = completedReplanGeneration(in: app)
         scrollUntilHittable(picker, in: app)
-        // Highlights lengthen the list, so this picker is found at the bottom
+        // The open gas list and the highlights put this picker at the bottom
         // edge. An iPad menu opened from there sits off the sheet and Twisty
         // exists but is not hittable. Lift the anchor into the upper half.
         var lifts = 0
@@ -694,6 +865,52 @@ final class CoreJourneyUITests: XCTestCase {
         }
         XCTFail("Route style \(style) was not hittable")
         return before
+    }
+
+    private func routeStyleControl(in app: XCUIApplication) -> XCUIElement? {
+        let byID = identified("routeStylePicker", in: app)
+        if byID.exists { return byID }
+        let byLabel = app.buttons["Route style"]
+        if byLabel.exists { return byLabel }
+        return nil
+    }
+
+    /// One downward pass. Stops when the picker is in the tree, or when the
+    /// lowest list button stops changing, which is the end of the list.
+    private func scrollDownToRouteStyle(in app: XCUIApplication) -> XCUIElement? {
+        var lastProbe = ""
+        var stalled = 0
+        for _ in 0..<24 {
+            swipePlanningList(in: app, up: true)
+            if let found = routeStyleControl(in: app) { return found }
+            let probe = lowestPlanningButton(in: app)
+            if !probe.isEmpty, probe == lastProbe {
+                stalled += 1
+                if stalled >= 2 { return nil }
+            } else {
+                stalled = 0
+            }
+            lastProbe = probe
+        }
+        return routeStyleControl(in: app)
+    }
+
+    /// Identifier and position of the lowest button currently inside the list.
+    /// Unchanged across two drags means the list did not move.
+    private func lowestPlanningButton(in app: XCUIApplication) -> String {
+        let list = planningList(in: app)
+        guard list.exists, list.frame.height > 40 else { return "" }
+        let visible = list.frame.insetBy(dx: 4, dy: 12)
+        var bestY = -CGFloat.greatestFiniteMagnitude
+        var best = ""
+        for element in list.buttons.allElementsBoundByIndex where element.exists {
+            let frame = element.frame
+            guard frame.height > 8, visible.intersects(frame), frame.minY >= bestY else { continue }
+            bestY = frame.minY
+            let id = element.identifier
+            best = id.isEmpty ? element.label : "\(id)@\(Int(frame.minY))"
+        }
+        return best
     }
 
     /// Menu row for `style`. Prefer a hittable control. A visible iPad popover
@@ -788,6 +1005,71 @@ final class CoreJourneyUITests: XCTestCase {
 
     private func completedReplanGeneration(in app: XCUIApplication) -> Int {
         completedReplan(in: app)?.generation ?? 0
+    }
+
+    /// Names from the sheet marker that tracks `waypoints`. Nil when that
+    /// element is not in the tree yet. Does not scroll or drag the grabber.
+    private func committedWaypointNames(in app: XCUIApplication) -> [String]? {
+        let marker = identified("committedWaypoints", in: app)
+        guard marker.exists else { return nil }
+        let fromValue = marker.value as? String
+        let raw: String
+        if let fromValue, !fromValue.isEmpty {
+            raw = fromValue
+        } else {
+            raw = marker.label
+        }
+        guard !raw.isEmpty else { return nil }
+        if raw == "none" { return [] }
+        return raw.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+    }
+
+    /// Apply has put `name` on the ride, and that ride's line has published.
+    /// The deadline only fails the test. A quiet banner is not success.
+    private func assertStopCommitted(
+        _ name: String,
+        replanned style: String,
+        since before: Int,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let deadline = Date().addingTimeInterval(30)
+        var lastNames: [String]?
+        while Date() < deadline {
+            if let names = committedWaypointNames(in: app) {
+                lastNames = names
+            }
+            let committed = lastNames?.contains(name) ?? false
+            let published = replanDidComplete(style, since: before, in: app)
+            if committed && published { return }
+            if published, lastNames != nil, !committed { break }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.12))
+        }
+        let shown = lastNames?.joined(separator: "|") ?? "missing"
+        let committed = lastNames?.contains(name) ?? false
+        if !committed {
+            XCTFail(
+                """
+                Apply did not commit \(name) into route waypoints.
+                Committed: \(shown)
+                \(diagnosticTree(app))
+                """,
+                file: file,
+                line: line
+            )
+            return
+        }
+        XCTFail(
+            """
+            \(name) was committed but the replan did not publish.
+            Committed: \(shown)
+            Since generation: \(before)
+            \(diagnosticTree(app))
+            """,
+            file: file,
+            line: line
+        )
     }
 
     private func waitForBannerToFinish(in app: XCUIApplication) {
@@ -1010,10 +1292,10 @@ final class CoreJourneyUITests: XCTestCase {
         return true
     }
 
-    private func waypointNames(in app: XCUIApplication) -> [String] {
+    private func waypointNames(in app: XCUIApplication, expandSheet: Bool = true) -> [String] {
         dismissKeyboard(app)
-        expandPlanningSheet(app)
-        scrollToTop(app)
+        if expandSheet { expandPlanningSheet(app) }
+        scrollToTop(app, expandSheet: expandSheet)
         var ordered: [String] = []
         func visibleNames() -> [String] {
             let elements = app.descendants(matching: .any)
@@ -1091,23 +1373,26 @@ final class CoreJourneyUITests: XCTestCase {
     private func assertWaypointListed(
         _ name: String,
         in app: XCUIApplication,
+        expandSheet: Bool = true,
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
-        expandPlanningSheet(app)
-        scrollToTop(app)
-        var names = waypointNames(in: app)
+        if expandSheet { expandPlanningSheet(app) }
+        scrollToTop(app, expandSheet: expandSheet)
+        var names = waypointNames(in: app, expandSheet: expandSheet)
         if !names.contains(name) {
-            scrollToTop(app)
-            names = waypointNames(in: app)
+            scrollToTop(app, expandSheet: expandSheet)
+            names = waypointNames(in: app, expandSheet: expandSheet)
         }
         let pins = ["Pilot Madison", "On Route Fuel", "Shell Knoxville", "Quick Stop", "Home Fuel"]
             .filter { mapShowsStation($0, in: app) }
+        let committed = committedWaypointNames(in: app)?.joined(separator: "|") ?? "missing"
         XCTAssertTrue(
             names.contains(name),
             """
             \(name) was not a route row.
             Route rows: \(names)
+            Committed waypoints: \(committed)
             Map pins: \(pins)
             \(diagnosticTree(app))
             """,
@@ -1116,20 +1401,68 @@ final class CoreJourneyUITests: XCTestCase {
         )
     }
 
+    /// The row never appeared, including after a pass down the list and back.
+    private func assertPlanningRowAbsent(
+        _ id: String,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        scrollToTop(app, expandSheet: false)
+        let probe = scrollPlanningListUntilExists(id, in: app, maxSwipes: 10, expandSheet: false)
+        XCTAssertFalse(
+            probe.exists,
+            "\(id) was on the planning list\n\(diagnosticTree(app))",
+            file: file,
+            line: line
+        )
+    }
+
+    /// Map chips sit above the sheet. A large detent covers them on iPhone,
+    /// so the sheet is lowered before the tap and opened again after.
+    private func selectCategory(_ name: String, in app: XCUIApplication) {
+        let chip = app.buttons[name].firstMatch
+        if !chip.exists || !chip.isHittable {
+            let grabber = app.buttons["Sheet Grabber"]
+            if grabber.exists {
+                let start = grabber.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                let bottom = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9))
+                start.press(forDuration: 0.05, thenDragTo: bottom)
+                RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+            }
+        }
+        XCTAssertTrue(chip.waitForExistence(timeout: 3), diagnosticTree(app))
+        if chip.isHittable {
+            chip.tap()
+        } else {
+            chip.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        }
+        expandPlanningSheet(app)
+    }
+
     /// Brings a planning-list row into the accessibility tree.
     ///
-    /// Scrolls `planningList` only. Dragging the sheet grabber on iPad resizes
-    /// the floating sheet and the hotel rows leave the list. A check replaces
-    /// the identifier on the row that was just tapped, so this waits at the
-    /// current offset before any drag.
+    /// Scrolls `planningList` only on iPad. Dragging that floating sheet's
+    /// grabber resizes it and the hotel rows leave the list. On iPhone a
+    /// downward swipe at the top of the list collapses the sheet, and the
+    /// row is simply off the short detent — reopen that sheet, then scroll.
+    /// A check replaces the identifier on the row that was just tapped, so
+    /// this waits at the current offset before any drag.
     private func revealPlanningRow(_ id: String, in app: XCUIApplication) -> XCUIElement {
+        recoverCollapsedPhoneSheet(app)
         if let found = waitForControl(id, in: app, timeout: 1.5) { return found }
         let nearby = scrollPlanningListUntilExists(id, in: app, maxSwipes: 12, expandSheet: false)
         if nearby.exists { return nearby }
+        recoverCollapsedPhoneSheet(app)
         scrollToTop(app, expandSheet: false)
         let fromTop = scrollPlanningListUntilExists(id, in: app, maxSwipes: 16, expandSheet: false)
         if fromTop.exists { return fromTop }
-        return reveal(id, in: app, expandSheet: false)
+        let revealed = reveal(id, in: app, expandSheet: false)
+        if revealed.exists { return revealed }
+        recoverCollapsedPhoneSheet(app)
+        if let found = waitForControl(id, in: app, timeout: 1.5) { return found }
+        let afterOpen = scrollPlanningListUntilExists(id, in: app, maxSwipes: 12, expandSheet: false)
+        return afterOpen.exists ? afterOpen : revealed
     }
 
     /// The row's frame sits fully inside the list, not merely overlapping it.
@@ -1141,6 +1474,7 @@ final class CoreJourneyUITests: XCTestCase {
     ) {
         var nudges = 0
         while nudges < 10 {
+            recoverCollapsedPhoneSheet(app)
             let list = planningList(in: app)
             if element.exists, element.isHittable, rowFrame(element, isInside: list) {
                 return
@@ -1153,10 +1487,12 @@ final class CoreJourneyUITests: XCTestCase {
             nudgePlanningList(in: app, up: up)
             nudges += 1
         }
+        recoverCollapsedPhoneSheet(app)
         let list = planningList(in: app)
+        let rowFrameText = element.exists ? "\(element.frame)" : "missing"
         XCTAssertTrue(
             element.exists && element.isHittable && rowFrame(element, isInside: list),
-            "Row was clipped by the planning list.\nrow=\(element.frame) list=\(list.frame)\n\(diagnosticTree(app))"
+            "Row was clipped by the planning list.\nrow=\(rowFrameText) list=\(list.frame)\n\(diagnosticTree(app))"
         )
     }
 
@@ -1183,14 +1519,19 @@ final class CoreJourneyUITests: XCTestCase {
         expandSheet: Bool = true
     ) -> XCUIElement {
         if expandSheet { expandPlanningSheet(app) }
+        recoverCollapsedPhoneSheet(app)
         if let found = control(identifier, in: app) { return found }
         for pass in 0..<2 {
             let up = pass == 0
             for _ in 0..<maxSwipes {
                 dragPlanningList(in: app, up: up)
+                // Finger moving down at the top of the list collapses the
+                // iPhone sheet instead of scrolling. Reopen before the next poll.
+                if !up { recoverCollapsedPhoneSheet(app) }
                 if let found = waitForControl(identifier, in: app, timeout: 0.6) { return found }
             }
         }
+        recoverCollapsedPhoneSheet(app)
         return identified(identifier, in: app)
     }
 
@@ -1231,32 +1572,51 @@ final class CoreJourneyUITests: XCTestCase {
     }
 
     /// Brings `id` on screen. Does not fail; callers assert and attach the tree.
-    private func reveal(_ id: String, in app: XCUIApplication, timeout: TimeInterval = 20, expandSheet: Bool = true) -> XCUIElement {
-        revealEither([id], in: app, timeout: timeout, expandSheet: expandSheet)
+    ///
+    /// Walks down by nudge until the row exists or the list stops moving.
+    /// A wall-clock limit expired on iPad while the open gas list was still
+    /// above the row: each nudge takes longer than the clock allowed for.
+    private func reveal(_ id: String, in app: XCUIApplication, expandSheet: Bool = true) -> XCUIElement {
+        revealEither([id], in: app, expandSheet: expandSheet)
     }
 
-    private func revealEither(_ ids: [String], in app: XCUIApplication, timeout: TimeInterval, expandSheet: Bool = true) -> XCUIElement {
+    private func revealEither(_ ids: [String], in app: XCUIApplication, expandSheet: Bool = true) -> XCUIElement {
         if expandSheet { expandPlanningSheet(app) }
         scrollToTop(app, expandSheet: expandSheet)
-        let deadline = Date().addingTimeInterval(timeout)
-        var down = 0
-        while Date() < deadline {
-            for id in ids {
-                let element = identified(id, in: app)
-                if element.exists { return element }
-            }
-            // A half-list swipe jumps over the highlight rows. They are short,
-            // and the poll only sees the list between drags.
-            if down >= 40 {
-                scrollToTop(app, expandSheet: expandSheet)
-                down = 0
-            } else {
-                nudgePlanningList(in: app, up: true)
-                down += 1
-            }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.12))
-        }
+        if let found = firstExisting(ids, in: app) { return found }
+        if let found = nudgeUntilListed(ids, in: app) { return found }
+        scrollToTop(app, expandSheet: expandSheet)
+        if let found = firstExisting(ids, in: app) { return found }
+        if let found = nudgeUntilListed(ids, in: app) { return found }
         return identified(ids[0], in: app)
+    }
+
+    private func firstExisting(_ ids: [String], in app: XCUIApplication) -> XCUIElement? {
+        for id in ids {
+            let element = identified(id, in: app)
+            if element.exists { return element }
+        }
+        return nil
+    }
+
+    /// Short nudges, not half-list swipes: a long drag jumps the highlight rows.
+    /// Stops at the list end, when the lowest button stops moving.
+    private func nudgeUntilListed(_ ids: [String], in app: XCUIApplication) -> XCUIElement? {
+        var lastProbe = ""
+        var stalled = 0
+        for _ in 0..<48 {
+            nudgePlanningList(in: app, up: true)
+            if let found = firstExisting(ids, in: app) { return found }
+            let probe = lowestPlanningButton(in: app)
+            if !probe.isEmpty, probe == lastProbe {
+                stalled += 1
+                if stalled >= 2 { return nil }
+            } else {
+                stalled = 0
+            }
+            lastProbe = probe
+        }
+        return firstExisting(ids, in: app)
     }
 
     private struct FuelScan: CustomStringConvertible {
@@ -1339,7 +1699,9 @@ final class CoreJourneyUITests: XCTestCase {
             "leaveLater", "routeStyle", "waypoint.", "noGas", "replan",
             "Plan Ride", "gas station", "Navigate", "Apply", "placeSearch",
             "rideHighlights", "Ride Highlights", "highlight.", "Tallulah", "Bare Overlook",
-            "routeMapFrame", "mapFitInsets", "mapFitGeneration", "lastCompleted", "activeRouteStyle",
+            "gasListHeader", "gasDay", "gasLeg", "gasCandidate", "foodListHeader", "highlightsListHeader",
+            "Suggested Gas", "Alt ",
+            "routeMapFrame", "mapFitInsets", "mapFitGeneration", "lastCompleted", "activeRouteStyle", "committedWaypoints",
             "noLodging", "hotelStop", "hotelLodgingState", "hotelDay", "Quality Inn", "Holiday Inn", "No lodging",
             "noHotelPicked", "chooseHotel", "rideDay", "Weatherford", "No hotel"
         ]
@@ -1357,15 +1719,89 @@ final class CoreJourneyUITests: XCTestCase {
 
     private func scrollToTop(_ app: XCUIApplication, expandSheet: Bool = true) {
         if expandSheet { expandPlanningSheet(app) }
-        for _ in 0..<12 {
-            if let field = placeSearchField(in: app),
-               field.frame.height > 1,
-               field.frame.minY < app.frame.height * 0.55 {
-                return
-            }
+        recoverCollapsedPhoneSheet(app)
+        var stalled = 0
+        var lastProbe = ""
+        for _ in 0..<8 {
+            recoverCollapsedPhoneSheet(app)
+            if placeSearchIsAtListTop(in: app) { return }
+            let probe = topPlanningProbe(in: app)
             swipePlanningList(in: app, up: false)
+            // At the top of the list this swipe drags the iPhone sheet to
+            // Collapsed instead of scrolling. Reopen. Stop once the search
+            // field is back; otherwise the swipe resized a mid-list sheet
+            // and the walk toward the top still has to finish.
+            if planningSheetCollapsed(app) {
+                recoverCollapsedPhoneSheet(app)
+                if placeSearchIsAtListTop(in: app) { return }
+                stalled = 0
+                lastProbe = ""
+                continue
+            }
+            if !probe.isEmpty, probe == lastProbe {
+                stalled += 1
+                if stalled >= 2 { return }
+            } else {
+                stalled = 0
+            }
+            lastProbe = probe
         }
         if expandSheet { expandPlanningSheet(app) }
+        recoverCollapsedPhoneSheet(app)
+    }
+
+    /// The search field is the first planning row. Once it sits inside the
+    /// list, further downward swipes do not scroll — on iPhone they collapse
+    /// the sheet.
+    private func placeSearchIsAtListTop(in app: XCUIApplication) -> Bool {
+        guard let field = placeSearchField(in: app), field.frame.height > 1 else { return false }
+        let list = planningList(in: app)
+        guard list.exists, list.frame.height > 40 else {
+            return field.frame.minY < app.frame.height * 0.55
+        }
+        return list.frame.insetBy(dx: -4, dy: 20).intersects(field.frame)
+    }
+
+    private func topPlanningProbe(in app: XCUIApplication) -> String {
+        let list = planningList(in: app)
+        guard list.exists, list.frame.height > 40 else { return "" }
+        let visible = list.frame.insetBy(dx: 4, dy: 12)
+        var bestY = CGFloat.greatestFiniteMagnitude
+        var best = ""
+        for element in list.buttons.allElementsBoundByIndex where element.exists {
+            let frame = element.frame
+            guard frame.height > 8, visible.intersects(frame), frame.minY <= bestY else { continue }
+            bestY = frame.minY
+            let id = element.identifier
+            best = id.isEmpty ? element.label : "\(id)@\(Int(frame.minY))"
+        }
+        return best
+    }
+
+    /// iPad portrait is a floating sheet. Dragging its grabber resizes that
+    /// sheet and hotel rows leave the list, so this never runs there. iPhone
+    /// is the full-width sheet under 600pt wide.
+    private func isPhonePlanningSheet(_ app: XCUIApplication) -> Bool {
+        app.frame.width < 600 && app.buttons["Sheet Grabber"].exists
+    }
+
+    /// Grabber value "Collapsed", or the short fraction detent parked at the
+    /// bottom of the phone.
+    private func planningSheetCollapsed(_ app: XCUIApplication) -> Bool {
+        guard isPhonePlanningSheet(app) else { return false }
+        let grabber = app.buttons["Sheet Grabber"]
+        let value = (grabber.value as? String) ?? ""
+        if value.localizedCaseInsensitiveContains("collapsed") { return true }
+        let list = planningList(in: app)
+        guard list.exists, list.frame.height > 40 else { return false }
+        return list.frame.height < 220 && list.frame.minY > app.frame.height * 0.65
+    }
+
+    /// Drags the phone grabber back to the large detent after a list swipe
+    /// collapsed it. No-op on iPad and when the sheet is already open.
+    private func recoverCollapsedPhoneSheet(_ app: XCUIApplication) {
+        guard planningSheetCollapsed(app) else { return }
+        expandPlanningSheet(app)
     }
 
     /// Drags the sheet grabber to the large detent. A half-height sheet only

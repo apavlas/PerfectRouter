@@ -340,7 +340,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     /// Ordered ride: first = start, last = destination, middle = stops.
     var waypoints: [Waypoint] = [] {
-        didSet { rebuildDistanceCache() }
+        didSet {
+            rebuildDistanceCache()
+            syncDisclosureRide()
+        }
     }
 
     /// Planning list scrolls to this stop after the rider adds one, and when
@@ -436,6 +439,17 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     private(set) var bufferedGasStops: [SuggestedStop] = [] {
         didSet { rebuildDistanceCache() }
     }
+
+    /// Which gas, food, and highlights sections are open on this ride.
+    /// Replacing the route clears it. A replan of the same ends does not.
+    var listDisclosure = ListDisclosureMemory()
+
+    /// Food the rider has already put on the route. The food list starts
+    /// collapsed once one of these is still a waypoint.
+    var appliedFoodKeys = Set<String>()
+
+    /// Origin and destination of the ride `listDisclosure` belongs to.
+    private var disclosureRideKey: String?
 
     /// Rider's fuel range in meters (default ~100 miles).
     var fuelRangeMeters: CLLocationDistance = 160_900 {
@@ -549,6 +563,15 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// The sheet keeps both on an element that is not inside the lazy list.
     private(set) var lastCompletedReplanStyle: String = ""
     private(set) var lastCompletedReplanGeneration: Int = 0
+
+    /// Ride order, joined by `|`. `none` when there are no waypoints.
+    /// Apply replaces `waypoints` before `scheduleRecalculation`, so this
+    /// string already contains the new stop while
+    /// `lastCompletedReplanGeneration` is still the previous line.
+    var committedWaypointMarker: String {
+        let names = waypoints.map(\.name).joined(separator: "|")
+        return names.isEmpty ? "none" : names
+    }
 
     /// Distinct from "searching". Only `.empty` may say there are no stations.
     /// A cancel leaves this alone (the replacement search owns the screen).
@@ -1569,6 +1592,203 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         return Array(addableSuggestions.prefix(15))
     }
 
+    /// Gas the Suggested Gas list draws, including each applied fill. The
+    /// fill stays in its leg as the recommended stop. A search pin for that
+    /// same pump is left out, so Apply does not add a second candidate or
+    /// raise the header count.
+    var gasListStations: [SuggestedStop] {
+        let corridor = suggestedStops.contains(where: { $0.category == .gas }) ? suggestedStops : gasStations
+        let fills = appliedGasFillStops
+        var seen = Set<String>()
+        var pool: [SuggestedStop] = []
+        for stop in corridor where stop.category == .gas && !isStopOnRoute(stop) {
+            if fills.contains(where: { appliedFill($0, matches: stop) }) {
+                continue
+            }
+            let key = Self.coordinateKey(stop.coordinate)
+            guard seen.insert(key).inserted else { continue }
+            pool.append(stop)
+        }
+        for stop in fills {
+            let key = Self.coordinateKey(stop.coordinate)
+            guard seen.insert(key).inserted else { continue }
+            pool.append(stop)
+        }
+        return pool.sorted { distanceFromStart(of: $0) < distanceFromStart(of: $1) }
+    }
+
+    /// Accessibility id for one Suggested Gas row. An applied fill keeps the
+    /// fuel-stop id. Alternates stay `gasCandidate`.
+    func gasSuggestionIdentifier(for stop: SuggestedStop) -> String {
+        if let label = fuelRowLabel(for: stop), !label.identifier.isEmpty {
+            return label.identifier
+        }
+        if isAppliedGasFill(stop) {
+            return AccessibilityID.fuelStop(stop.name, checked: true)
+        }
+        return AccessibilityID.gasCandidate(stop.name)
+    }
+
+    /// Pumps the rider already applied. The waypoint id is stable across
+    /// reads, so the leg row resolves to this stop instead of an empty
+    /// placeholder. Their mile marks are the fuel-leg edges after a replan
+    /// clears `fuelStops`, and each one is the recommended row of the leg
+    /// that ends on it.
+    private var appliedGasFillStops: [SuggestedStop] {
+        waypoints.enumerated().compactMap { index, waypoint in
+            guard waypoint.isGasFill else { return nil }
+            let along = waypointDistance(at: index)
+            return SuggestedStop(
+                name: waypoint.name,
+                coordinate: waypoint.coordinate,
+                category: .gas,
+                distanceAlongRoute: along,
+                id: waypoint.id
+            )
+        }
+    }
+
+    /// A corridor pin for a pump already on the route. The coordinate key
+    /// matches an exact apply. A later search can move that pin by a few
+    /// hundred meters and keep the name; within a mile it is still the
+    /// applied stop, not another candidate. A same-name station at the next
+    /// exit stays an alternate.
+    private func appliedFill(_ fill: SuggestedStop, matches stop: SuggestedStop) -> Bool {
+        if Self.sameCoordinate(fill.coordinate, stop.coordinate) { return true }
+        guard fill.name == stop.name else { return false }
+        return Self.metersBetween(fill.coordinate, stop.coordinate) <= Self.appliedFillMatchMeters
+    }
+
+    func isAppliedGasFill(_ stop: SuggestedStop) -> Bool {
+        waypoints.contains { waypoint in
+            waypoint.isGasFill && Self.sameCoordinate(waypoint.coordinate, stop.coordinate)
+        }
+    }
+
+    /// MapKit can shift a pump's pin after a replan. A mile still separates
+    /// that pin from the next exit's station.
+    private static let appliedFillMatchMeters: CLLocationDistance = 1_609
+
+    private static func metersBetween(
+        _ lhs: CLLocationCoordinate2D,
+        _ rhs: CLLocationCoordinate2D
+    ) -> CLLocationDistance {
+        CLLocation(latitude: lhs.latitude, longitude: lhs.longitude)
+            .distance(from: CLLocation(latitude: rhs.latitude, longitude: rhs.longitude))
+    }
+
+    /// Day and fuel-leg groups for `gasListStations`. Empty when the corridor
+    /// has no pumps left to add.
+    var gasListGrouping: GasListGrouping {
+        let stations = gasListStations.map { stop -> GasListGrouping.Station in
+            let distance = distanceFromStart(of: stop)
+            let recommended = isAppliedGasFill(stop) || fuelStops.contains { Self.sameFuelPlace($0, stop) }
+            let pastRange = isPastRangeFuelStop(stop) || isBeyondRemainingRange(distanceAlongRoute: distance)
+            return GasListGrouping.Station(
+                id: stop.id,
+                name: stop.name,
+                distance: distance,
+                isRecommended: recommended,
+                pastRange: pastRange
+            )
+        }
+        let fills = fuelStops.map { distanceFromStart(of: $0) }
+            + appliedGasFillStops.map { distanceFromStart(of: $0) }
+        let spans = rideDays.map {
+            GasListGrouping.DaySpan(
+                dayNumber: $0.dayNumber,
+                start: $0.startDistance,
+                end: $0.endDistance
+            )
+        }
+        let farthest = stations.map(\.distance).max() ?? 0
+        return GasListGrouping.make(
+            stations: stations,
+            fillDistances: fills,
+            daySpans: spans,
+            totalDistance: max(totalDistanceMeters, farthest),
+            usesMetric: AppSettings.usesMetricUnits
+        )
+    }
+
+    var gasListRows: [GasListGrouping.Row] {
+        gasListGrouping.visibleRows(
+            listExpanded: gasListExpanded,
+            collapsedDays: listDisclosure.collapsedDays,
+            overflowLegs: listDisclosure.overflowLegs
+        )
+    }
+
+    /// Open until a gas stop is on the route, unless the rider has toggled it.
+    var gasListExpanded: Bool {
+        listDisclosure.gasExpanded(fuelApplied: hasAppliedFuelStop)
+    }
+
+    var hasAppliedFuelStop: Bool {
+        waypoints.contains(where: \.isGasFill)
+    }
+
+    /// Open until a food stop is on the route, unless the rider has toggled it.
+    var foodListExpanded: Bool {
+        listDisclosure.foodExpanded(foodApplied: hasAppliedFoodStop)
+    }
+
+    var hasAppliedFoodStop: Bool {
+        waypoints.contains { appliedFoodKeys.contains(Self.coordinateKey($0.coordinate)) }
+    }
+
+    /// Highlights start open. A toggle is remembered for this ride.
+    var highlightsListExpanded: Bool {
+        listDisclosure.highlightsExpanded()
+    }
+
+    func toggleGasList() {
+        var memory = listDisclosure
+        memory.toggleGas(fuelApplied: hasAppliedFuelStop)
+        listDisclosure = memory
+    }
+
+    func toggleGasDay(_ day: Int) {
+        var memory = listDisclosure
+        memory.toggleDay(day)
+        listDisclosure = memory
+    }
+
+    func toggleGasLegOverflow(_ leg: Int) {
+        var memory = listDisclosure
+        memory.toggleOverflow(leg)
+        listDisclosure = memory
+    }
+
+    func isGasDayExpanded(_ day: Int) -> Bool {
+        listDisclosure.dayExpanded(day)
+    }
+
+    func toggleFoodList() {
+        var memory = listDisclosure
+        memory.toggleFood(foodApplied: hasAppliedFoodStop)
+        listDisclosure = memory
+    }
+
+    func toggleHighlightsList() {
+        var memory = listDisclosure
+        memory.toggleHighlights()
+        listDisclosure = memory
+    }
+
+    /// Drops remembered sections when the origin or destination changes.
+    /// Adding a stop in the middle is still the same ride.
+    private func syncDisclosureRide() {
+        guard let origin = waypoints.first, let destination = waypoints.last, waypoints.count >= 2 else {
+            return
+        }
+        let key = "\(Self.coordinateKey(origin.coordinate))|\(Self.coordinateKey(destination.coordinate))"
+        guard key != disclosureRideKey else { return }
+        disclosureRideKey = key
+        listDisclosure.reset()
+        appliedFoodKeys = []
+    }
+
     /// True when the summary already renders this place as a fuel row.
     /// Rounded coordinate, so a re-fetched pin of the same pump matches.
     func isShownAsFuelPlanRow(_ stop: SuggestedStop) -> Bool {
@@ -1906,6 +2126,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             toggleBufferedHotelStop(suggestion)
             return
         }
+        if suggestion.category == .food {
+            appliedFoodKeys.insert(Self.coordinateKey(suggestion.coordinate))
+        }
         insertStop(suggestion)
         scheduleRecalculation()
     }
@@ -1942,6 +2165,13 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// Label for the one-tap control above the buffered gas rows.
     var selectRecommendedButtonTitle: String {
         "Select recommended"
+    }
+
+    /// The control stays above the gas list while that list is collapsed.
+    /// Applying the current recommendations leaves the corridor in
+    /// `gasListStations` and would otherwise remove the row.
+    var showsSelectRecommendedFuelButton: Bool {
+        !selectableRecommendedFuelStops.isEmpty || !gasListStations.isEmpty
     }
 
     /// Copy next to the small spinner. The flag is set on the tap, before
@@ -2326,7 +2556,6 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             }
         bufferedGasStops = []
         guard !stops.isEmpty else { return }
-        let existingIDs = Set(waypoints.map(\.id))
         let polylines = plannedCorridor
         if waypoints.count >= 2, !polylines.isEmpty {
             waypoints = Self.waypoints(
@@ -2337,12 +2566,11 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             )
         } else {
             for stop in stops {
-                insertStop(stop)
+                insertStop(stop, scrolling: false)
             }
         }
-        if let added = waypoints.first(where: { !existingIDs.contains($0.id) }) {
-            scrollToWaypointID = added.id
-        }
+        // The sheet stays where the rider left it. Scrolling to the new
+        // waypoint reopened the gas list under their thumb.
         scheduleRecalculation()
     }
 
@@ -2525,7 +2753,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         return placed.map(\.waypoint)
     }
 
-    private func insertStop(_ suggestion: SuggestedStop) {
+    private func insertStop(_ suggestion: SuggestedStop, scrolling: Bool = true) {
         guard !waypoints.contains(where: { Self.sameCoordinate($0.coordinate, suggestion.coordinate) }) else {
             return
         }
@@ -2535,7 +2763,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         } else {
             waypoints.append(waypoint)
         }
-        scrollToWaypointID = waypoint.id
+        if scrolling {
+            scrollToWaypointID = waypoint.id
+        }
     }
 
     private nonisolated static func waypoint(from suggestion: SuggestedStop) -> Waypoint {

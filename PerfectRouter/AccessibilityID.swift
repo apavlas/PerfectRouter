@@ -13,6 +13,10 @@ enum AccessibilityID {
     /// for the last line that actually published. The banner itself is gone
     /// as soon as that publish finishes.
     static let lastCompletedReplanStyle = "lastCompletedReplanStyle"
+    /// Waypoint names in ride order, joined by `|`, or `none` when the ride
+    /// is empty. Mounted outside the lazy list, and updated when Apply
+    /// commits the stop, before the replan publishes the new line.
+    static let committedWaypoints = "committedWaypoints"
     static let routeStylePicker = "routeStylePicker"
     static let activeRouteStyle = "activeRouteStyle"
     static let tankRangeSlider = "tankRangeSlider"
@@ -31,6 +35,16 @@ enum AccessibilityID {
     static func hotelDay(_ day: Int) -> String { "hotelDay.\(day)" }
     static let navigate = "navigate"
     static let rideHighlights = "rideHighlights"
+    /// Suggested Gas header. The label includes the count and expanded or collapsed.
+    static let gasListHeader = "gasListHeader"
+    static let foodListHeader = "foodListHeader"
+    static let highlightsListHeader = "highlightsListHeader"
+
+    static func gasDay(_ day: Int) -> String { "gasDay.\(day)" }
+    static func gasLeg(_ leg: Int) -> String { "gasLeg.\(leg)" }
+    static func gasLegShowMore(_ leg: Int) -> String { "gasLegShowMore.\(leg)" }
+    /// A gas candidate that is not already a `fuelStop.<name>` row.
+    static func gasCandidate(_ name: String) -> String { "gasCandidate.\(name)" }
     /// Center of the ride the camera was fitted to, as "latitude,longitude".
     /// The camera itself sits south of this when the sheet covers the map.
     static let routeMapFrame = "routeMapFrame"

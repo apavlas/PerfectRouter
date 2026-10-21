@@ -14,8 +14,41 @@ struct RideHighlightsSection: View {
 
     var body: some View {
         Section {
-            ForEach(viewModel.rideHighlights) { stop in
-                PlaceDescriptionCard(
+            let count = viewModel.rideHighlights.count
+            let expanded = viewModel.highlightsListExpanded
+            CollapsibleSectionHeader(
+                title: CollapsibleListCopy.highlightsTitle(count: count),
+                expanded: expanded,
+                identifier: AccessibilityID.highlightsListHeader,
+                label: CollapsibleListCopy.stateLabel(
+                    title: CollapsibleListCopy.highlightsTitle(count: count),
+                    expanded: expanded
+                ),
+                showsPastRange: false,
+                action: { viewModel.toggleHighlightsList() }
+            )
+            // The old header id. Tests still look for it after the visible
+            // title became "Highlights (N)".
+            Text(verbatim: "Ride Highlights")
+                .font(.system(size: 1))
+                .foregroundStyle(.clear)
+                .frame(maxWidth: .infinity, minHeight: 1, maxHeight: 1)
+                .accessibilityIdentifier(AccessibilityID.rideHighlights)
+                .accessibilityLabel("Ride Highlights")
+            if expanded {
+                ForEach(viewModel.rideHighlights) { stop in
+                    highlightCard(stop)
+                }
+            } else {
+                FocusPlaceholderRow()
+            }
+        } footer: {
+            Text("Places of interest right along your route, spread across the ride.")
+        }
+    }
+
+    private func highlightCard(_ stop: SuggestedStop) -> some View {
+        PlaceDescriptionCard(
                     name: stop.name,
                     placeDescription: PlaceDescriptionDisplay.rowText(for: stop.placeDescription, name: stop.name),
                     detail: detailText(for: stop),
@@ -40,13 +73,6 @@ struct RideHighlightsSection: View {
                 )
                 .sidebarStopHighlight(selected: viewModel.highlightedStopID == stop.id)
                 .id(stop.id)
-            }
-        } header: {
-            Text("Ride Highlights")
-                .accessibilityIdentifier(AccessibilityID.rideHighlights)
-        } footer: {
-            Text("Places of interest right along your route, spread across the ride.")
-        }
     }
 
     private func focusFromSidebar(_ stop: SuggestedStop) {
