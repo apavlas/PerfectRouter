@@ -117,11 +117,14 @@ enum HotelAlongRoute {
         var results: [Evening] = []
 
         while start < totalDistance - 1, day <= 14 {
-            // Leaving at or after the target clock (an evening start) still
-            // rides a full day before the first hotel. Breaking here left a
-            // 19-hour ride with no hotels whenever it was planned after 6 PM.
-            guard let needed = ridingSeconds(fromDepartureMinutes: clock, toTargetMinutes: targetMinutes)
-                ?? ridingSeconds(fromDepartureMinutes: morningMinutes, toTargetMinutes: targetMinutes) else {
+            // Leaving at or after the target clock (an evening start) plans
+            // the first day as a morning departure, so it rides a full day
+            // and its hotels arrive in the evening window. Breaking here left
+            // a 19-hour ride with no hotels whenever it was planned after 6 PM.
+            if day == 1, ridingSeconds(fromDepartureMinutes: clock, toTargetMinutes: targetMinutes) == nil {
+                clock = morningMinutes
+            }
+            guard let needed = ridingSeconds(fromDepartureMinutes: clock, toTargetMinutes: targetMinutes) else {
                 break
             }
             let startTime = FuelStopRidingTime.ridingTime(atDistance: start, legs: legs)

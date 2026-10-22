@@ -112,6 +112,8 @@ final class HotelAlongRouteTests: XCTestCase {
             XCTAssertEqual(late.count, 2, "departing \(hour):00")
             XCTAssertEqual(late.first?.targetDistance ?? 0, 500 * mile, accuracy: 1)
             XCTAssertEqual(late.last?.targetDistance ?? 0, 1_000 * mile, accuracy: 1)
+            // Arrivals land in the evening window, not at 7 AM.
+            XCTAssertEqual(late.first?.departureMinutes, HotelAlongRoute.morningDepartureMinutes)
         }
         // A short evening ride still has no hotel.
         XCTAssertTrue(evenings(legs: [leg(miles: 150, hours: 3)], departureHour: 19).isEmpty)
