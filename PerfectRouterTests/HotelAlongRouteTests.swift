@@ -101,11 +101,20 @@ final class HotelAlongRouteTests: XCTestCase {
         XCTAssertEqual(fromSeven.first?.targetDistance ?? 0, 550 * mile, accuracy: 1)
     }
 
-    func testDepartureAtOrAfterTheTargetHasNoEvening() {
+    /// Leaving at or after 6 PM rides a full 8 AM-to-6 PM day before the
+    /// first hotel. Build 10 returned no evenings, so a 19-hour ride planned
+    /// after dinner showed no hotels at all.
+    func testDepartureAtOrAfterTheTargetRidesAFullDayFirst() {
         XCTAssertNil(HotelAlongRoute.ridingSeconds(fromDepartureMinutes: 18 * 60, toTargetMinutes: 18 * 60))
         XCTAssertNil(HotelAlongRoute.ridingSeconds(fromDepartureMinutes: 19 * 60, toTargetMinutes: 18 * 60))
-        XCTAssertTrue(evenings(departureHour: 18).isEmpty)
-        XCTAssertTrue(evenings(departureHour: 19).isEmpty)
+        for hour in [18, 19, 21] {
+            let late = evenings(departureHour: hour)
+            XCTAssertEqual(late.count, 2, "departing \(hour):00")
+            XCTAssertEqual(late.first?.targetDistance ?? 0, 500 * mile, accuracy: 1)
+            XCTAssertEqual(late.last?.targetDistance ?? 0, 1_000 * mile, accuracy: 1)
+        }
+        // A short evening ride still has no hotel.
+        XCTAssertTrue(evenings(legs: [leg(miles: 150, hours: 3)], departureHour: 19).isEmpty)
     }
 
     func testTripThatEndsBeforeSixHasNoSuggestion() {
