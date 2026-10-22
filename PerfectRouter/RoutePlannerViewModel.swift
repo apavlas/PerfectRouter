@@ -5576,8 +5576,30 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         if cache.generation == routeGeometryGeneration, let distance = cache.distances[stop.id] {
             return distance
         }
+        // A view body reads this once per row, per sort comparison, and per
+        // fuel anchor. Rebuilding the geodesic measurement of a long line on
+        // each miss pinned the main thread while stops were calculating, and
+        // the device watchdog killed the app. Reuse the measurement already
+        // taken for this line; a long line that is still being measured off
+        // the main actor uses the stop's stored mile until the cache publishes.
+        if measuredRouteGeneration == routeGeometryGeneration, let cachedMeasuredRoute {
+            return Self.projectedDistance(
+                latitude: stop.coordinate.latitude,
+                longitude: stop.coordinate.longitude,
+                known: stop.distanceAlongRoute,
+                on: cachedMeasuredRoute
+            )
+        }
+        let points = suggestionRoutePolylines.reduce(0) { $0 + $1.count }
+        if points > Self.inlineMeasureMaxPoints {
+            return stop.distanceAlongRoute
+        }
         return Self.distanceFromStart(of: stop, alongPolylines: suggestionRoutePolylines)
     }
+
+    /// Longest line `cachedDistance` will measure on the caller after a miss.
+    /// Matches the inline limit in `rebuildDistanceCache`.
+    nonisolated static let inlineMeasureMaxPoints = 2_000
 
     /// Drops mile marks measured on a previous line. The next publish is the
     /// only value `distanceFromStart` will trust for the new generation.
@@ -5613,7 +5635,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         let polylines = Self.snapshotPolylines(suggestionRoutePolylines)
         let generation = routeGeometryGeneration
         let points = polylines.reduce(0) { $0 + $1.count }
-        if points <= 2_000, queries.count <= 400 {
+        if points <= Self.inlineMeasureMaxPoints, queries.count <= 400 {
             distanceRebuildToken &+= 1
             let distances = Self.projectDistances(
                 queries: queries,
