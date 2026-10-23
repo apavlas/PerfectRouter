@@ -1,5 +1,6 @@
 import UIKit
 import XCTest
+import CoreLocation
 
 /// Build 11 long-route smoke test on live MapKit: the simulator's current
 /// location (set it to the Atlanta area with `simctl location`) to Denver,
@@ -99,6 +100,10 @@ final class B11LongRouteSmokeUITests: XCTestCase {
             }
             return false
         }
+        // Pin the origin in-test: a stale simulator location (seen on iPad,
+        // Alabama instead of Atlanta) changes the whole route.
+        XCUIDevice.shared.location = XCUILocation(
+            location: CLLocation(latitude: 33.749, longitude: -84.388))
         app.launch()
         XCTAssertTrue(
             app.navigationBars["Plan Ride"].waitForExistence(timeout: 15)
