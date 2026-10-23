@@ -3878,13 +3878,31 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         let extraGas = suggestedStops.filter { $0.category == .gas }
         gasStations = Self.mergedGasCandidates([gasStations, extraGas])
         let travelSide = travelSideStations(from: gasStations)
-        travelSideGasStations = Self.preferredFuelPool(from: gasStations, travelSide: travelSide)
+        travelSideGasStations = Self.preferredFuelPool(
+            from: gasStations,
+            travelSide: travelSide,
+            totalDistance: totalDistanceMeters,
+            limit: fuelRangeMeters * Self.fuelSafetyFactor
+        )
+        Self.logFuelPoolHead(all: gasStations, travelSide: travelSide, pool: travelSideGasStations)
         // A finished empty corridor can gain chip hits afterwards. Those
         // stations are a real list, so the sheet must not keep saying none.
         if gasLoadState == .empty, !gasStations.isEmpty {
             gasLoadState = .loaded
         }
         replanFuelStops()
+    }
+
+    /// Station miles in the first 185 mi before and after the travel-side
+    /// filter. Evidence for "planner gap while stations exist" reports.
+    nonisolated static func logFuelPoolHead(
+        all: [SuggestedStop], travelSide: [SuggestedStop], pool: [SuggestedStop]
+    ) {
+        func head(_ list: [SuggestedStop]) -> String {
+            list.map { $0.distanceAlongRoute / 1609.344 }.filter { $0 <= 185 }.sorted()
+                .map { String(format: "%.0f", $0) }.joined(separator: ",")
+        }
+        gasLog.info("pool head all=\(all.count, privacy: .public) travelSide=\(travelSide.count, privacy: .public) pool=\(pool.count, privacy: .public) allMi=[\(head(all), privacy: .public)] travelSideMi=[\(head(travelSide), privacy: .public)] poolMi=[\(head(pool), privacy: .public)]")
     }
 
     /// De-duplicates gas stops by name + rounded coordinate.
@@ -3907,6 +3925,31 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         travelSide: [SuggestedStop]
     ) -> [SuggestedStop] {
         travelSide.isEmpty ? stations : travelSide
+    }
+
+    /// Travel-side pumps, plus opposite-side pumps wherever the travel side
+    /// alone leaves a hop (start, pump, …, destination) longer than `limit`.
+    /// The planner and the gap check both read this pool, so a gap the
+    /// planner sees is a gap with no pump on either side.
+    nonisolated static func preferredFuelPool(
+        from stations: [SuggestedStop],
+        travelSide: [SuggestedStop],
+        totalDistance: CLLocationDistance,
+        limit: CLLocationDistance
+    ) -> [SuggestedStop] {
+        let base = preferredFuelPool(from: stations, travelSide: travelSide)
+        guard base.count < stations.count, limit > 0, totalDistance > 0 else { return base }
+        let ids = Set(base.map(\.id))
+        let marks = [0] + base.map(\.distanceAlongRoute).sorted() + [totalDistance]
+        var gaps: [(CLLocationDistance, CLLocationDistance)] = []
+        for i in 1..<marks.count where marks[i] - marks[i - 1] > limit {
+            gaps.append((marks[i - 1], marks[i]))
+        }
+        guard !gaps.isEmpty else { return base }
+        let fill = stations.filter { stop in
+            !ids.contains(stop.id) && gaps.contains { stop.distanceAlongRoute > $0.0 && stop.distanceAlongRoute < $0.1 }
+        }
+        return (base + fill).sorted { $0.distanceAlongRoute < $1.distanceAlongRoute }
     }
 
     /// True when the published fuel list still has a pump to add and this
@@ -4926,11 +4969,15 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         guard limit > 0, coverStep > 0, radius > 0, totalDistance > limit, maxCount > 0 else {
             return []
         }
-        // Only the stretch between two found stations. The ride before the
-        // first pump and after the last one is the coarse pass. A hop inside
-        // the reserve, and a hop that crosses a failed lookup, adds nothing.
-        let stations = stationDistances.filter { $0 > 0 && $0 < totalDistance }.sorted()
-        guard stations.count >= 2 else { return [] }
+        // A hop inside the reserve, and a hop that crosses a failed lookup,
+        // adds nothing.
+        // The start (full tank) and the destination bound the first and last
+        // hop, so the stretch before the first pump and after the last one is
+        // densified too (FUEL-1/FUEL-2). A route with no pumps at all is left
+        // to the coarse pass.
+        let found = stationDistances.filter { $0 > 0 && $0 < totalDistance }.sorted()
+        guard !found.isEmpty else { return [] }
+        let stations = [0] + found + [totalDistance]
 
         func covered(_ distance: CLLocationDistance, by points: [CLLocationDistance]) -> Bool {
             points.contains { abs($0 - distance) <= radius }

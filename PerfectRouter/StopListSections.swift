@@ -734,9 +734,12 @@ struct SuggestionsSection: View {
                 caption: label.caption
             )
         }
-        let pastRange = stored?.pastFullTank == true
+        // FUEL-4: gas rows sit under a leg header that carries the one
+        // "Past your range" tag for the leg, so rows never mix tagged and
+        // untagged options.
+        let pastRange = stop.category != .gas && (stored?.pastFullTank == true
             || viewModel.isPastRangeFuelStop(stop)
-            || viewModel.isBeyondRemainingRange(distanceAlongRoute: along)
+            || viewModel.isBeyondRemainingRange(distanceAlongRoute: along))
         if stop.category.showsPlaceDescription {
             describedSuggestion(
                 stop,

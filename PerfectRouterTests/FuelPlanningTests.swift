@@ -541,7 +541,9 @@ final class FuelPlanningTests: XCTestCase {
     func testDensifySkipsAReserveGapAndAnUnsearchedHole() {
         let mile = AppSettings.metersPerMile
         let insideReserve = RoutePlannerViewModel.fuelDensifySearchDistances(
-            totalDistance: 1_000 * mile,
+            // B12: the stretch after the last pump is densified too, so the
+            // destination sits inside the reserve here (260 → 300 mi).
+            totalDistance: 300 * mile,
             limit: 170 * mile,
             stationDistances: [100 * mile, 260 * mile]
         )

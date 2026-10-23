@@ -295,7 +295,29 @@ struct StopSuggestionService {
                 failedSampleDistances.append(sample.distanceAlongRoute)
             case .hit(let response):
                 tally.succeeded += 1
-                for item in response.mapItems {
+                let keptBefore = results.count
+                let sampleLocation = CLLocation(latitude: sample.coordinate.latitude,
+                                                longitude: sample.coordinate.longitude)
+                let nearestKm = response.mapItems.map {
+                    CLLocation(latitude: $0.placemark.coordinate.latitude,
+                               longitude: $0.placemark.coordinate.longitude).distance(from: sampleLocation)
+                }.min().map { Int($0 / 1000) } ?? -1
+                var items = response.mapItems
+                var usedPOIFallback = false
+                // MKLocalSearch treats the region as a hint: near the rider's own
+                // location it can return 25 pumps around the rider instead of the
+                // sample (seen 84 mi out of Atlanta: 25 items, 0 inside the
+                // corridor). A points-of-interest request is bounded by radius.
+                if category == .gas, nearestKm < 0 || Double(nearestKm) * 1000 > corridor {
+                    if let fallback = await Self.gasPointsOfInterest(near: sample.coordinate, radius: corridor) {
+                        items = fallback
+                        usedPOIFallback = true
+                    }
+                }
+                defer {
+                    gasLog.info("sample hit gen=\(generation, privacy: .public) mi=\(Int(sample.distanceAlongRoute / 1609.344), privacy: .public) at=\(sample.coordinate.latitude, privacy: .public),\(sample.coordinate.longitude, privacy: .public) items=\(response.mapItems.count, privacy: .public) nearestKm=\(nearestKm, privacy: .public) poiFallback=\(usedPOIFallback, privacy: .public) poiItems=\(usedPOIFallback ? items.count : 0, privacy: .public) kept=\(results.count - keptBefore, privacy: .public) keptMi=[\(results[keptBefore...].map { String(Int($0.distanceAlongRoute / 1609.344)) }.joined(separator: ","), privacy: .public)]")
+                }
+                for item in items {
                     let coord = item.placemark.coordinate
                     // Skip results with no usable coordinate (invalid / NaN), which
                     // would otherwise crash MapKit when drawn as a map annotation.
@@ -365,6 +387,18 @@ struct StopSuggestionService {
     /// One corridor query. Throttle retries wait out Apple's window.
     /// Cancellation never becomes a hit or a quiet failure. A sample that
     /// still fails is a miss, not an empty stretch of road.
+    /// Radius-bounded gas lookup used when the text search answered for
+    /// somewhere else. `nil` when the request fails or is throttled.
+    private static func gasPointsOfInterest(
+        near coordinate: CLLocationCoordinate2D,
+        radius: CLLocationDistance
+    ) async -> [MKMapItem]? {
+        guard await MapSearchGate.shared.prepare(), !Task.isCancelled else { return nil }
+        let request = MKLocalPointsOfInterestRequest(center: coordinate, radius: min(radius, MKLocalPointsOfInterestRequest.maxRadius))
+        request.pointOfInterestFilter = MKPointOfInterestFilter(including: [.gasStation])
+        return try? await MKLocalSearch(request: request).start().mapItems
+    }
+
     private static func querySample(
         category: StopCategory,
         coordinate: CLLocationCoordinate2D,
