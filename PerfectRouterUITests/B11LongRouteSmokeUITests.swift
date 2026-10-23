@@ -233,6 +233,17 @@ final class B11LongRouteSmokeUITests: XCTestCase {
         } else {
             XCTFail("gasDay.\(lastDay) not found in the final gas list")
         }
+        // Day 1 gas section: on a route whose first pump is past the tank,
+        // this is where a visible "Past your range" would be.
+        if scrollTo("gasDay.1", app) {
+            let warn = app.descendants(matching: .any)
+                .matching(NSPredicate(format: "label CONTAINS 'Past your range'")).firstMatch
+            print("B11SMOKE day1GasWarningVisible=\(warn.exists && warn.isHittable)")
+            snap("b_final_gas_day1", app)
+            swipe(app, up: true)
+            print("B11SMOKE day1GasWarningVisibleAfterSwipe=\(warn.exists && warn.isHittable)")
+            snap("b_final_gas_day1_more", app)
+        }
         if scrollTo("hotelDay.2", app) {
             snap("b_final_hotel_day2", app)
         } else {
