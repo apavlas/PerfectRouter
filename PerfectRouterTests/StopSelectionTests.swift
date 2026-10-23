@@ -1005,6 +1005,7 @@ final class StopSelectionTests: XCTestCase {
             arguments: ["-RideSummaryProbe", "-RideDepartureOverride", "2026-10-23T08:00"], timeZone: tz)
         var cal = Calendar(identifier: .gregorian); cal.timeZone = tz
         XCTAssertEqual(d.map { cal.component(.hour, from: $0) }, 8)
+        XCTAssertGreaterThan(d ?? .distantPast, Date())
         XCTAssertNil(RoutePlannerViewModel.departureOverride(arguments: [], timeZone: tz))
     }
 }

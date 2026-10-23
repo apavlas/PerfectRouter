@@ -208,6 +208,23 @@ final class B11LongRouteSmokeUITests: XCTestCase {
             snap("b_final_gas_day\(lastDay)", app)
             swipe(app, up: true)
             snap("b_final_gas_day\(lastDay)_more", app)
+            // The last Day 3 stop sits at the bottom of the gas list.
+            let lastStop = app.descendants(matching: .any).matching(
+                NSPredicate(format: "label BEGINSWITH %@", "Fuel stop \(final.fuel.count):")
+            ).firstMatch
+            let listFrame = list(app).frame
+            var swipes = 0
+            while swipes < 40 && !(lastStop.exists && lastStop.frame.maxY <= listFrame.maxY
+                                   && lastStop.frame.minY >= listFrame.minY) {
+                swipe(app, up: true); swipes += 1
+            }
+            if lastStop.exists {
+                if lastStop.frame.minY > listFrame.midY { swipe(app, up: true) }
+                print("B11SMOKE lastStop=\(lastStop.label)")
+                snap("b_final_gas_day\(lastDay)_last", app)
+            } else {
+                XCTFail("Fuel stop \(final.fuel.count) (last Day \(lastDay) stop) not found")
+            }
         } else {
             XCTFail("gasDay.\(lastDay) not found in the final gas list")
         }

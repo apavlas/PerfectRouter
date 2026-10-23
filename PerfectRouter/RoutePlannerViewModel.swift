@@ -697,7 +697,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         let driveLegs = cachedDriveLegs
         let polylines = plannedCorridor
         let target = hotelTargetMinutes
-        let departureMinutes = HotelAlongRoute.minutes(from: effectiveDeparture)
+        let departureMinutes = HotelAlongRoute.minutes(from: Self.departureOverride ?? effectiveDeparture)
         plannedLodgingEvenings = HotelAlongRoute.evenings(
             legs: driveLegs,
             overnightDistances: [],
@@ -1891,7 +1891,6 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// The departure used for time-of-passing estimates. A picked time that
     /// has since passed falls back to "now" rather than a time in the past.
     var effectiveDeparture: Date {
-        if let pinned = Self.departureOverride { return pinned }
         guard let departureDate, departureDate > Date() else { return Date() }
         return departureDate
     }
@@ -2668,13 +2667,16 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     nonisolated static let rideSummaryProbeArgument = "-RideSummaryProbe"
 
     /// UI-test-only fixed departure: `-RideDepartureOverride 2026-10-23T08:00`
-    /// (local time). Honored only alongside `-RideSummaryProbe`, so a normal
+    /// (local wall-clock time; rolled forward to the next future day so
+    /// MapKit never routes for the past). Honored only alongside `-RideSummaryProbe`, so a normal
     /// launch can never pin the clock. Lets iPhone and iPad runs split days
-    /// identically regardless of when the suite starts.
+    /// identically regardless of when the suite starts. Only the day-split
+    /// (hotel evening) schedule uses it: giving MapKit an explicit departure
+    /// changes the route itself (1,550 mi vs 1,622 mi Atlanta-Denver).
     nonisolated static let departureOverrideArgument = "-RideDepartureOverride"
 
     nonisolated static func departureOverride(
-        arguments: [String], timeZone: TimeZone = .current
+        arguments: [String], timeZone: TimeZone = .current, now: Date = Date()
     ) -> Date? {
         guard arguments.contains(rideSummaryProbeArgument),
               let i = arguments.firstIndex(of: departureOverrideArgument),
@@ -2683,7 +2685,16 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         f.locale = Locale(identifier: "en_US_POSIX")
         f.timeZone = timeZone
         f.dateFormat = "yyyy-MM-dd'T'HH:mm"
-        return f.date(from: arguments[i + 1])
+        guard var date = f.date(from: arguments[i + 1]) else { return nil }
+        // MapKit routes against the departure, and a past one changes the
+        // route itself. Keep the wall-clock time, roll to its next future day.
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = timeZone
+        while date <= now {
+            guard let next = cal.date(byAdding: .day, value: 1, to: date) else { return nil }
+            date = next
+        }
+        return date
     }
 
     nonisolated static let departureOverride: Date? =
