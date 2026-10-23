@@ -1312,10 +1312,15 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// match the list.
     func waypointRidingCaption(at index: Int) -> String? {
         guard legs.count + 1 == waypoints.count else { return nil }
-        let legs = driveLegTimings()
+        // Captions are in summary miles, so a day's caption and the ride
+        // total agree (see `summaryDistanceScale`).
+        let scale = summaryDistanceScale
+        let legs = driveLegTimings().map {
+            FuelStopRidingTime.Leg(distanceMeters: $0.distanceMeters * scale, expectedTravelTime: $0.expectedTravelTime)
+        }
         let dayStart: CLLocationDistance? = rideDays.isEmpty
             ? nil
-            : dayStartMeters(for: waypointDistance(at: index))
+            : dayStartMeters(for: waypointDistance(at: index)) * scale
         return FuelStopRidingTime.waypointCaption(
             index: index,
             legs: legs,
@@ -1421,8 +1426,22 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         return days.first { abs($0.endDistance - distance) <= tolerance }
     }
 
+    /// Ride total (MapKit's route distance) over the measured polyline
+    /// length. Day splits and stop captions are measured on the polyline,
+    /// which runs ~0.1% longer than MapKit's figure; on the 1,622 mi build 11
+    /// ride the three day captions summed to 1,623.5 mi. Captions multiply by
+    /// this so the days add up to the total on the summary. 1 when either
+    /// figure is missing or they disagree by more than 2%.
+    var summaryDistanceScale: Double {
+        let measured = cachedDriveLegs.reduce(0.0) { $0 + max(0, $1.distanceMeters) }
+        let total = totalDistanceMeters
+        guard measured > 1, total > 1 else { return 1 }
+        let ratio = total / measured
+        return abs(ratio - 1) <= 0.02 ? ratio : 1
+    }
+
     func rideDayCaption(_ day: HotelAlongRoute.RideDay) -> String {
-        let distance = max(0, day.endDistance - day.startDistance)
+        let distance = max(0, day.endDistance - day.startDistance) * summaryDistanceScale
         let miles = FuelStopRidingTime.formatDistance(distance, usesMetric: AppSettings.usesMetricUnits)
         let riding = FuelStopRidingTime.formatDuration(day.ridingSeconds)
         return "\(miles) · \(riding) riding"
@@ -2436,12 +2455,25 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// recommendation. Recommended stops themselves are inside that window.
     /// A planned evening with no hotel is not a fill, so it is not an anchor.
     func isBeyondRemainingRange(distanceAlongRoute distance: CLLocationDistance) -> Bool {
+        // While the line or the gas search is still in flight the anchors
+        // are partial: `fuelStops` is empty or covers only the first part of
+        // the ride, so a long route flagged its destination "Past your
+        // range" during loading and dropped the flag once the plan landed
+        // (build 11, Atlanta to Denver). Only a finished plan decides range.
+        if isFuelCoverageInFlight { return false }
         if isRecommendedFuelDistance(distance) { return false }
         return Self.hopExceedsTank(
             distance: distance,
             anchors: remainingRangeAnchors,
             tank: fuelRangeMeters
         )
+    }
+
+    /// True while the route or its gas search has not finished. Range
+    /// captions wait for the final fuel plan instead of flashing on the
+    /// partial one.
+    var isFuelCoverageInFlight: Bool {
+        isCalculating || isSearchingGas
     }
 
     /// The hop from the farthest anchor still before `distance` exceeds the
@@ -2630,6 +2662,53 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     /// Evening 1, for the planning list and the test log. Checked key, how
     /// many options are still published, and whether a lookup is in flight.
+    /// Launch argument for the long-route smoke UI test. Off in normal
+    /// launches, so the probe below is never computed for a rider.
+    nonisolated static let rideSummaryProbeArgument = "-RideSummaryProbe"
+
+    /// One line the long-route smoke test reads: total miles, each riding
+    /// day's miles, which days carry "Past your range" on the route list and
+    /// in the gas list, hotel counts per evening, and whether a search is
+    /// still running.
+    var rideSummaryProbe: String {
+        let mile = AppSettings.metersPerMile
+        func miles(_ meters: CLLocationDistance) -> String {
+            String(format: "%.1f", max(0, meters) / mile)
+        }
+        let days = rideDays
+        let scale = summaryDistanceScale
+        let dayMiles = days.map { "\($0.dayNumber):\(miles(($0.endDistance - $0.startDistance) * scale))" }
+        func day(for distance: CLLocationDistance) -> Int? {
+            let tolerance = FuelStopRidingTime.sameStopToleranceMeters
+            return days.first { distance > $0.startDistance + tolerance && distance <= $0.endDistance + tolerance }?.dayNumber
+                ?? days.last?.dayNumber
+        }
+        var routeRange = Set<Int>()
+        if waypoints.count >= 2 {
+            for index in 1..<waypoints.count where waypointIsBeyondRemainingRange(at: index) {
+                if let number = day(for: waypointDistance(at: index)) { routeRange.insert(number) }
+            }
+        }
+        let gasRange = gasListStations.isEmpty
+            ? []
+            : gasListGrouping.days.filter(\.pastRange).map(\.dayNumber)
+        let hotels = hotelEvenings.map { "\($0.dayNumber):\($0.options.count)" }
+        let empty = hotelEvenings.filter { $0.options.isEmpty }.map { "\($0.dayNumber)" }
+        let loading = isCalculating || isSearchingGas || isSearchingHotels
+        let fuel = fuelStops.map { miles(cachedDistance(for: $0)) }
+        return [
+            "total=\(miles(totalDistanceMeters))",
+            "days=\(dayMiles.joined(separator: ","))",
+            "routePastRange=\(routeRange.sorted().map(String.init).joined(separator: ","))",
+            "gasPastRange=\(gasRange.map(String.init).joined(separator: ","))",
+            "hotels=\(hotels.joined(separator: ","))",
+            "noLodging=\(empty.joined(separator: ","))",
+            "tank=\(miles(fuelRangeMeters))",
+            "fuel=\(fuel.joined(separator: ","))",
+            "loading=\(loading)",
+        ].joined(separator: " ")
+    }
+
     var hotelLodgingProbe: String {
         let evening = hotelEvenings.first { $0.dayNumber == 1 } ?? hotelEvenings.first
         let day = evening?.dayNumber ?? 0

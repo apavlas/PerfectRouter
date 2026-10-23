@@ -545,6 +545,43 @@ final class StopSelectionTests: XCTestCase {
         XCTAssertTrue(viewModel.isBeyondRemainingRange(distanceAlongRoute: 250 * mile))
     }
 
+    /// Build 11 long-route smoke: the Day 3 destination read "Past your
+    /// range" while the gas search was still filling `fuelStops`, then lost
+    /// it in the final list. The range label must come from the finished
+    /// plan only, and the same plan must give the same answer each time.
+    func testPastYourRangeWaitsForTheFinishedFuelPlan() {
+        let viewModel = RoutePlannerViewModel()
+        let mile = AppSettings.metersPerMile
+        viewModel.fuelRangeMeters = 100 * mile
+        let destination = 1_622 * mile
+        let partial = [alongStop("bp", lat: 0.1, lon: 0.1, distance: 73 * mile)]
+        let full = stride(from: 73, through: 1_617, by: 80).map { miles in
+            alongStop("Pump \(miles)", lat: Double(miles) / 1_000, lon: 0.1, distance: Double(miles) * mile)
+        } + [alongStop("King Soopers", lat: 1.7, lon: 0.1, distance: 1_617 * mile)]
+
+        // Loading: partial anchors would put Denver past the tank.
+        viewModel.isSearchingGas = true
+        viewModel.fuelStops = partial
+        XCTAssertFalse(viewModel.isBeyondRemainingRange(distanceAlongRoute: destination))
+        viewModel.isSearchingGas = false
+        viewModel.isCalculating = true
+        XCTAssertFalse(viewModel.isBeyondRemainingRange(distanceAlongRoute: destination))
+        viewModel.isCalculating = false
+
+        // Final plan covers every hop: no label, and it stays that way.
+        viewModel.fuelStops = full
+        XCTAssertFalse(viewModel.isBeyondRemainingRange(distanceAlongRoute: destination))
+        XCTAssertFalse(viewModel.isBeyondRemainingRange(distanceAlongRoute: destination))
+
+        // Final plan with a real gap on Day 3 keeps the label after loading.
+        viewModel.fuelStops = full.filter { $0.distanceAlongRoute < 1_400 * mile }
+        XCTAssertTrue(viewModel.isBeyondRemainingRange(distanceAlongRoute: destination))
+        viewModel.isSearchingGas = true
+        XCTAssertFalse(viewModel.isBeyondRemainingRange(distanceAlongRoute: destination))
+        viewModel.isSearchingGas = false
+        XCTAssertTrue(viewModel.isBeyondRemainingRange(distanceAlongRoute: destination))
+    }
+
     /// Charlotte → LA, 200 mi tank. Select recommended is the button's entry
     /// point: it replans, then inserts. A station whose along-route mile is
     /// inside 170 but whose detour pushes the ridden leg past the reserve is

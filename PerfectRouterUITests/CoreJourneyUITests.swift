@@ -1094,23 +1094,31 @@ final class CoreJourneyUITests: XCTestCase {
         in app: XCUIApplication,
         lastLabel: inout String
     ) -> Bool {
-        let banners = app.descendants(matching: .any).matching(identifier: "replanBanner")
-        for index in 0..<banners.count {
-            let banner = banners.element(boundBy: index)
-            guard banner.exists else { continue }
-            let label = banner.label
-            // The idle chip is a middle dot. It shares no sentence with the
-            // style, and a whitespace label used to fall back to that glyph.
-            if label == "·" || label == "Idle" { continue }
-            lastLabel = label
-            if label.localizedCaseInsensitiveContains(style) { return true }
+        // One predicate query per check. Reading `count`, then
+        // `element(boundBy:)`, then `.label` raced the banner: on a long
+        // route it can come down between those reads, and XCUITest then
+        // fails the test with "No matches found for replanBanner" instead of
+        // returning false (build 11, line 1130). `exists` on a resolved
+        // query never fails the test.
+        let styled = app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier == 'replanBanner' AND label CONTAINS[c] %@", style
+        )).firstMatch
+        if styled.exists {
+            lastLabel = style
+            return true
         }
         let status = app.descendants(matching: .any).matching(
             NSPredicate(format: "label CONTAINS %@", "Replanning for \(style)")
         ).firstMatch
         if status.exists {
-            lastLabel = status.label
+            lastLabel = "Replanning for \(style)"
             return true
+        }
+        let other = app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier == 'replanBanner' AND label CONTAINS[c] 'Replanning'"
+        )).firstMatch
+        if other.exists {
+            lastLabel = "Replanning (other style)"
         }
         return false
     }
@@ -1123,14 +1131,13 @@ final class CoreJourneyUITests: XCTestCase {
     /// True only while some element is actually saying "Replanning". An idle
     /// placeholder that still carries `replanBanner` does not count, which is
     /// what left the iPad style test waiting after the line had landed.
+    /// Predicate queries only, so a banner that disappears mid-check reads
+    /// as down instead of failing the test.
     private func replanBannerIsUp(in app: XCUIApplication) -> Bool {
-        let banners = app.descendants(matching: .any).matching(identifier: "replanBanner")
-        for index in 0..<banners.count {
-            let banner = banners.element(boundBy: index)
-            if banner.exists && banner.label.localizedCaseInsensitiveContains("Replanning") {
-                return true
-            }
-        }
+        let banner = app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier == 'replanBanner' AND label CONTAINS[c] 'Replanning'"
+        )).firstMatch
+        if banner.exists { return true }
         return app.staticTexts.matching(
             NSPredicate(format: "label BEGINSWITH 'Replanning for'")
         ).firstMatch.exists
