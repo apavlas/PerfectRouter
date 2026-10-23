@@ -996,4 +996,15 @@ final class StopSelectionTests: XCTestCase {
         XCTAssertEqual(viewModel.distanceFromStart(of: sample), projected, accuracy: 1)
         XCTAssertGreaterThan(projected, 1_000 * mile)
     }
+
+    func testDepartureOverrideNeedsTheProbeAndParsesLocalTime() {
+        let tz = TimeZone(identifier: "America/Chicago")!
+        XCTAssertNil(RoutePlannerViewModel.departureOverride(
+            arguments: ["-RideDepartureOverride", "2026-10-23T08:00"], timeZone: tz))
+        let d = RoutePlannerViewModel.departureOverride(
+            arguments: ["-RideSummaryProbe", "-RideDepartureOverride", "2026-10-23T08:00"], timeZone: tz)
+        var cal = Calendar(identifier: .gregorian); cal.timeZone = tz
+        XCTAssertEqual(d.map { cal.component(.hour, from: $0) }, 8)
+        XCTAssertNil(RoutePlannerViewModel.departureOverride(arguments: [], timeZone: tz))
+    }
 }

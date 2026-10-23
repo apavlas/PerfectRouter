@@ -1891,6 +1891,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// The departure used for time-of-passing estimates. A picked time that
     /// has since passed falls back to "now" rather than a time in the past.
     var effectiveDeparture: Date {
+        if let pinned = Self.departureOverride { return pinned }
         guard let departureDate, departureDate > Date() else { return Date() }
         return departureDate
     }
@@ -2665,6 +2666,28 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// Launch argument for the long-route smoke UI test. Off in normal
     /// launches, so the probe below is never computed for a rider.
     nonisolated static let rideSummaryProbeArgument = "-RideSummaryProbe"
+
+    /// UI-test-only fixed departure: `-RideDepartureOverride 2026-10-23T08:00`
+    /// (local time). Honored only alongside `-RideSummaryProbe`, so a normal
+    /// launch can never pin the clock. Lets iPhone and iPad runs split days
+    /// identically regardless of when the suite starts.
+    nonisolated static let departureOverrideArgument = "-RideDepartureOverride"
+
+    nonisolated static func departureOverride(
+        arguments: [String], timeZone: TimeZone = .current
+    ) -> Date? {
+        guard arguments.contains(rideSummaryProbeArgument),
+              let i = arguments.firstIndex(of: departureOverrideArgument),
+              i + 1 < arguments.count else { return nil }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = timeZone
+        f.dateFormat = "yyyy-MM-dd'T'HH:mm"
+        return f.date(from: arguments[i + 1])
+    }
+
+    nonisolated static let departureOverride: Date? =
+        departureOverride(arguments: ProcessInfo.processInfo.arguments)
 
     /// One line the long-route smoke test reads: total miles, each riding
     /// day's miles, which days carry "Past your range" on the route list and

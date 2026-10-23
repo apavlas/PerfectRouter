@@ -91,7 +91,7 @@ final class B11LongRouteSmokeUITests: XCTestCase {
 
     func testAtlantaToDenverLongRouteSmoke() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-RideSummaryProbe"]
+        app.launchArguments = ["-RideSummaryProbe", "-RideDepartureOverride", "2026-10-23T08:00"]
         addUIInterruptionMonitor(withDescription: "Location") { alert in
             for title in ["Allow While Using App", "Allow Once", "OK"] where alert.buttons[title].exists {
                 alert.buttons[title].tap()
