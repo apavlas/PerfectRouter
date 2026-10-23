@@ -1078,6 +1078,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     }
 
     private func startTrackingIfAuthorized() {
+        // Stub UI tests keep location nil. The authorization callback fires at
+        // launch, so once an earlier test granted location the ride would
+        // otherwise start at the simulator's position, not "Test Origin".
+        guard !UITestStubLaunch.isEnabled else { return }
         switch locationManager.authorizationStatus {
         case .authorizedWhenInUse, .authorizedAlways:
             locationManager.startUpdatingLocation()

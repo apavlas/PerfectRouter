@@ -310,12 +310,14 @@ struct StopSuggestionService {
                 // corridor). A points-of-interest request is bounded by radius.
                 if category == .gas, nearestKm < 0 || Double(nearestKm) * 1000 > corridor {
                     if let fallback = await Self.gasPointsOfInterest(near: sample.coordinate, radius: corridor) {
-                        items = fallback
+                        // Merge, never replace: the corridor filter below
+                        // drops whatever is off-route from either answer.
+                        items = response.mapItems + fallback
                         usedPOIFallback = true
                     }
                 }
                 defer {
-                    gasLog.info("sample hit gen=\(generation, privacy: .public) mi=\(Int(sample.distanceAlongRoute / 1609.344), privacy: .public) at=\(sample.coordinate.latitude, privacy: .public),\(sample.coordinate.longitude, privacy: .public) items=\(response.mapItems.count, privacy: .public) nearestKm=\(nearestKm, privacy: .public) poiFallback=\(usedPOIFallback, privacy: .public) poiItems=\(usedPOIFallback ? items.count : 0, privacy: .public) kept=\(results.count - keptBefore, privacy: .public) keptMi=[\(results[keptBefore...].map { String(Int($0.distanceAlongRoute / 1609.344)) }.joined(separator: ","), privacy: .public)]")
+                    gasLog.info("sample hit gen=\(generation, privacy: .public) mi=\(Int(sample.distanceAlongRoute / 1609.344), privacy: .public) at=\(sample.coordinate.latitude, privacy: .public),\(sample.coordinate.longitude, privacy: .public) items=\(response.mapItems.count, privacy: .public) nearestKm=\(nearestKm, privacy: .public) poiFallback=\(usedPOIFallback, privacy: .public) poiItems=\(usedPOIFallback ? items.count - response.mapItems.count : 0, privacy: .public) kept=\(results.count - keptBefore, privacy: .public) keptMi=[\(results[keptBefore...].map { String(Int($0.distanceAlongRoute / 1609.344)) }.joined(separator: ","), privacy: .public)]")
                 }
                 for item in items {
                     let coord = item.placemark.coordinate
