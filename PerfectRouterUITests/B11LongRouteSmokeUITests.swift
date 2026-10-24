@@ -236,7 +236,7 @@ final class B11LongRouteSmokeUITests: XCTestCase {
         }
         // Day 1 gas section: on a route whose first pump is past the tank,
         // this is where a visible "Past your range" would be.
-        if scrollTo("gasDay.1", app) {
+        if scrollTo("gasDay.1", app, upFirst: true) {
             let warn = app.descendants(matching: .any)
                 .matching(NSPredicate(format: "label CONTAINS 'Past your range'")).firstMatch
             print("B11SMOKE day1GasWarningVisible=\(warn.exists && warn.isHittable)")
@@ -244,6 +244,8 @@ final class B11LongRouteSmokeUITests: XCTestCase {
             swipe(app, up: true)
             print("B11SMOKE day1GasWarningVisibleAfterSwipe=\(warn.exists && warn.isHittable)")
             snap("b_final_gas_day1_more", app)
+        } else {
+            print("B11SMOKE skipped (section not present): gasDay.1")
         }
         if scrollTo("hotelDay.2", app) {
             snap("b_final_hotel_day2", app)
@@ -287,15 +289,19 @@ final class B11LongRouteSmokeUITests: XCTestCase {
         start.press(forDuration: 0.05, thenDragTo: end)
     }
 
-    private func scrollTo(_ identifier: String, _ app: XCUIApplication) -> Bool {
+    private func scrollTo(_ identifier: String, _ app: XCUIApplication, upFirst: Bool = false) -> Bool {
         let element = app.descendants(matching: .any).matching(identifier: identifier).firstMatch
         let frame = list(app).frame
         func visible() -> Bool {
-            element.exists && element.frame.minY >= frame.minY && element.frame.maxY <= frame.maxY
-                && element.frame.height > 0
+            // iPad's split sheet can clip a header by a point or two, so
+            // a header whose top is inside the list counts.
+            element.exists && element.frame.height > 0
+                && element.frame.minY >= frame.minY - 2 && element.frame.minY < frame.maxY - 40
         }
         // Down first, then back up: the lazy list may have passed the row.
-        for direction in [true, false] {
+        // Day 1 sits near the top: on a long list, searching downward first
+        // walks past ~300 rows before turning back.
+        for direction in (upFirst ? [false, true] : [true, false]) {
             for _ in 0..<60 {
                 if visible() {
                     // Bring it near the top third of the list.
