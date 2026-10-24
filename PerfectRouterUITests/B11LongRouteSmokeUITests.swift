@@ -323,6 +323,15 @@ final class B11LongRouteSmokeUITests: XCTestCase {
         // swipe(up: true) moves down the list. After the upFirst flings the
         // list is at (or near) the top, so search downward first in both modes;
         // searching "up" first there only bounced off the top.
+        // The iPad sheet list runs to ~400 pages (each fuel stop carries
+        // food rows), so slow swipes never reach the gas header. Fling down
+        // until the element is in the tree, then fine-tune below.
+        if !element.exists {
+            for _ in 0..<200 {
+                list(app).swipeUp(velocity: .fast)
+                if element.exists { break }
+            }
+        }
         for direction in [true, false] {
             for _ in 0..<60 {
                 if visible() {
