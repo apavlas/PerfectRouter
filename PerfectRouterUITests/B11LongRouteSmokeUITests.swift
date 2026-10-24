@@ -214,14 +214,15 @@ final class B11LongRouteSmokeUITests: XCTestCase {
         // this is where a visible "Past your range" would be.
         // iPad opens with Suggested Gas collapsed, so the day headers are not
         // in the tree at all. Open it from its header first.
-        if scrollTo("gasListHeader", app, upFirst: true) {
+        let gasHeaderFound = scrollTo("gasListHeader", app, upFirst: true)
+        if gasHeaderFound {
             let dayOne = app.descendants(matching: .any).matching(identifier: "gasDay.1").firstMatch
             if !dayOne.waitForExistence(timeout: 2) {
                 app.descendants(matching: .any).matching(identifier: "gasListHeader").firstMatch.tap()
                 print("B11SMOKE expanded gas list: gasDay.1 exists=\(dayOne.waitForExistence(timeout: 5))")
             }
         }
-        if scrollTo("gasDay.1", app) {
+        if gasHeaderFound, scrollTo("gasDay.1", app) {
             let warn = app.descendants(matching: .any)
                 .matching(NSPredicate(format: "label CONTAINS 'Past your range'")).firstMatch
             print("B11SMOKE day1GasWarningVisible=\(warn.exists && warn.isHittable)")
@@ -232,7 +233,7 @@ final class B11LongRouteSmokeUITests: XCTestCase {
         } else {
             print("B11SMOKE skipped (section not present): gasDay.1")
         }
-        if scrollTo("gasDay.\(lastDay)", app) {
+        if gasHeaderFound, scrollTo("gasDay.\(lastDay)", app) {
             snap("b_final_gas_day\(lastDay)", app)
             swipe(app, up: true)
             snap("b_final_gas_day\(lastDay)_more", app)
@@ -340,6 +341,10 @@ final class B11LongRouteSmokeUITests: XCTestCase {
             }
         }
         print("B11SMOKE scrollTo \(identifier) gave up exists=\(element.exists) list=\(frame) lists=\(app.collectionViews.count)")
+        let ids = list(app).descendants(matching: .any).allElementsBoundByIndex.prefix(80)
+            .map { "\($0.identifier)|\($0.label.prefix(40))" }
+        print("B11SMOKE gave-up tree: \(ids.joined(separator: " ; "))")
+        snap("giveup_\(identifier)", app)
         return visible()
     }
 
