@@ -533,7 +533,8 @@ final class GasListGroupingTests: XCTestCase {
             // the 100 mi tank, so it is not listed as an alternate.
             ["Amoco", "Shell"],
         ])
-        XCTAssertEqual(legs[0].overflow.map(\.name), ["Alt 40", "Extra"])
+        // fuel-v2: Extra (120 mi on a full tank from the start) is out of reach.
+        XCTAssertEqual(legs[0].overflow.map(\.name), ["Alt 40"])
         XCTAssertEqual(legs[1].overflow.map(\.name), ["BP"])
         XCTAssertFalse(legs[0].preview.contains { $0.name == "Extra" })
         XCTAssertTrue(viewModel.gasListRows.contains { row in
