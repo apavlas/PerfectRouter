@@ -319,7 +319,10 @@ final class B11LongRouteSmokeUITests: XCTestCase {
                 if flick % 4 == 3, element.exists { break }
             }
         }
-        for direction in (upFirst ? [false, true] : [true, false]) {
+        // swipe(up: true) moves down the list. After the upFirst flings the
+        // list is at (or near) the top, so search downward first in both modes;
+        // searching "up" first there only bounced off the top.
+        for direction in [true, false] {
             for _ in 0..<60 {
                 if visible() {
                     // Bring it near the top third of the list.
