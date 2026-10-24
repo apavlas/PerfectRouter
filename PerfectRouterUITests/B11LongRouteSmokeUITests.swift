@@ -301,6 +301,15 @@ final class B11LongRouteSmokeUITests: XCTestCase {
         // Down first, then back up: the lazy list may have passed the row.
         // Day 1 sits near the top: on a long list, searching downward first
         // walks past ~300 rows before turning back.
+        // iPad's floating sheet is short and each fuel stop carries food
+        // rows, so slow 40% swipes never get back to Day 1. Fling first.
+        if upFirst {
+            for flick in 0..<40 {
+                if visible() { return true }
+                list(app).swipeDown(velocity: .fast)
+                if flick % 4 == 3, element.exists { break }
+            }
+        }
         for direction in (upFirst ? [false, true] : [true, false]) {
             for _ in 0..<60 {
                 if visible() {

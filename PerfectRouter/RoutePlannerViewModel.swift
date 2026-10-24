@@ -1712,7 +1712,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 name: stop.name,
                 distance: distance,
                 isRecommended: recommended,
-                pastRange: pastRange
+                pastRange: pastRange,
+                acrossDividedHighway: isAcrossDividedHighway(stop)
             )
         }
         let fills = fuelStops.map { distanceFromStart(of: $0) }
@@ -1730,7 +1731,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             fillDistances: fills,
             daySpans: spans,
             totalDistance: max(totalDistanceMeters, farthest),
-            usesMetric: AppSettings.usesMetricUnits
+            usesMetric: AppSettings.usesMetricUnits,
+            rangeMeters: fuelRangeMeters
         )
     }
 
@@ -1834,6 +1836,13 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// or tank-interval search changes.
     private var travelSideGasStations: [SuggestedStop] = [] {
         didSet { rebuildDistanceCache() }
+    }
+
+    /// Opposite-side pumps the pool added to fill a travel-side gap.
+    private(set) var acrossDividedHighwayGasIDs: Set<UUID> = []
+
+    func isAcrossDividedHighway(_ stop: SuggestedStop) -> Bool {
+        stop.category == .gas && acrossDividedHighwayGasIDs.contains(stop.id)
     }
 
     /// Travel-side gas stations that have food within `fuelFoodRadiusMeters`.
@@ -3889,6 +3898,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             limit: fuelRangeMeters * Self.fuelSafetyFactor
         )
         Self.logFuelPoolHead(all: gasStations, travelSide: travelSide, pool: travelSideGasStations)
+        acrossDividedHighwayGasIDs = Self.acrossDividedHighwayIDs(
+            pool: travelSideGasStations, travelSide: travelSide
+        )
         // A finished empty corridor can gain chip hits afterwards. Those
         // stations are a real list, so the sheet must not keep saying none.
         if gasLoadState == .empty, !gasStations.isEmpty {
@@ -3929,6 +3941,15 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         travelSide: [SuggestedStop]
     ) -> [SuggestedStop] {
         travelSide.isEmpty ? stations : travelSide
+    }
+
+    /// Pool pumps that are not on the travel side. Empty when the pool fell
+    /// back to every station because the travel side had none.
+    nonisolated static func acrossDividedHighwayIDs(
+        pool: [SuggestedStop], travelSide: [SuggestedStop]
+    ) -> Set<UUID> {
+        guard !travelSide.isEmpty else { return [] }
+        return Set(pool.map(\.id)).subtracting(travelSide.map(\.id))
     }
 
     /// Travel-side pumps, plus opposite-side pumps wherever the travel side
