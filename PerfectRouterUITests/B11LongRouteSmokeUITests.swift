@@ -212,7 +212,16 @@ final class B11LongRouteSmokeUITests: XCTestCase {
         // Screenshots: final gas list at Day 3, and the Day 2 hotels.
         // Day 1 gas section: on a route whose first pump is past the tank,
         // this is where a visible "Past your range" would be.
-        if scrollTo("gasDay.1", app, upFirst: true) {
+        // iPad opens with Suggested Gas collapsed, so the day headers are not
+        // in the tree at all. Open it from its header first.
+        if scrollTo("gasListHeader", app, upFirst: true) {
+            let dayOne = app.descendants(matching: .any).matching(identifier: "gasDay.1").firstMatch
+            if !dayOne.waitForExistence(timeout: 2) {
+                app.descendants(matching: .any).matching(identifier: "gasListHeader").firstMatch.tap()
+                print("B11SMOKE expanded gas list: gasDay.1 exists=\(dayOne.waitForExistence(timeout: 5))")
+            }
+        }
+        if scrollTo("gasDay.1", app) {
             let warn = app.descendants(matching: .any)
                 .matching(NSPredicate(format: "label CONTAINS 'Past your range'")).firstMatch
             print("B11SMOKE day1GasWarningVisible=\(warn.exists && warn.isHittable)")
