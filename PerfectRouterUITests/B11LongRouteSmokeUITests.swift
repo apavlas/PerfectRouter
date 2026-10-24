@@ -174,7 +174,8 @@ final class B11LongRouteSmokeUITests: XCTestCase {
         for total in loadingTotals {
             XCTAssertEqual(total, final.total, accuracy: 1, "Loading total \(total) != final \(final.total)")
         }
-        XCTAssertEqual(final.days.count, 3, "Expected three riding days: \(final.raw)")
+        // ~700 mi/day: the 1,404 mi variant splits as 2 days or 2 + a ~10 mi third.
+        XCTAssert((2...3).contains(final.days.count), "Expected two or three riding days: \(final.raw)")
         let daySum = final.days.reduce(0) { $0 + $1.miles }
         XCTAssertEqual(daySum, final.total, accuracy: 1, "Day legs \(final.days) sum \(daySum) vs \(final.total)")
 
