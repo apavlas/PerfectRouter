@@ -210,6 +210,19 @@ final class B11LongRouteSmokeUITests: XCTestCase {
         print("B11SMOKE expectedPastRangeDays=\(expected.sorted()) pastRangeElementsInTree=\(onScreen)")
 
         // Screenshots: final gas list at Day 3, and the Day 2 hotels.
+        // Day 1 gas section: on a route whose first pump is past the tank,
+        // this is where a visible "Past your range" would be.
+        if scrollTo("gasDay.1", app, upFirst: true) {
+            let warn = app.descendants(matching: .any)
+                .matching(NSPredicate(format: "label CONTAINS 'Past your range'")).firstMatch
+            print("B11SMOKE day1GasWarningVisible=\(warn.exists && warn.isHittable)")
+            snap("b_final_gas_day1", app)
+            swipe(app, up: true)
+            print("B11SMOKE day1GasWarningVisibleAfterSwipe=\(warn.exists && warn.isHittable)")
+            snap("b_final_gas_day1_more", app)
+        } else {
+            print("B11SMOKE skipped (section not present): gasDay.1")
+        }
         if scrollTo("gasDay.\(lastDay)", app) {
             snap("b_final_gas_day\(lastDay)", app)
             swipe(app, up: true)
@@ -233,19 +246,6 @@ final class B11LongRouteSmokeUITests: XCTestCase {
             }
         } else {
             print("B11SMOKE skipped (section not present): gasDay.\(lastDay) not found in the final gas list")
-        }
-        // Day 1 gas section: on a route whose first pump is past the tank,
-        // this is where a visible "Past your range" would be.
-        if scrollTo("gasDay.1", app, upFirst: true) {
-            let warn = app.descendants(matching: .any)
-                .matching(NSPredicate(format: "label CONTAINS 'Past your range'")).firstMatch
-            print("B11SMOKE day1GasWarningVisible=\(warn.exists && warn.isHittable)")
-            snap("b_final_gas_day1", app)
-            swipe(app, up: true)
-            print("B11SMOKE day1GasWarningVisibleAfterSwipe=\(warn.exists && warn.isHittable)")
-            snap("b_final_gas_day1_more", app)
-        } else {
-            print("B11SMOKE skipped (section not present): gasDay.1")
         }
         if scrollTo("hotelDay.2", app) {
             snap("b_final_hotel_day2", app)
@@ -321,9 +321,13 @@ final class B11LongRouteSmokeUITests: XCTestCase {
                     }
                     return true
                 }
+                if element.exists {
+                    print("B11SMOKE scrollTo \(identifier) exists frame=\(element.frame) list=\(frame)")
+                }
                 swipe(app, up: direction, fraction: 0.4)
             }
         }
+        print("B11SMOKE scrollTo \(identifier) gave up exists=\(element.exists) list=\(frame) lists=\(app.collectionViews.count)")
         return visible()
     }
 
