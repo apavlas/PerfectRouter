@@ -40,6 +40,12 @@ final class FuelAlternatesTests: XCTestCase {
         XCTAssertFalse(all.contains("Far 178"), "98 mi past the 80 mi fill is beyond 90% of the tank")
     }
 
+    func testPastRangeLegKeepsItsOnlyPumps() {
+        let kept = GasListGrouping.eligibleAlternates(
+            [station("Dry", 400)], legStart: 230 * mile, hasRecommended: false, rangeMeters: tank)
+        XCTAssertEqual(kept.map(\.name), ["Dry"])
+    }
+
     // (2) Early alternates.
     func testAlternatesInTheFirstFifthOfTheTankAreDropped() {
         let kept = GasListGrouping.eligibleAlternates(

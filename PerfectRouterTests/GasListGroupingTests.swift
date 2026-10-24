@@ -529,10 +529,12 @@ final class GasListGroupingTests: XCTestCase {
         // nearest alternates, so Extra stays on this leg behind Show more.
         XCTAssertEqual(legs.map { $0.preview.map(\.name) }, [
             ["QuikTrip", "RaceTrac", "Chevron"],
-            ["Shell", "Marathon"],
+            // fuel-v2: Marathon (110 mi past QuikTrip) is beyond 90% of
+            // the 100 mi tank, so it is not listed as an alternate.
+            ["Amoco", "Shell"],
         ])
         XCTAssertEqual(legs[0].overflow.map(\.name), ["Alt 40", "Extra"])
-        XCTAssertEqual(legs[1].overflow.map(\.name), ["BP", "Amoco"])
+        XCTAssertEqual(legs[1].overflow.map(\.name), ["BP"])
         XCTAssertFalse(legs[0].preview.contains { $0.name == "Extra" })
         XCTAssertTrue(viewModel.gasListRows.contains { row in
             if case .showMore(let legNumber, _) = row { return legNumber == 1 }

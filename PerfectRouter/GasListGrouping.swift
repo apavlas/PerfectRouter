@@ -48,6 +48,9 @@ struct GasListGrouping: Equatable {
         guard rangeMeters > 0 else { return alternates }
         let reach = rangeMeters * alternateReachFraction
         let reachable = alternates.filter { $0.distance - start <= reach }
+        // A leg with no pick and nothing in reach is a past-range leg: its
+        // pumps are the only option and carry the leg's warning (FUEL-3).
+        if reachable.isEmpty && !hasRecommended { return alternates }
         let early = rangeMeters * earlyAlternateFraction
         let notEarly = reachable.filter { $0.distance >= early }
         if notEarly.isEmpty && !hasRecommended { return reachable }
