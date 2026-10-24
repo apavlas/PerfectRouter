@@ -168,12 +168,15 @@ final class CoreJourneyUITests: XCTestCase {
         XCTAssertTrue(revealPlanningRow("gasLeg.1", in: app).label.contains("Leg 1"), diagnosticTree(app))
         XCTAssertTrue(revealPlanningRow("gasLeg.2", in: app).exists, diagnosticTree(app))
         XCTAssertTrue(revealPlanningRow("gasLeg.3", in: app).label.contains("Leg 3"), diagnosticTree(app))
+        // fuel-v2: Alt 15 sits in the first 20% of the 100 mi tank and is
+        // dropped; Alt 25 is leg 1's overflow alternate.
         assertPlanningRowAbsent("gasCandidate.Alt 15", in: app)
+        assertPlanningRowAbsent("gasCandidate.Alt 25", in: app)
 
         let more = revealPlanningRow("gasLegShowMore.1", in: app)
         scrollUntilInsidePlanningList(more, in: app)
         more.tap()
-        XCTAssertTrue(revealPlanningRow("gasCandidate.Alt 15", in: app).exists, diagnosticTree(app))
+        XCTAssertTrue(revealPlanningRow("gasCandidate.Alt 25", in: app).exists, diagnosticTree(app))
 
         let dayTwo = revealPlanningRow("gasDay.2", in: app)
         scrollUntilInsidePlanningList(dayTwo, in: app)
@@ -205,7 +208,7 @@ final class CoreJourneyUITests: XCTestCase {
         XCTAssertTrue(revealPlanningRow("gasListHeader", in: app).label.contains("expanded"))
         XCTAssertTrue(revealPlanningRow("fuelStop.Pilot Madison.checked", in: app).exists, diagnosticTree(app))
         XCTAssertTrue(revealPlanningRow("gasDay.2", in: app).label.contains("collapsed"))
-        XCTAssertTrue(revealPlanningRow("gasCandidate.Alt 15", in: app).exists, diagnosticTree(app))
+        XCTAssertTrue(revealPlanningRow("gasCandidate.Alt 25", in: app).exists, diagnosticTree(app))
 
         let apply = revealPlanningRow("applyStops", in: app)
         XCTAssertTrue(apply.label.contains("Apply 1 stop"), apply.label)

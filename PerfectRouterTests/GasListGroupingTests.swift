@@ -31,7 +31,7 @@ final class GasListGroupingTests: XCTestCase {
 
     /// The stub ride: fills at 80, 150, and 230 miles, evenings at 90 and 180.
     /// Leg 2 starts at 80, before the overnight, so it stays on day 1.
-    private func stubRide() -> GasListGrouping {
+    private func stubRide(rangeMeters: CLLocationDistance = 0) -> GasListGrouping {
         let stations = [
             station("Home Fuel", miles: 0),
             station("Alt 15", miles: 15),
@@ -57,8 +57,17 @@ final class GasListGroupingTests: XCTestCase {
                 span(3, from: 180, to: 280),
             ],
             totalDistance: 280 * mile,
-            usesMetric: false
+            usesMetric: false,
+            rangeMeters: rangeMeters
         )
+    }
+
+    /// The UI-test stub ride on its real 100 mi tank: Home Fuel and Alt 15
+    /// are in the first 20 mi, Alt 100 is past 90% of the tank from the start.
+    func testStubRideOnAHundredMileTankDropsEarlyAndOutOfReachAlternates() {
+        let legs = stubRide(rangeMeters: 100 * mile).days.flatMap(\.legs)
+        XCTAssertEqual(legs[0].preview.map(\.name), ["Pilot Madison", "Quick Stop", "Alt 55"])
+        XCTAssertEqual(legs[0].overflow.map(\.name), ["Alt 25"])
     }
 
     func testLegsKeepTheRecommendedStopAndTwoNearestAlternates() {
