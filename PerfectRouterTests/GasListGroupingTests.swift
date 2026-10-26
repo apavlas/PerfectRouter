@@ -31,7 +31,7 @@ final class GasListGroupingTests: XCTestCase {
 
     /// The stub ride: fills at 80, 150, and 230 miles, evenings at 90 and 180.
     /// Leg 2 starts at 80, before the overnight, so it stays on day 1.
-    private func stubRide() -> GasListGrouping {
+    private func stubRide(rangeMeters: CLLocationDistance = 0) -> GasListGrouping {
         let stations = [
             station("Home Fuel", miles: 0),
             station("Alt 15", miles: 15),
@@ -57,8 +57,17 @@ final class GasListGroupingTests: XCTestCase {
                 span(3, from: 180, to: 280),
             ],
             totalDistance: 280 * mile,
-            usesMetric: false
+            usesMetric: false,
+            rangeMeters: rangeMeters
         )
+    }
+
+    /// The UI-test stub ride on its real 100 mi tank: Home Fuel and Alt 15
+    /// are in the first 20 mi, Alt 100 is past 90% of the tank from the start.
+    func testStubRideOnAHundredMileTankDropsEarlyAndOutOfReachAlternates() {
+        let legs = stubRide(rangeMeters: 100 * mile).days.flatMap(\.legs)
+        XCTAssertEqual(legs[0].preview.map(\.name), ["Pilot Madison", "Quick Stop", "Alt 55"])
+        XCTAssertEqual(legs[0].overflow.map(\.name), ["Alt 25"])
     }
 
     func testLegsKeepTheRecommendedStopAndTwoNearestAlternates() {
@@ -529,10 +538,13 @@ final class GasListGroupingTests: XCTestCase {
         // nearest alternates, so Extra stays on this leg behind Show more.
         XCTAssertEqual(legs.map { $0.preview.map(\.name) }, [
             ["QuikTrip", "RaceTrac", "Chevron"],
-            ["Shell", "Marathon"],
+            // fuel-v2: Marathon (110 mi past QuikTrip) is beyond 90% of
+            // the 100 mi tank, so it is not listed as an alternate.
+            ["Amoco", "Shell"],
         ])
-        XCTAssertEqual(legs[0].overflow.map(\.name), ["Alt 40", "Extra"])
-        XCTAssertEqual(legs[1].overflow.map(\.name), ["BP", "Amoco"])
+        // fuel-v2: Extra (120 mi on a full tank from the start) is out of reach.
+        XCTAssertEqual(legs[0].overflow.map(\.name), ["Alt 40"])
+        XCTAssertEqual(legs[1].overflow.map(\.name), ["BP"])
         XCTAssertFalse(legs[0].preview.contains { $0.name == "Extra" })
         XCTAssertTrue(viewModel.gasListRows.contains { row in
             if case .showMore(let legNumber, _) = row { return legNumber == 1 }

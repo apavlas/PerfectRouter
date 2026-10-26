@@ -697,7 +697,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         let driveLegs = cachedDriveLegs
         let polylines = plannedCorridor
         let target = hotelTargetMinutes
-        let departureMinutes = HotelAlongRoute.minutes(from: effectiveDeparture)
+        let departureMinutes = HotelAlongRoute.minutes(from: Self.departureOverride ?? effectiveDeparture)
         plannedLodgingEvenings = HotelAlongRoute.evenings(
             legs: driveLegs,
             overnightDistances: [],
@@ -1078,6 +1078,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     }
 
     private func startTrackingIfAuthorized() {
+        // Stub UI tests keep location nil. The authorization callback fires at
+        // launch, so once an earlier test granted location the ride would
+        // otherwise start at the simulator's position, not "Test Origin".
+        guard !UITestStubLaunch.isEnabled else { return }
         switch locationManager.authorizationStatus {
         case .authorizedWhenInUse, .authorizedAlways:
             locationManager.startUpdatingLocation()
@@ -1312,10 +1316,15 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// match the list.
     func waypointRidingCaption(at index: Int) -> String? {
         guard legs.count + 1 == waypoints.count else { return nil }
-        let legs = driveLegTimings()
+        // Captions are in summary miles, so a day's caption and the ride
+        // total agree (see `summaryDistanceScale`).
+        let scale = summaryDistanceScale
+        let legs = driveLegTimings().map {
+            FuelStopRidingTime.Leg(distanceMeters: $0.distanceMeters * scale, expectedTravelTime: $0.expectedTravelTime)
+        }
         let dayStart: CLLocationDistance? = rideDays.isEmpty
             ? nil
-            : dayStartMeters(for: waypointDistance(at: index))
+            : dayStartMeters(for: waypointDistance(at: index)) * scale
         return FuelStopRidingTime.waypointCaption(
             index: index,
             legs: legs,
@@ -1421,8 +1430,22 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         return days.first { abs($0.endDistance - distance) <= tolerance }
     }
 
+    /// Ride total (MapKit's route distance) over the measured polyline
+    /// length. Day splits and stop captions are measured on the polyline,
+    /// which runs ~0.1% longer than MapKit's figure; on the 1,622 mi build 11
+    /// ride the three day captions summed to 1,623.5 mi. Captions multiply by
+    /// this so the days add up to the total on the summary. 1 when either
+    /// figure is missing or they disagree by more than 2%.
+    var summaryDistanceScale: Double {
+        let measured = cachedDriveLegs.reduce(0.0) { $0 + max(0, $1.distanceMeters) }
+        let total = totalDistanceMeters
+        guard measured > 1, total > 1 else { return 1 }
+        let ratio = total / measured
+        return abs(ratio - 1) <= 0.02 ? ratio : 1
+    }
+
     func rideDayCaption(_ day: HotelAlongRoute.RideDay) -> String {
-        let distance = max(0, day.endDistance - day.startDistance)
+        let distance = max(0, day.endDistance - day.startDistance) * summaryDistanceScale
         let miles = FuelStopRidingTime.formatDistance(distance, usesMetric: AppSettings.usesMetricUnits)
         let riding = FuelStopRidingTime.formatDuration(day.ridingSeconds)
         return "\(miles) · \(riding) riding"
@@ -1689,7 +1712,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 name: stop.name,
                 distance: distance,
                 isRecommended: recommended,
-                pastRange: pastRange
+                pastRange: pastRange,
+                acrossDividedHighway: isAcrossDividedHighway(stop)
             )
         }
         let fills = fuelStops.map { distanceFromStart(of: $0) }
@@ -1707,7 +1731,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             fillDistances: fills,
             daySpans: spans,
             totalDistance: max(totalDistanceMeters, farthest),
-            usesMetric: AppSettings.usesMetricUnits
+            usesMetric: AppSettings.usesMetricUnits,
+            rangeMeters: fuelRangeMeters
         )
     }
 
@@ -1811,6 +1836,13 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// or tank-interval search changes.
     private var travelSideGasStations: [SuggestedStop] = [] {
         didSet { rebuildDistanceCache() }
+    }
+
+    /// Opposite-side pumps the pool added to fill a travel-side gap.
+    private(set) var acrossDividedHighwayGasIDs: Set<UUID> = []
+
+    func isAcrossDividedHighway(_ stop: SuggestedStop) -> Bool {
+        stop.category == .gas && acrossDividedHighwayGasIDs.contains(stop.id)
     }
 
     /// Travel-side gas stations that have food within `fuelFoodRadiusMeters`.
@@ -2436,12 +2468,25 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// recommendation. Recommended stops themselves are inside that window.
     /// A planned evening with no hotel is not a fill, so it is not an anchor.
     func isBeyondRemainingRange(distanceAlongRoute distance: CLLocationDistance) -> Bool {
+        // While the line or the gas search is still in flight the anchors
+        // are partial: `fuelStops` is empty or covers only the first part of
+        // the ride, so a long route flagged its destination "Past your
+        // range" during loading and dropped the flag once the plan landed
+        // (build 11, Atlanta to Denver). Only a finished plan decides range.
+        if isFuelCoverageInFlight { return false }
         if isRecommendedFuelDistance(distance) { return false }
         return Self.hopExceedsTank(
             distance: distance,
             anchors: remainingRangeAnchors,
             tank: fuelRangeMeters
         )
+    }
+
+    /// True while the route or its gas search has not finished. Range
+    /// captions wait for the final fuel plan instead of flashing on the
+    /// partial one.
+    var isFuelCoverageInFlight: Bool {
+        isCalculating || isSearchingGas
     }
 
     /// The hop from the farthest anchor still before `distance` exceeds the
@@ -2630,6 +2675,87 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     /// Evening 1, for the planning list and the test log. Checked key, how
     /// many options are still published, and whether a lookup is in flight.
+    /// Launch argument for the long-route smoke UI test. Off in normal
+    /// launches, so the probe below is never computed for a rider.
+    nonisolated static let rideSummaryProbeArgument = "-RideSummaryProbe"
+
+    /// UI-test-only fixed departure: `-RideDepartureOverride 2026-10-23T08:00`
+    /// (local wall-clock time; rolled forward to the next future day so
+    /// MapKit never routes for the past). Honored only alongside `-RideSummaryProbe`, so a normal
+    /// launch can never pin the clock. Lets iPhone and iPad runs split days
+    /// identically regardless of when the suite starts. Only the day-split
+    /// (hotel evening) schedule uses it: giving MapKit an explicit departure
+    /// changes the route itself (1,550 mi vs 1,622 mi Atlanta-Denver).
+    nonisolated static let departureOverrideArgument = "-RideDepartureOverride"
+
+    nonisolated static func departureOverride(
+        arguments: [String], timeZone: TimeZone = .current, now: Date = Date()
+    ) -> Date? {
+        guard arguments.contains(rideSummaryProbeArgument),
+              let i = arguments.firstIndex(of: departureOverrideArgument),
+              i + 1 < arguments.count else { return nil }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = timeZone
+        f.dateFormat = "yyyy-MM-dd'T'HH:mm"
+        guard var date = f.date(from: arguments[i + 1]) else { return nil }
+        // MapKit routes against the departure, and a past one changes the
+        // route itself. Keep the wall-clock time, roll to its next future day.
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = timeZone
+        while date <= now {
+            guard let next = cal.date(byAdding: .day, value: 1, to: date) else { return nil }
+            date = next
+        }
+        return date
+    }
+
+    nonisolated static let departureOverride: Date? =
+        departureOverride(arguments: ProcessInfo.processInfo.arguments)
+
+    /// One line the long-route smoke test reads: total miles, each riding
+    /// day's miles, which days carry "Past your range" on the route list and
+    /// in the gas list, hotel counts per evening, and whether a search is
+    /// still running.
+    var rideSummaryProbe: String {
+        let mile = AppSettings.metersPerMile
+        func miles(_ meters: CLLocationDistance) -> String {
+            String(format: "%.1f", max(0, meters) / mile)
+        }
+        let days = rideDays
+        let scale = summaryDistanceScale
+        let dayMiles = days.map { "\($0.dayNumber):\(miles(($0.endDistance - $0.startDistance) * scale))" }
+        func day(for distance: CLLocationDistance) -> Int? {
+            let tolerance = FuelStopRidingTime.sameStopToleranceMeters
+            return days.first { distance > $0.startDistance + tolerance && distance <= $0.endDistance + tolerance }?.dayNumber
+                ?? days.last?.dayNumber
+        }
+        var routeRange = Set<Int>()
+        if waypoints.count >= 2 {
+            for index in 1..<waypoints.count where waypointIsBeyondRemainingRange(at: index) {
+                if let number = day(for: waypointDistance(at: index)) { routeRange.insert(number) }
+            }
+        }
+        let gasRange = gasListStations.isEmpty
+            ? []
+            : gasListGrouping.days.filter(\.pastRange).map(\.dayNumber)
+        let hotels = hotelEvenings.map { "\($0.dayNumber):\($0.options.count)" }
+        let empty = hotelEvenings.filter { $0.options.isEmpty }.map { "\($0.dayNumber)" }
+        let loading = isCalculating || isSearchingGas || isSearchingHotels
+        let fuel = fuelStops.map { miles(cachedDistance(for: $0)) }
+        return [
+            "total=\(miles(totalDistanceMeters))",
+            "days=\(dayMiles.joined(separator: ","))",
+            "routePastRange=\(routeRange.sorted().map(String.init).joined(separator: ","))",
+            "gasPastRange=\(gasRange.map(String.init).joined(separator: ","))",
+            "hotels=\(hotels.joined(separator: ","))",
+            "noLodging=\(empty.joined(separator: ","))",
+            "tank=\(miles(fuelRangeMeters))",
+            "fuel=\(fuel.joined(separator: ","))",
+            "loading=\(loading)",
+        ].joined(separator: " ")
+    }
+
     var hotelLodgingProbe: String {
         let evening = hotelEvenings.first { $0.dayNumber == 1 } ?? hotelEvenings.first
         let day = evening?.dayNumber ?? 0
@@ -3765,13 +3891,34 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         let extraGas = suggestedStops.filter { $0.category == .gas }
         gasStations = Self.mergedGasCandidates([gasStations, extraGas])
         let travelSide = travelSideStations(from: gasStations)
-        travelSideGasStations = Self.preferredFuelPool(from: gasStations, travelSide: travelSide)
+        travelSideGasStations = Self.preferredFuelPool(
+            from: gasStations,
+            travelSide: travelSide,
+            totalDistance: totalDistanceMeters,
+            limit: fuelRangeMeters * Self.fuelSafetyFactor
+        )
+        Self.logFuelPoolHead(all: gasStations, travelSide: travelSide, pool: travelSideGasStations)
+        acrossDividedHighwayGasIDs = Self.acrossDividedHighwayIDs(
+            pool: travelSideGasStations, travelSide: travelSide
+        )
         // A finished empty corridor can gain chip hits afterwards. Those
         // stations are a real list, so the sheet must not keep saying none.
         if gasLoadState == .empty, !gasStations.isEmpty {
             gasLoadState = .loaded
         }
         replanFuelStops()
+    }
+
+    /// Station miles in the first 185 mi before and after the travel-side
+    /// filter. Evidence for "planner gap while stations exist" reports.
+    nonisolated static func logFuelPoolHead(
+        all: [SuggestedStop], travelSide: [SuggestedStop], pool: [SuggestedStop]
+    ) {
+        func head(_ list: [SuggestedStop]) -> String {
+            list.map { $0.distanceAlongRoute / 1609.344 }.filter { $0 <= 185 }.sorted()
+                .map { String(format: "%.0f", $0) }.joined(separator: ",")
+        }
+        gasLog.info("pool head all=\(all.count, privacy: .public) travelSide=\(travelSide.count, privacy: .public) pool=\(pool.count, privacy: .public) allMi=[\(head(all), privacy: .public)] travelSideMi=[\(head(travelSide), privacy: .public)] poolMi=[\(head(pool), privacy: .public)]")
     }
 
     /// De-duplicates gas stops by name + rounded coordinate.
@@ -3794,6 +3941,40 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         travelSide: [SuggestedStop]
     ) -> [SuggestedStop] {
         travelSide.isEmpty ? stations : travelSide
+    }
+
+    /// Pool pumps that are not on the travel side. Empty when the pool fell
+    /// back to every station because the travel side had none.
+    nonisolated static func acrossDividedHighwayIDs(
+        pool: [SuggestedStop], travelSide: [SuggestedStop]
+    ) -> Set<UUID> {
+        guard !travelSide.isEmpty else { return [] }
+        return Set(pool.map(\.id)).subtracting(travelSide.map(\.id))
+    }
+
+    /// Travel-side pumps, plus opposite-side pumps wherever the travel side
+    /// alone leaves a hop (start, pump, …, destination) longer than `limit`.
+    /// The planner and the gap check both read this pool, so a gap the
+    /// planner sees is a gap with no pump on either side.
+    nonisolated static func preferredFuelPool(
+        from stations: [SuggestedStop],
+        travelSide: [SuggestedStop],
+        totalDistance: CLLocationDistance,
+        limit: CLLocationDistance
+    ) -> [SuggestedStop] {
+        let base = preferredFuelPool(from: stations, travelSide: travelSide)
+        guard base.count < stations.count, limit > 0, totalDistance > 0 else { return base }
+        let ids = Set(base.map(\.id))
+        let marks = [0] + base.map(\.distanceAlongRoute).sorted() + [totalDistance]
+        var gaps: [(CLLocationDistance, CLLocationDistance)] = []
+        for i in 1..<marks.count where marks[i] - marks[i - 1] > limit {
+            gaps.append((marks[i - 1], marks[i]))
+        }
+        guard !gaps.isEmpty else { return base }
+        let fill = stations.filter { stop in
+            !ids.contains(stop.id) && gaps.contains { stop.distanceAlongRoute > $0.0 && stop.distanceAlongRoute < $0.1 }
+        }
+        return (base + fill).sorted { $0.distanceAlongRoute < $1.distanceAlongRoute }
     }
 
     /// True when the published fuel list still has a pump to add and this
@@ -4813,11 +4994,15 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         guard limit > 0, coverStep > 0, radius > 0, totalDistance > limit, maxCount > 0 else {
             return []
         }
-        // Only the stretch between two found stations. The ride before the
-        // first pump and after the last one is the coarse pass. A hop inside
-        // the reserve, and a hop that crosses a failed lookup, adds nothing.
-        let stations = stationDistances.filter { $0 > 0 && $0 < totalDistance }.sorted()
-        guard stations.count >= 2 else { return [] }
+        // A hop inside the reserve, and a hop that crosses a failed lookup,
+        // adds nothing.
+        // The start (full tank) and the destination bound the first and last
+        // hop, so the stretch before the first pump and after the last one is
+        // densified too (FUEL-1/FUEL-2). A route with no pumps at all is left
+        // to the coarse pass.
+        let found = stationDistances.filter { $0 > 0 && $0 < totalDistance }.sorted()
+        guard !found.isEmpty else { return [] }
+        let stations = [0] + found + [totalDistance]
 
         func covered(_ distance: CLLocationDistance, by points: [CLLocationDistance]) -> Bool {
             points.contains { abs($0 - distance) <= radius }

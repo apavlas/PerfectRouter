@@ -125,7 +125,10 @@ struct GasStationsSection: View {
             ? RoutePlannerViewModel.pastFullTankNotice
             : (stored == nil ? viewModel.fuelListNote(for: stop) : nil)
         let title = stored?.title ?? stop.name
-        let caption = stored?.caption ?? milesFromStartCaption(along)
+        let baseCaption = stored?.caption ?? milesFromStartCaption(along)
+        let caption = viewModel.isAcrossDividedHighway(stop)
+            ? baseCaption + " · " + GasListGrouping.acrossDividedHighwayTag
+            : baseCaption
         let accessibility = fuelAccessibility(
             stored.flatMap { label in
                 label.pastFullTank ? nil : RecommendedFuelAccessibility(
@@ -724,7 +727,10 @@ struct SuggestionsSection: View {
         let along = viewModel.distanceFromStart(of: stop)
         let stored = viewModel.fuelRowLabel(for: stop)
         let title = stored?.title ?? stop.name
-        let caption = stored?.caption ?? milesFromStartCaption(along)
+        let baseCaption = stored?.caption ?? milesFromStartCaption(along)
+        let caption = viewModel.isAcrossDividedHighway(stop)
+            ? baseCaption + " · " + GasListGrouping.acrossDividedHighwayTag
+            : baseCaption
         let accessibility = stored.flatMap { label -> RecommendedFuelAccessibility? in
             guard !label.pastFullTank else { return nil }
             return RecommendedFuelAccessibility(
@@ -734,9 +740,12 @@ struct SuggestionsSection: View {
                 caption: label.caption
             )
         }
-        let pastRange = stored?.pastFullTank == true
+        // FUEL-4: gas rows sit under a leg header that carries the one
+        // "Past your range" tag for the leg, so rows never mix tagged and
+        // untagged options.
+        let pastRange = stop.category != .gas && (stored?.pastFullTank == true
             || viewModel.isPastRangeFuelStop(stop)
-            || viewModel.isBeyondRemainingRange(distanceAlongRoute: along)
+            || viewModel.isBeyondRemainingRange(distanceAlongRoute: along))
         if stop.category.showsPlaceDescription {
             describedSuggestion(
                 stop,
