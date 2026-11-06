@@ -1008,4 +1008,29 @@ final class StopSelectionTests: XCTestCase {
         XCTAssertGreaterThan(d ?? .distantPast, Date())
         XCTAssertNil(RoutePlannerViewModel.departureOverride(arguments: [], timeZone: tz))
     }
+
+    func testUndoFoodStopRemovesAddedFoodAndKeepsFuel() {
+        let viewModel = RoutePlannerViewModel()
+        viewModel.waypoints = [
+            waypoint("Start", lat: 33.0, lon: -82.0),
+            Waypoint(
+                name: "Gas-N-Go",
+                coordinate: CLLocationCoordinate2D(latitude: 33.4, longitude: -81.6),
+                isGasFill: true
+            ),
+            waypoint("End", lat: 34.0, lon: -81.0),
+        ]
+
+        viewModel.addStop(from: suggestion("Diner", category: .food, lat: 33.5, lon: -81.5))
+
+        XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "Gas-N-Go", "Diner", "End"])
+        XCTAssertNotNil(viewModel.foodStopUndo)
+        XCTAssertEqual(viewModel.foodStopUndo?.name, "Diner")
+
+        viewModel.undoFoodStop()
+
+        XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "Gas-N-Go", "End"])
+        XCTAssertTrue(viewModel.waypoints[1].isGasFill)
+        XCTAssertNil(viewModel.foodStopUndo)
+    }
 }

@@ -76,4 +76,46 @@ final class FuelFoodPairingTests: XCTestCase {
 
         XCTAssertTrue(ranked.isEmpty)
     }
+
+    func testPairRowsStayEmptyUntilPairingFinishes() {
+        XCTAssertTrue(FuelFoodPairRows.rows(for: nil).isEmpty)
+    }
+
+    func testPairRowsShowNoFoodNearbyWhenEmpty() {
+        let fuel = SuggestedStop(
+            name: "Pump",
+            coordinate: origin,
+            category: .gas,
+            distanceAlongRoute: 0
+        )
+        let pair = FuelFoodStop(fuelStop: fuel, nearbyFood: [])
+        let rows = FuelFoodPairRows.rows(for: pair)
+        XCTAssertEqual(rows.count, 1)
+        guard case .noneNearby = rows[0] else {
+            return XCTFail("expected noneNearby, got \(rows)")
+        }
+    }
+
+    func testPairRowsListFoodWhenPresent() {
+        let fuel = SuggestedStop(
+            name: "Pump",
+            coordinate: origin,
+            category: .gas,
+            distanceAlongRoute: 0
+        )
+        let diner = food("Diner", latitudeOffset: 0.001)
+        let pair = FuelFoodStop(fuelStop: fuel, nearbyFood: [diner])
+        let rows = FuelFoodPairRows.rows(for: pair)
+        XCTAssertEqual(rows.count, 1)
+        guard case .food(let listed) = rows[0] else {
+            return XCTFail("expected food row, got \(rows)")
+        }
+        XCTAssertEqual(listed.name, "Diner")
+    }
+
+    func testFoodCaptionUsesOffRouteWhenDetourIsReal() {
+        XCTAssertEqual(FuelFoodPairRows.foodCaption(detourMeters: 40), "at the pump")
+        let caption = FuelFoodPairRows.foodCaption(detourMeters: 1_600)
+        XCTAssertTrue(caption.contains("off route"), caption)
+    }
 }

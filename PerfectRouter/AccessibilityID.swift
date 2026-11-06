@@ -79,4 +79,12 @@ enum AccessibilityID {
     static func rideHighlightDescription(_ name: String) -> String { "highlight.\(name).description" }
     /// The same published text, unclipped, in the sheet.
     static func rideHighlightDescriptionFull(_ name: String) -> String { "highlight.\(name).description.full" }
+
+    /// Nested food under a recommended fuel stop.
+    static func foodNearFuel(_ name: String) -> String { "foodNearFuel.\(name)" }
+    /// Honest empty state under a fuel stop with no nearby food (FP-2).
+    static let noFoodNearby = "noFoodNearby"
+    /// Quiet banner after a food stop is added (FP-3).
+    static let foodUndoBanner = "foodUndoBanner"
+    static let foodUndoButton = "foodUndoButton"
 }

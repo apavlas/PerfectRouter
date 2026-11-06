@@ -40,6 +40,7 @@ enum UITestFixture {
         var eastMeters: CLLocationDistance
         var searchable: Bool
         var gasStation: Bool
+        var food: Bool = false
     }
 
     /// In-range recommendations for a 100-mile tank on `routeMiles`.
@@ -67,6 +68,10 @@ enum UITestFixture {
         Place(name: "Alt 200", milesNorth: 200, eastMeters: 800, searchable: false, gasStation: true),
         Place(name: "Alt 210", milesNorth: 210, eastMeters: 800, searchable: false, gasStation: true),
         Place(name: "Test Destination", milesNorth: routeMiles, eastMeters: 0, searchable: true, gasStation: false),
+        // Food within a short walk of recommended pumps (FP-1). Shell has
+        // none so the nested row can show "No food nearby" (FP-2).
+        Place(name: "Pilot Diner", milesNorth: 80, eastMeters: 1_100, searchable: false, gasStation: false, food: true),
+        Place(name: "On Route Cafe", milesNorth: 150, eastMeters: 120, searchable: false, gasStation: false, food: true),
     ]
 
     /// Sights the stub returns for an attraction search. Far enough from the
@@ -500,9 +505,34 @@ final class UITestStubServices: DirectionsProviding, StopSearching, PlaceSearchi
         near coordinate: CLLocationCoordinate2D,
         alongPolylines legPolylines: [[CLLocationCoordinate2D]]
     ) async -> [SuggestedStop] {
-        _ = coordinate
-        _ = legPolylines
-        return []
+        let origin = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
+        var candidates: [SuggestedStop] = []
+        for place in UITestFixture.places where place.food {
+            let foodCoordinate = UITestFixture.coordinate(for: place)
+            let distance = origin.distance(
+                from: CLLocation(latitude: foodCoordinate.latitude, longitude: foodCoordinate.longitude)
+            )
+            guard distance <= RoutePlannerViewModel.fuelFoodRadiusMeters else { continue }
+            candidates.append(SuggestedStop(
+                name: place.name,
+                coordinate: foodCoordinate,
+                category: .food,
+                distanceAlongRoute: RouteGeometry.distanceAlongRoute(
+                    of: foodCoordinate,
+                    alongPolylines: legPolylines
+                ),
+                detourMeters: RouteGeometry.distanceFromRoute(
+                    of: foodCoordinate,
+                    alongPolylines: legPolylines
+                )
+            ))
+        }
+        return StopSuggestionService.rankFood(
+            candidates,
+            near: coordinate,
+            radiusMeters: RoutePlannerViewModel.fuelFoodRadiusMeters,
+            maxResults: 3
+        )
     }
 
     func searchPlaces(query: String, near region: MKCoordinateRegion) async -> [MKMapItem] {
