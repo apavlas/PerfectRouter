@@ -24,6 +24,37 @@ struct GasListGrouping: Equatable {
         var distance: CLLocationDistance
         var isRecommended: Bool
         var pastRange: Bool
+        /// Opposite-side pump that fills a travel-side gap.
+        var acrossDividedHighway: Bool = false
+    }
+
+    /// Alternates must be reachable from the previous fill with this share
+    /// of the tank (99 mi on a 100 mi tank is out).
+    static let alternateReachFraction = 0.9
+    /// Alternates this close to the start (share of the tank) are dropped
+    /// unless they are the leg's only option: the rider left on a full tank.
+    static let earlyAlternateFraction = 0.2
+
+    static let acrossDividedHighwayTag = "Across divided highway"
+
+    /// Leg alternates kept for display. `start` is the previous fill (or
+    /// the route start). The recommended stop is never passed in here.
+    static func eligibleAlternates(
+        _ alternates: [Station],
+        legStart start: CLLocationDistance,
+        hasRecommended: Bool,
+        rangeMeters: CLLocationDistance
+    ) -> [Station] {
+        guard rangeMeters > 0 else { return alternates }
+        let reach = rangeMeters * alternateReachFraction
+        let reachable = alternates.filter { $0.distance - start <= reach }
+        // A leg with no pick and nothing in reach is a past-range leg: its
+        // pumps are the only option and carry the leg's warning (FUEL-3).
+        if reachable.isEmpty && !hasRecommended { return alternates }
+        let early = rangeMeters * earlyAlternateFraction
+        let notEarly = reachable.filter { $0.distance >= early }
+        if notEarly.isEmpty && !hasRecommended { return reachable }
+        return notEarly
     }
 
     /// Planned evening, in meters along the route. The arrival day is included.
@@ -145,7 +176,8 @@ struct GasListGrouping: Equatable {
         fillDistances: [CLLocationDistance],
         daySpans: [DaySpan],
         totalDistance: CLLocationDistance,
-        usesMetric: Bool
+        usesMetric: Bool,
+        rangeMeters: CLLocationDistance = 0
     ) -> GasListGrouping {
         let tolerance = FuelStopRidingTime.sameStopToleranceMeters
         let finite = stations.filter { $0.distance.isFinite }
@@ -188,7 +220,8 @@ struct GasListGrouping: Equatable {
                 end: end,
                 stations: buckets[index],
                 dayNumber: dayNumber(for: start, spans: daySpans, tolerance: tolerance),
-                usesMetric: usesMetric
+                usesMetric: usesMetric,
+                rangeMeters: rangeMeters
             )
             legs.append(built)
         }
@@ -235,16 +268,22 @@ struct GasListGrouping: Equatable {
         end: CLLocationDistance,
         stations: [Station],
         dayNumber: Int,
-        usesMetric: Bool
+        usesMetric: Bool,
+        rangeMeters: CLLocationDistance
     ) -> Leg {
         let recommended = stations
             .filter(\.isRecommended)
             .min { abs($0.distance - end) < abs($1.distance - end) }
         let anchor = recommended?.distance ?? end
-        let alternates = stations.filter { station in
-            guard let recommended else { return true }
-            return station.id != recommended.id
-        }
+        let alternates = eligibleAlternates(
+            stations.filter { station in
+                guard let recommended else { return true }
+                return station.id != recommended.id
+            },
+            legStart: start,
+            hasRecommended: recommended != nil,
+            rangeMeters: rangeMeters
+        )
         let nearest = alternates.sorted { lhs, rhs in
             let left = abs(lhs.distance - anchor)
             let right = abs(rhs.distance - anchor)

@@ -278,6 +278,18 @@ struct ContentView: View {
             // when a replan starts and ends.
             mapTopChrome
         }
+        .overlay(alignment: .topTrailing) {
+            // Long-route smoke test only (-RideSummaryProbe).
+            if ProcessInfo.processInfo.arguments.contains(RoutePlannerViewModel.rideSummaryProbeArgument) {
+                Text(verbatim: viewModel.rideSummaryProbe)
+                    .font(.system(size: 1))
+                    .foregroundStyle(.clear)
+                    .frame(width: 8, height: 8)
+                    .accessibilityIdentifier("rideSummaryProbe")
+                    .accessibilityLabel(viewModel.rideSummaryProbe)
+                    .allowsHitTesting(false)
+            }
+        }
         .overlay(alignment: .topLeading) {
             // Always in the tree. Hidden until a route is framed, then the
             // label is the camera center ("lat,lon").
