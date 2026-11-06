@@ -48,6 +48,23 @@ struct RideSummarySection: View {
                 } else {
                     FocusPlaceholderRow()
                 }
+                if let undo = viewModel.foodStopUndo {
+                    HStack {
+                        Text("Added \(undo.name)")
+                            .font(.subheadline)
+                        Spacer()
+                        Button("Undo") {
+                            viewModel.undoFoodStop()
+                        }
+                        .font(.subheadline.weight(.semibold))
+                        .accessibilityIdentifier(AccessibilityID.foodUndoButton)
+                    }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier(AccessibilityID.foodUndoBanner)
+                    .accessibilityLabel("Added \(undo.name)")
+                } else {
+                    FocusPlaceholderRow()
+                }
                 // Mount the fuel list only once it has rows. An empty
                 // FuelPlanRows is a focus container with no children, and
                 // iPad aborts in UIFocusSystem when a replan clears the
@@ -199,6 +216,7 @@ private struct FuelPlanRow: Identifiable {
     enum Kind {
         case recommended(SuggestedStop, number: Int)
         case food(SuggestedStop)
+        case noFoodNearby(fuelStopID: UUID)
         case gap(FuelGap)
         case pastRange(SuggestedStop)
     }
@@ -231,8 +249,16 @@ private struct FuelPlanRows: View {
             case .recommended(let fuelStop):
                 number += 1
                 rows.append(FuelPlanRow(id: entry.id, kind: .recommended(fuelStop, number: number)))
-                for food in foodNearFuelStop(fuelStop.id) {
-                    rows.append(FuelPlanRow(id: "food-\(food.id.uuidString)", kind: .food(food)))
+                for nested in FuelFoodPairRows.rows(for: foodPair(for: fuelStop.id)) {
+                    switch nested {
+                    case .food(let food):
+                        rows.append(FuelPlanRow(id: "food-\(food.id.uuidString)", kind: .food(food)))
+                    case .noneNearby:
+                        rows.append(FuelPlanRow(
+                            id: "nofood-\(fuelStop.id.uuidString)",
+                            kind: .noFoodNearby(fuelStopID: fuelStop.id)
+                        ))
+                    }
                 }
             case .gap(let gap):
                 rows.append(FuelPlanRow(id: entry.id, kind: .gap(gap)))
@@ -288,18 +314,38 @@ private struct FuelPlanRows: View {
                 viewModel.addStop(from: food)
             } label: {
                 HStack {
-                    Label(food.name, systemImage: "fork.knife")
+                    VStack(alignment: .leading, spacing: 2) {
+                        Label(food.name, systemImage: "fork.knife")
+                        Text(FuelFoodPairRows.foodCaption(detourMeters: food.detourMeters))
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
                     Spacer()
                     Image(systemName: "plus.circle.fill")
                         .foregroundStyle(.blue)
                 }
                 .font(.subheadline)
                 .padding(.leading)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
+            .accessibilityIdentifier(AccessibilityID.foodNearFuel(food.name))
+            .accessibilityLabel("\(food.name), \(FuelFoodPairRows.foodCaption(detourMeters: food.detourMeters))")
             .sidebarStopHighlight(selected: viewModel.highlightedStopID == food.id)
             .id(food.id)
+        case .noFoodNearby(_):
+            HStack {
+                Label("No food nearby", systemImage: "fork.knife")
+                Spacer(minLength: 0)
+            }
+            .font(.subheadline)
+            .foregroundStyle(.tertiary)
+            .padding(.leading)
+            .contentShape(Rectangle())
+            .accessibilityElement(children: .ignore)
+            .accessibilityIdentifier(AccessibilityID.noFoodNearby)
+            .accessibilityLabel("No food nearby")
         case .gap(let gap):
             Label(gap.warning, systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
@@ -350,7 +396,7 @@ private struct FuelPlanRows: View {
             .foregroundStyle(buffered ? Color.green : Color.secondary)
     }
 
-    private func foodNearFuelStop(_ fuelStopID: UUID) -> [SuggestedStop] {
-        viewModel.fuelFoodStops.first { $0.id == fuelStopID }?.nearbyFood ?? []
+    private func foodPair(for fuelStopID: UUID) -> FuelFoodStop? {
+        viewModel.fuelFoodStops.first { $0.id == fuelStopID }
     }
 }

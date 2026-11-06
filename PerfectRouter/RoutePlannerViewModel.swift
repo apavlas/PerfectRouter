@@ -301,6 +301,12 @@ struct FuelRowLabelSet: Equatable, Sendable {
 
 /// Visible fuel rows and the labels those rows draw. One value, so a list
 /// update cannot show a fuel-stop number with another row's mile caption.
+/// Quiet undo chip after a food stop is added from a fuel-pair row or pin.
+struct FoodStopUndo: Equatable {
+    let waypointID: UUID
+    let name: String
+}
+
 struct FuelListPresentation {
     var visibleEntries: [FuelPlanEntry] = []
     var labels: FuelRowLabelSet = FuelRowLabelSet()
@@ -1856,9 +1862,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         didSet { publishFuelPlanSnapshot() }
     }
 
-    /// Each recommended fuel stop paired with food found right next to it, so a
-    /// rider can refuel and eat in one stop. Recomputed whenever `fuelStops`
-    /// change by `refreshFoodNearFuelStops()`.
+    /// Each recommended (or applied) fuel stop paired with food found right
+    /// next to it, so a rider can refuel and eat in one stop. Recomputed
+    /// whenever those stops change by `refreshFoodNearFuelStops()`.
     var fuelFoodStops: [FuelFoodStop] = []
 
     /// IDs of the fuel stops the food pairing was last computed for. Lets us
@@ -1866,6 +1872,11 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// but the chosen stops haven't actually changed — e.g. small tank-range
     /// tweaks that don't move any stop.
     private var pairedFuelStopIDs: Set<UUID> = []
+
+    /// Quiet banner after a food stop is added (FP-3). Nil when nothing to undo.
+    private(set) var foodStopUndo: FoodStopUndo?
+
+    private var foodStopUndoClearTask: Task<Void, Never>?
 
     /// A handful of recommended places of interest along the ride — low-detour
     /// sights spread across the route that make good stops. Recomputed after
@@ -2162,7 +2173,39 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             appliedFoodKeys.insert(Self.coordinateKey(suggestion.coordinate))
         }
         insertStop(suggestion)
+        if suggestion.category == .food,
+           let added = waypoints.first(where: { Self.sameCoordinate($0.coordinate, suggestion.coordinate) }) {
+            presentFoodStopUndo(waypointID: added.id, name: added.name)
+        }
         scheduleRecalculation()
+    }
+
+    /// Removes the food stop named on the quiet banner and re-routes.
+    func undoFoodStop() {
+        guard let undo = foodStopUndo else { return }
+        clearFoodStopUndo()
+        guard let index = waypoints.firstIndex(where: { $0.id == undo.waypointID }) else { return }
+        let removed = waypoints.remove(at: index)
+        appliedFoodKeys.remove(Self.coordinateKey(removed.coordinate))
+        scheduleRecalculation()
+    }
+
+    func clearFoodStopUndo() {
+        foodStopUndoClearTask?.cancel()
+        foodStopUndoClearTask = nil
+        foodStopUndo = nil
+    }
+
+    private func presentFoodStopUndo(waypointID: UUID, name: String) {
+        foodStopUndoClearTask?.cancel()
+        foodStopUndo = FoodStopUndo(waypointID: waypointID, name: name)
+        foodStopUndoClearTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled else { return }
+            if foodStopUndo?.waypointID == waypointID {
+                foodStopUndo = nil
+            }
+        }
     }
 
     /// Checks or unchecks a gas stop. Does not change waypoints or legs.
@@ -2617,6 +2660,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         // The sheet stays where the rider left it. Scrolling to the new
         // waypoint reopened the gas list under their thumb.
         scheduleRecalculation()
+        // Applied fills join the food-pairing set (FP-4). The replan also
+        // refreshes; this covers the gap before the new line publishes.
+        Task { await refreshFoodNearFuelStops() }
     }
 
     /// Checks or unchecks a hotel. Does not change waypoints or legs.
@@ -2932,6 +2978,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     }
 
     func removeWaypoint(at offsets: IndexSet) {
+        let removedIDs = Set(offsets.map { waypoints[$0].id })
+        if let undo = foodStopUndo, removedIDs.contains(undo.waypointID) {
+            clearFoodStopUndo()
+        }
         waypoints.remove(atOffsets: offsets)
         scheduleRecalculation()
     }
@@ -4866,21 +4916,51 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// per stop, so cost scales with the number of refuels (typically 1–3) and
     /// not the route length. Skips the work entirely when the set of fuel stops
     /// hasn't changed since the last pairing.
+    /// Recommended fuel stops plus gas fills already on the ride. Pairing
+    /// covers both so food stays under a pump after Apply (FP-1 / FP-4).
+    private var foodPairingFuelStops: [SuggestedStop] {
+        var seen = Set<String>()
+        var stops: [SuggestedStop] = []
+        for stop in fuelStops + appliedGasFillStops {
+            let key = Self.coordinateKey(stop.coordinate)
+            guard seen.insert(key).inserted else { continue }
+            stops.append(stop)
+        }
+        return stops
+    }
+
+    /// Map pins for food paired to fuel. Skips places already on the ride.
+    var foodNearFuelPins: [SuggestedStop] {
+        var seen = Set<String>()
+        var pins: [SuggestedStop] = []
+        for pair in fuelFoodStops {
+            for food in pair.nearbyFood {
+                guard !isStopOnRoute(food) else { continue }
+                let key = Self.coordinateKey(food.coordinate)
+                guard seen.insert(key).inserted else { continue }
+                pins.append(food)
+            }
+        }
+        return pins
+    }
+
     func refreshFoodNearFuelStops() async {
-        let currentIDs = Set(fuelStops.map(\.id))
+        let targets = foodPairingFuelStops
+        let currentIDs = Set(targets.map(\.id))
         guard currentIDs != pairedFuelStopIDs else { return }
         pairedFuelStopIDs = currentIDs
 
-        guard !fuelStops.isEmpty else {
+        guard !targets.isEmpty else {
             fuelFoodStops = []
             return
         }
 
         // Project food onto the same polylines used everywhere else, computed
-        // once and reused across the per-stop searches.
+        // once and reused across the per-stop searches. Searches run off the
+        // main actor via MapKit; we only publish the finished array.
         let legPolylines = legs.map { RouteGeometry.coordinates(of: $0.polyline) }
         var paired: [FuelFoodStop] = []
-        for stop in fuelStops {
+        for stop in targets {
             let food = await searchFood(
                 near: stop.coordinate,
                 alongPolylines: legPolylines

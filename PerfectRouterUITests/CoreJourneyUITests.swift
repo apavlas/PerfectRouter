@@ -142,6 +142,79 @@ final class CoreJourneyUITests: XCTestCase {
         assertNoEmptyGasMessage(in: app)
     }
 
+
+    /// Food nested under recommended fuel (FP-1 / FP-2 / FP-3). Pilot and
+    /// On Route get a diner; Shell gets the honest empty row. Adding food
+    /// keeps gas on the ride (Apply after the food add).
+    func testFoodPairedUnderRecommendedFuelStops() {
+        let app = launch()
+        planFixedRoute(in: app)
+
+        let pilotFood = revealPlanningRow("foodNearFuel.Pilot Diner", in: app)
+        XCTAssertTrue(pilotFood.exists, diagnosticTree(app))
+        XCTAssertTrue(pilotFood.label.contains("Pilot Diner"), pilotFood.label)
+        XCTAssertTrue(pilotFood.label.contains("off route") || pilotFood.label.contains("at the pump"), pilotFood.label)
+
+        let cafe = revealPlanningRow("foodNearFuel.On Route Cafe", in: app)
+        XCTAssertTrue(cafe.exists, diagnosticTree(app))
+
+        XCTAssertTrue(revealPlanningRow("fuelStop.Shell Knoxville.unchecked", in: app).exists, diagnosticTree(app))
+        let none = revealPlanningRow("noFoodNearby", in: app)
+        XCTAssertTrue(none.exists, diagnosticTree(app))
+        XCTAssertTrue(none.label.contains("No food nearby"), none.label)
+
+        snapFoodPair("01_food_nested", app)
+
+        scrollUntilInsidePlanningList(pilotFood, in: app)
+        pilotFood.tap()
+
+        // Undo chip is published synchronously; check before the replan finishes
+        // and before the 5s auto-clear.
+        let undoBanner = identified("foodUndoBanner", in: app)
+        XCTAssertTrue(undoBanner.waitForExistence(timeout: 3), diagnosticTree(app))
+        XCTAssertTrue(undoBanner.label.contains("Pilot Diner"), undoBanner.label)
+        snapFoodPair("02_food_added_undo", app)
+
+        let committed = identified("committedWaypoints", in: app)
+        XCTAssertTrue(committed.waitForExistence(timeout: 3), diagnosticTree(app))
+        XCTAssertTrue(committed.label.contains("Pilot Diner"), committed.label)
+
+        waitForBannerToFinish(in: app)
+        XCTAssertTrue(waypointNames(in: app).contains("Pilot Diner"), diagnosticTree(app))
+
+        // Add the recommended fills after food is on the ride — fuel joins,
+        // food stays (FP-3 / FP-4). The replan may reshuffle which pumps are
+        // recommended, so use Select Recommended rather than a fixed name.
+        let gasBefore = waypointNames(in: app).count
+        let select = revealPlanningRow("selectRecommended", in: app)
+        XCTAssertTrue(select.exists, diagnosticTree(app))
+        scrollUntilInsidePlanningList(select, in: app)
+        select.tap()
+        // Select Recommended inserts the fills itself (one replan, no Apply).
+        waitForBannerToFinish(in: app)
+        var names = waypointNames(in: app)
+        for _ in 0..<20 where names.count <= gasBefore {
+            sleep(1)
+            waitForBannerToFinish(in: app)
+            names = waypointNames(in: app)
+        }
+        XCTAssertGreaterThan(names.count, gasBefore, diagnosticTree(app))
+        XCTAssertTrue(names.contains("Pilot Diner"), diagnosticTree(app))
+        snapFoodPair("03_after_apply_fuel_kept", app)
+    }
+
+    private func snapFoodPair(_ name: String, _ app: XCUIApplication) {
+        let shot = app.screenshot()
+        let attachment = XCTAttachment(screenshot: shot)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        guard let dir = ProcessInfo.processInfo.environment["SMOKE_SHOTS_DIR"], !dir.isEmpty else { return }
+        let url = URL(fileURLWithPath: dir, isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        try? shot.pngRepresentation.write(to: url.appendingPathComponent("\(name).png"))
+    }
+
     /// Suggested Gas starts open, groups the stub ride by the day a leg
     /// starts, and keeps a check when the rider closes the list. Apply does
     /// not open a section the rider closed, or close one they opened.

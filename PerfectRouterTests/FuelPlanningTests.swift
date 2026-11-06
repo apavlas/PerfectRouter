@@ -91,6 +91,27 @@ final class FuelPlanningTests: XCTestCase {
         XCTAssertTrue(gap)
     }
 
+    
+    /// Meal + food preference can pull the first recommended fill well under
+    /// the comfort edge (e.g. ~25 mi on a 100 mi tank). Documented as fuel
+    /// UX debt after B12; not changed in the food-pair PR.
+    func testMealFoodPreferenceCanPickEarlyFirstStop() {
+        let earlyFood = gas(at: 25 * AppSettings.metersPerMile)
+        let later = gas(at: 85 * AppSettings.metersPerMile)
+        let (stops, _) = RoutePlannerViewModel.planFuelStops(
+            from: [earlyFood, later],
+            totalDistance: 250 * AppSettings.metersPerMile,
+            range: 100 * AppSettings.metersPerMile,
+            preferringFoodAt: [earlyFood.id],
+            departure: utcDate(hour: 11, minute: 30),
+            totalTravelTime: 5 * 60 * 60,
+            calendar: utcCalendar
+        )
+        // Farthest-with-food in the first window is the early pump when lunch
+        // lands on that target. Later work may floor this at ~20% of the tank.
+        XCTAssertEqual(stops.first?.id, earlyFood.id)
+    }
+
     func testFlagsFuelGapWhenNoReachableStation() {
         // Stations only near the start; a long dry stretch follows.
         let (stops, hasGap) = RoutePlannerViewModel.planFuelStops(

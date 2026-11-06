@@ -428,6 +428,27 @@ struct ContentView: View {
                 }
             }
 
+            // Food paired to recommended fuel — fork pins the rider can tap
+            // the same way as a nested list row (FP-3).
+            if !foodNearFuelPins.isEmpty {
+                ForEach(foodNearFuelPins) { stop in
+                    Annotation(stop.name, coordinate: stop.coordinate) {
+                        Button {
+                            handlePinTap(id: stop.id, usesSidebar: usesSidebar) {
+                                viewModel.addStop(from: stop)
+                            }
+                        } label: {
+                            Image(systemName: "fork.knife")
+                                .font(.caption)
+                                .padding(6)
+                                .background(.orange.opacity(0.9), in: Circle())
+                                .foregroundStyle(.white)
+                        }
+                    }
+                    .tag(stop.id)
+                }
+            }
+
             // Recommended fuel stops (one per tank) — drawn last so they sit on
             // top, and highlighted (larger, ringed green pump) so they're easy
             // to pick out in any category. Exactly one marker per recommended
@@ -992,10 +1013,14 @@ struct ContentView: View {
     }
 
     private var categoryPins: [SuggestedStop] {
-        viewModel.suggestedStops.filter {
+        let pairedFoodKeys = Set(viewModel.foodNearFuelPins.map {
+            RoutePlannerViewModel.coordinateKey($0.coordinate)
+        })
+        return viewModel.suggestedStops.filter {
             !viewModel.isRecommendedFuelStop($0)
                 && !viewModel.isRideHighlight($0)
                 && !viewModel.isStopOnRoute($0)
+                && !pairedFoodKeys.contains(RoutePlannerViewModel.coordinateKey($0.coordinate))
         }
     }
 
@@ -1005,6 +1030,10 @@ struct ContentView: View {
 
     private var fuelPins: [SuggestedStop] {
         viewModel.fuelStops.filter { !viewModel.isStopOnRoute($0) }
+    }
+
+    private var foodNearFuelPins: [SuggestedStop] {
+        viewModel.foodNearFuelPins
     }
 
     private func markerIcon(for index: Int) -> String {
