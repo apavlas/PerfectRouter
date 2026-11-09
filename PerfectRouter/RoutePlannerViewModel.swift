@@ -1023,7 +1023,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         savedRoutes = savedRouteStore.load()
         riderGroups = riderGroupStore.load()
         // Seed session defaults from the rider's saved preferences.
-        fuelRangeMeters = AppSettings.defaultFuelRangeMeters
+        fuelRangeMeters = Self.tankMetersOverride(arguments: ProcessInfo.processInfo.arguments)
+            ?? AppSettings.defaultFuelRangeMeters
         routeStyle = AppSettings.defaultRouteStyle
         suggestionService.sampleIntervalMeters = AppSettings.searchIntervalMeters
         // If already authorized from a previous launch, begin tracking now.
@@ -1061,7 +1062,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     func applySettings(seedFuelRange: Bool = false) {
         suggestionService.sampleIntervalMeters = AppSettings.searchIntervalMeters
         if seedFuelRange {
-            fuelRangeMeters = AppSettings.defaultFuelRangeMeters
+            fuelRangeMeters = Self.tankMetersOverride(arguments: ProcessInfo.processInfo.arguments)
+                ?? AppSettings.defaultFuelRangeMeters
         }
         // Pick up a route style changed in Settings and re-plan if it differs.
         let newStyle = AppSettings.defaultRouteStyle
@@ -2733,6 +2735,19 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// (hotel evening) schedule uses it: giving MapKit an explicit departure
     /// changes the route itself (1,550 mi vs 1,622 mi Atlanta-Denver).
     nonisolated static let departureOverrideArgument = "-RideDepartureOverride"
+
+    /// UI-test-only tank: `-RideTankMiles 170`. Honored only with
+    /// `-RideSummaryProbe` so a normal launch cannot pin the slider.
+    nonisolated static let tankMilesOverrideArgument = "-RideTankMiles"
+
+    nonisolated static func tankMetersOverride(arguments: [String]) -> CLLocationDistance? {
+        guard arguments.contains(rideSummaryProbeArgument),
+              let i = arguments.firstIndex(of: tankMilesOverrideArgument),
+              i + 1 < arguments.count,
+              let miles = Double(arguments[i + 1]),
+              miles > 0 else { return nil }
+        return miles * AppSettings.metersPerMile
+    }
 
     nonisolated static func departureOverride(
         arguments: [String], timeZone: TimeZone = .current, now: Date = Date()

@@ -92,7 +92,13 @@ final class B11LongRouteSmokeUITests: XCTestCase {
 
     func testAtlantaToDenverLongRouteSmoke() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-RideSummaryProbe", "-RideDepartureOverride", "2026-10-23T08:00"]
+        // 170 mi tank: build-12 / FUEL-7 check (20% floor ≈ 34 mi) so the
+        // early ~25 mi meal-food pump is out of the first-fill window.
+        app.launchArguments = [
+            "-RideSummaryProbe",
+            "-RideDepartureOverride", "2026-10-23T08:00",
+            "-RideTankMiles", "170",
+        ]
         addUIInterruptionMonitor(withDescription: "Location") { alert in
             for title in ["Allow While Using App", "Allow Once", "OK"] where alert.buttons[title].exists {
                 alert.buttons[title].tap()
