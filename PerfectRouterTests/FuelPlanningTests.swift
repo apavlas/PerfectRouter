@@ -92,10 +92,11 @@ final class FuelPlanningTests: XCTestCase {
     }
 
     
-    /// Meal + food preference can pull the first recommended fill well under
-    /// the comfort edge (e.g. ~25 mi on a 100 mi tank). Documented as fuel
-    /// UX debt after B12; not changed in the food-pair PR.
-    func testMealFoodPreferenceCanPickEarlyFirstStop() {
+    /// FUEL-7 / FUEL-8: meal + food preference may choose among pumps past the
+    /// early floor (~35% of tank) but must not pull the first fill into that
+    /// zone when a later in-window option exists. On a 100 mi tank the floor
+    /// is ~mile 35, so a lunch food pump at 25 mi loses to the 85 mi gas pick.
+    func testMealFoodPreferenceDoesNotPullFirstStopIntoEarlyTankZone() {
         let earlyFood = gas(at: 25 * AppSettings.metersPerMile)
         let later = gas(at: 85 * AppSettings.metersPerMile)
         let (stops, _) = RoutePlannerViewModel.planFuelStops(
@@ -107,9 +108,88 @@ final class FuelPlanningTests: XCTestCase {
             totalTravelTime: 5 * 60 * 60,
             calendar: utcCalendar
         )
-        // Farthest-with-food in the first window is the early pump when lunch
-        // lands on that target. Later work may floor this at ~20% of the tank.
+        XCTAssertEqual(stops.first?.id, later.id)
+        XCTAssertFalse(stops.contains { $0.id == earlyFood.id })
+    }
+
+    /// FUEL-7 exception: when every reachable pump sits in the first ~35% of
+    /// the tank, that early fill is still the stop — no later option exists.
+    func testEarlyFirstStopAllowedWhenNoLaterOptionInTank() {
+        let earlyFood = gas(at: 25 * AppSettings.metersPerMile)
+        let (stops, hasGap) = RoutePlannerViewModel.planFuelStops(
+            from: [earlyFood],
+            totalDistance: 250 * AppSettings.metersPerMile,
+            range: 100 * AppSettings.metersPerMile,
+            preferringFoodAt: [earlyFood.id],
+            departure: utcDate(hour: 11, minute: 30),
+            totalTravelTime: 5 * 60 * 60,
+            calendar: utcCalendar
+        )
         XCTAssertEqual(stops.first?.id, earlyFood.id)
+        XCTAssertTrue(hasGap)
+    }
+
+    /// Build-12 shape on a 170 mi tank: the ~25 mi food pump sits inside the
+    /// first 35% (~60 mi). Lunch preference must not keep it when a later
+    /// in-window pump exists; the first fill moves past that early pump.
+    func testBuild12MealFoodDoesNotKeepTwentyFiveMileFirstStop() {
+        let mile = AppSettings.metersPerMile
+        let earlyFood = gas(at: 25 * mile)
+        let later = gas(at: 140 * mile)
+        let (stops, _) = RoutePlannerViewModel.planFuelStops(
+            from: [earlyFood, later],
+            totalDistance: 1_100 * mile,
+            range: 170 * mile,
+            preferringFoodAt: [earlyFood.id],
+            departure: utcDate(hour: 11, minute: 30),
+            totalTravelTime: 18 * 60 * 60,
+            calendar: utcCalendar
+        )
+        XCTAssertEqual(stops.first?.id, later.id)
+        XCTAssertGreaterThanOrEqual(
+            (stops.first?.distanceAlongRoute ?? 0) / mile,
+            170 * RoutePlannerViewModel.fuelFirstFillEarlyFloorFactor - 0.5
+        )
+    }
+
+    /// On a 100 mi tank the 35% floor is mile 35. A lunch food pump at 30 mi
+    /// loses to an 80 mi gas pick inside the comfort window.
+    func testHundredMileTankFloorIsThirtyFiveMiles() {
+        let mile = AppSettings.metersPerMile
+        XCTAssertEqual(RoutePlannerViewModel.fuelFirstFillEarlyFloorFactor, 0.35, accuracy: 0.0001)
+        let earlyFood = gas(at: 30 * mile)
+        let later = gas(at: 80 * mile)
+        let (stops, _) = RoutePlannerViewModel.planFuelStops(
+            from: [earlyFood, later],
+            totalDistance: 250 * mile,
+            range: 100 * mile,
+            preferringFoodAt: [earlyFood.id],
+            departure: utcDate(hour: 11, minute: 30),
+            totalTravelTime: 5 * 60 * 60,
+            calendar: utcCalendar
+        )
+        XCTAssertEqual(stops.first?.id, later.id)
+        XCTAssertGreaterThanOrEqual((stops.first?.distanceAlongRoute ?? 0) / mile, 35 - 0.5)
+    }
+
+    /// Live Atlanta shape: the only comfort-window pump can sit under the
+    /// 35% floor while the next pump is just past the 0.85 reserve. Floor
+    /// must still prefer that later in-tank pump over the early one.
+    func testFloorPrefersInTankPumpJustPastComfortReserve() {
+        let mile = AppSettings.metersPerMile
+        let early = gas(at: 25.4 * mile)
+        let justPastComfort = gas(at: 85.4 * mile)
+        let (stops, _) = RoutePlannerViewModel.planFuelStops(
+            from: [early, justPastComfort],
+            totalDistance: 1_400 * mile,
+            range: 100 * mile,
+            preferringFoodAt: [early.id],
+            departure: utcDate(hour: 11, minute: 30),
+            totalTravelTime: 20 * 60 * 60,
+            calendar: utcCalendar
+        )
+        XCTAssertEqual(stops.first?.id, justPastComfort.id)
+        XCTAssertGreaterThanOrEqual((stops.first?.distanceAlongRoute ?? 0) / mile, 35 - 0.5)
     }
 
     func testFlagsFuelGapWhenNoReachableStation() {

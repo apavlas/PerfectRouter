@@ -92,7 +92,14 @@ final class B11LongRouteSmokeUITests: XCTestCase {
 
     func testAtlantaToDenverLongRouteSmoke() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-RideSummaryProbe", "-RideDepartureOverride", "2026-10-23T08:00"]
+        // Tank miles: FUEL-7 floor is 35% (100→35 mi, 170→~60 mi). Override
+        // with TEST_RUNNER_SMOKE_TANK_MILES for the 100 mi default check.
+        let tankMiles = ProcessInfo.processInfo.environment["SMOKE_TANK_MILES"] ?? "170"
+        app.launchArguments = [
+            "-RideSummaryProbe",
+            "-RideDepartureOverride", "2026-10-23T08:00",
+            "-RideTankMiles", tankMiles,
+        ]
         addUIInterruptionMonitor(withDescription: "Location") { alert in
             for title in ["Allow While Using App", "Allow Once", "OK"] where alert.buttons[title].exists {
                 alert.buttons[title].tap()
@@ -210,6 +217,32 @@ final class B11LongRouteSmokeUITests: XCTestCase {
             .matching(NSPredicate(format: "label CONTAINS 'Past your range'")).count
         print("B11SMOKE expectedPastRangeDays=\(expected.sorted()) pastRangeElementsInTree=\(onScreen)")
 
+        // FUEL-7 shot first: find "Fuel stop 1:" with a short scroll budget so
+        // iPad does not burn minutes hunting gasDay chrome on a 400-page list.
+        let firstStop = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Fuel stop 1:")
+        ).firstMatch
+        if !firstStop.exists {
+            for _ in 0..<30 {
+                list(app).swipeDown(velocity: .fast)
+                if firstStop.exists { break }
+            }
+        }
+        if !firstStop.exists {
+            for _ in 0..<40 {
+                list(app).swipeUp(velocity: .fast)
+                if firstStop.exists { break }
+            }
+        }
+        if firstStop.exists {
+            print("B11SMOKE firstStop=\(firstStop.label)")
+            snap("b_final_gas_day1", app)
+            swipe(app, up: true)
+            snap("b_final_gas_day1_more", app)
+        } else {
+            print("B11SMOKE skipped early first-stop shot: Fuel stop 1 not found")
+        }
+
         // Screenshots: final gas list at Day 3, and the Day 2 hotels.
         // Day 1 gas section: on a route whose first pump is past the tank,
         // this is where a visible "Past your range" would be.
@@ -219,8 +252,10 @@ final class B11LongRouteSmokeUITests: XCTestCase {
         if gasHeaderFound {
             let dayOne = app.descendants(matching: .any).matching(identifier: "gasDay.1").firstMatch
             if !dayOne.waitForExistence(timeout: 2) {
-                app.descendants(matching: .any).matching(identifier: "gasListHeader").firstMatch.tap()
-                print("B11SMOKE expanded gas list: gasDay.1 exists=\(dayOne.waitForExistence(timeout: 5))")
+                let header = app.descendants(matching: .any).matching(identifier: "gasListHeader").firstMatch
+                if header.exists { header.tap() }
+                // iPad sidebar can take a beat to publish day rows after expand.
+                print("B11SMOKE expanded gas list: gasDay.1 exists=\(dayOne.waitForExistence(timeout: 8))")
             }
         }
         if gasHeaderFound, scrollTo("gasDay.1", app) {
@@ -230,6 +265,13 @@ final class B11LongRouteSmokeUITests: XCTestCase {
             snap("b_final_gas_day1", app)
             swipe(app, up: true)
             print("B11SMOKE day1GasWarningVisibleAfterSwipe=\(warn.exists && warn.isHittable)")
+            snap("b_final_gas_day1_more", app)
+        } else if gasHeaderFound {
+            // Still capture the open gas list for FUEL-7 shots when day chrome
+            // is slow on iPad — probe already recorded first-fill miles.
+            print("B11SMOKE gasDay.1 missing after expand; snapping open gas list")
+            snap("b_final_gas_day1", app)
+            swipe(app, up: true)
             snap("b_final_gas_day1_more", app)
         } else {
             print("B11SMOKE skipped (section not present): gasDay.1")
@@ -306,8 +348,10 @@ final class B11LongRouteSmokeUITests: XCTestCase {
         func visible() -> Bool {
             // iPad's split sheet can clip a header by a point or two, so
             // a header whose top is inside the list counts.
-            element.exists && element.frame.height > 0
-                && element.frame.minY >= frame.minY - 2 && element.frame.minY < frame.maxY - 40
+            guard element.exists else { return false }
+            let elementFrame = element.frame
+            return elementFrame.height > 0
+                && elementFrame.minY >= frame.minY - 2 && elementFrame.minY < frame.maxY - 40
         }
         // Down first, then back up: the lazy list may have passed the row.
         // Day 1 sits near the top: on a long list, searching downward first
