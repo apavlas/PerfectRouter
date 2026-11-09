@@ -5006,6 +5006,11 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// 34 miles, so a 29-mile bunch is not a second fuel stop.
     nonisolated static let fuelStopMinimumSeparationFactor = 0.20
 
+    /// FUEL-7: on a full-tank start, the first recommended fill stays at or
+    /// past this fraction of the tank when a later in-window option exists.
+    /// 35% of 100 miles is mile 35; of 170 miles is ~mile 60.
+    nonisolated static let fuelFirstFillEarlyFloorFactor = 0.35
+
     /// How close food must sit to a pump to count as "food at the stop."
     /// Matches `StopSuggestionService.findFood`'s default radius.
     nonisolated static let fuelFoodRadiusMeters: CLLocationDistance = 1_500
@@ -5255,7 +5260,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// optional: when the tank-interval ETA is near breakfast / lunch /
     /// dinner *and* `preferringFoodAt` lists an in-window pump, that pump
     /// wins over gas-only in the same window (FUEL-8), but the first fill of
-    /// a full tank never lands in the first ~20% of tank range when a later
+    /// a full tank never lands in the first ~35% of tank range when a later
     /// in-window option exists (FUEL-7). Off-meal or missing food never
     /// skips the stop. That hop, including the leg into the destination,
     /// stays inside the reserve (tank × 0.85) when any station fits there.
@@ -5521,14 +5526,14 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         }
 
         // FUEL-7 / FUEL-8: on a full-tank start (first pick of this plan),
-        // drop pumps in the first ~20% of tank range when a later in-window
+        // drop pumps in the first ~35% of tank range when a later in-window
         // option exists. Meal/food preference then chooses inside that floor,
         // never pulling the first fill earlier than it.
         let initialRefuel: CLLocationDistance = lastRefuel
         func afterEarlyFloor(_ window: [FuelCandidate]) -> [FuelCandidate] {
             guard recommendedIDs.isEmpty,
                   abs(lastRefuel - initialRefuel) <= 1 else { return window }
-            let floor = lastRefuel + range * minimumSeparationFactor
+            let floor = lastRefuel + range * fuelFirstFillEarlyFloorFactor
             let pastFloor = window.filter { $0.distanceAlongRoute >= floor }
             return pastFloor.isEmpty ? window : pastFloor
         }

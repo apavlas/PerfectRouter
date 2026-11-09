@@ -92,12 +92,13 @@ final class B11LongRouteSmokeUITests: XCTestCase {
 
     func testAtlantaToDenverLongRouteSmoke() throws {
         let app = XCUIApplication()
-        // 170 mi tank: build-12 / FUEL-7 check (20% floor ≈ 34 mi) so the
-        // early ~25 mi meal-food pump is out of the first-fill window.
+        // Tank miles: FUEL-7 floor is 35% (100→35 mi, 170→~60 mi). Override
+        // with TEST_RUNNER_SMOKE_TANK_MILES for the 100 mi default check.
+        let tankMiles = ProcessInfo.processInfo.environment["SMOKE_TANK_MILES"] ?? "170"
         app.launchArguments = [
             "-RideSummaryProbe",
             "-RideDepartureOverride", "2026-10-23T08:00",
-            "-RideTankMiles", "170",
+            "-RideTankMiles", tankMiles,
         ]
         addUIInterruptionMonitor(withDescription: "Location") { alert in
             for title in ["Allow While Using App", "Allow Once", "OK"] where alert.buttons[title].exists {
