@@ -95,9 +95,16 @@ final class HighlightsLiveSmokeUITests: XCTestCase {
             record("row \(name)", "detail=\(detail.exists ? detail.label : "?")\ndescription=\(text)")
             if detail.exists {
                 XCTAssertTrue(
-                    detail.label.contains("on your route") || detail.label.contains("off route"),
+                    (detail.label.contains("On route") || detail.label.contains("off route")) && !detail.label.contains("~"),
                     "Detour copy missing on \(name): \(detail.label)"
                 )
+                // Clara Luper Sit-in Plaza is a block from the downtown OKC
+                // start. It read "~20 mi from start" off the search sample.
+                if name.localizedCaseInsensitiveContains("Clara Luper") {
+                    let miles = Double(detail.label.split(separator: " ").first ?? "") ?? 0
+                    XCTAssertTrue(detail.label.hasPrefix("At start") || miles < 5,
+                                  "Clara Luper is at the start, not \(detail.label)")
+                }
             }
         }
         if let slug {
@@ -143,7 +150,10 @@ final class HighlightsLiveSmokeUITests: XCTestCase {
             XCTAssertTrue(after.contains(stop), "\(stop) was dropped when \(target) was added: \(after)")
         }
         sleep(10)
-        _ = scrollTo("highlightsListHeader", app)
+        if scrollTo("highlight.\(target).add", app) {
+            let added = element("highlight.\(target).add", app)
+            XCTAssertEqual(added.value as? String, "Added", "\(target) row not marked Added")
+        }
         snap("03_okc_amarillo_after_replan", app)
     }
 

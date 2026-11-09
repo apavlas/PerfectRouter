@@ -48,12 +48,9 @@ struct RideSummarySection: View {
                 } else {
                     FocusPlaceholderRow()
                 }
-                // A highlight's banner sits in the Highlights section, under
-                // the rider's thumb (H-3). The replan clears that section
-                // until the new picks publish, so the banner falls back here
-                // meanwhile. Food keeps it here.
-                if let undo = viewModel.foodStopUndo,
-                   !undo.isHighlight || viewModel.rideHighlights.isEmpty {
+                // Food's banner sits here. A highlight's floats above the
+                // list (ContentView), so a replan cannot unmount it.
+                if let undo = viewModel.foodStopUndo, !undo.isHighlight {
                     AddedStopUndoBanner(viewModel: viewModel, undo: undo)
                 } else {
                     FocusPlaceholderRow()

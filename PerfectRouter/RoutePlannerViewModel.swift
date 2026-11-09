@@ -2178,7 +2178,12 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         // food stops already on the ride keep their places, then gets the
         // same quiet Undo banner as food (H-3).
         if isRideHighlight(suggestion) {
+            // A second tap on the list row or the pin, even mid-replan
+            // before the route keys refresh, never adds a duplicate.
+            guard !isHighlightAdded(suggestion) else { return }
             insertHighlightStop(suggestion)
+            addedHighlightStops.removeAll { Self.sameCoordinate($0.coordinate, suggestion.coordinate) }
+            addedHighlightStops.append(suggestion)
             if let added = waypoints.first(where: { Self.sameCoordinate($0.coordinate, suggestion.coordinate) }) {
                 presentFoodStopUndo(waypointID: added.id, name: added.name, isHighlight: true)
             }
@@ -2212,11 +2217,18 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         foodStopUndo = nil
     }
 
+    /// Food keeps its 5 s banner. A highlight add re-routes the whole ride,
+    /// so its banner stays up longer and is still readable at 5 s after
+    /// the replan settles.
+    nonisolated static let foodUndoSeconds: Double = 5
+    nonisolated static let highlightUndoSeconds: Double = 8
+
     private func presentFoodStopUndo(waypointID: UUID, name: String, isHighlight: Bool = false) {
         foodStopUndoClearTask?.cancel()
         foodStopUndo = FoodStopUndo(waypointID: waypointID, name: name, isHighlight: isHighlight)
+        let seconds = isHighlight ? Self.highlightUndoSeconds : Self.foodUndoSeconds
         foodStopUndoClearTask = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(5))
+            try? await Task.sleep(for: .seconds(seconds))
             guard !Task.isCancelled else { return }
             if foodStopUndo?.waypointID == waypointID {
                 foodStopUndo = nil
@@ -5738,12 +5750,12 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             }
         }
 
-        let picked = PlaceDescriptionReader.clearingCrossNamedDescriptions(
+        let picked = keepingAddedHighlights(PlaceDescriptionReader.clearingCrossNamedDescriptions(
             applyingKnownPlaceDescriptions(Self.selectHighlights(
                 from: candidates,
                 totalDistance: totalDistanceMeters
             ))
-        )
+        ))
         rideHighlights = picked
         guard generation == highlightGeneration else { return }
         let enriched = PlaceDescriptionReader.clearingCrossNamedDescriptions(
@@ -5825,6 +5837,48 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// Whether a stop is one of the auto-recommended ride highlights. A
     /// separate Sights search returns the same place under a new id, so the
     /// coordinate or the place name also counts.
+    /// Highlights the rider added. A replan re-picks the list from a new
+    /// search; these stay listed (with "Added") while they are on the ride.
+    var addedHighlightStops: [SuggestedStop] = []
+
+    /// True when this highlight is already a stop on the ride (same place,
+    /// or the same name within a few hundred meters).
+    func isHighlightAdded(_ stop: SuggestedStop) -> Bool {
+        Self.highlight(stop, isAmong: waypoints.dropFirst().map { ($0.name, $0.coordinate) })
+    }
+
+    nonisolated static func highlight(
+        _ stop: SuggestedStop,
+        isAmong stops: [(name: String, coordinate: CLLocationCoordinate2D)]
+    ) -> Bool {
+        let here = CLLocation(latitude: stop.latitude, longitude: stop.longitude)
+        return stops.contains { waypoint in
+            if sameCoordinate(waypoint.coordinate, stop.coordinate) { return true }
+            let there = CLLocation(latitude: waypoint.coordinate.latitude, longitude: waypoint.coordinate.longitude)
+            return here.distance(from: there) < 300
+                && PlaceDescriptionReader.placeNamesMatch(waypoint.name, stop.name)
+        }
+    }
+
+    /// The new picks plus any added highlight the new search dropped,
+    /// re-measured on the current line and kept in ride order.
+    private func keepingAddedHighlights(_ picked: [SuggestedStop]) -> [SuggestedStop] {
+        addedHighlightStops.removeAll { !isHighlightAdded($0) }
+        let missing = addedHighlightStops.filter { added in
+            !picked.contains { Self.sameCoordinate($0.coordinate, added.coordinate)
+                || PlaceDescriptionReader.placeNamesMatch($0.name, added.name) }
+        }
+        guard !missing.isEmpty else { return picked }
+        let polylines = suggestionRoutePolylines
+        let remeasured = missing.map { stop -> SuggestedStop in
+            var copy = stop
+            copy.distanceAlongRoute = RouteGeometry.distanceAlongRoute(of: stop.coordinate, alongPolylines: polylines)
+            copy.detourMeters = RouteGeometry.distanceFromRoute(of: stop.coordinate, alongPolylines: polylines)
+            return copy
+        }
+        return (picked + remeasured).sorted { $0.distanceAlongRoute < $1.distanceAlongRoute }
+    }
+
     func isRideHighlight(_ stop: SuggestedStop) -> Bool {
         guard !rideHighlights.isEmpty else { return false }
         let key = Self.coordinateKey(stop.coordinate)

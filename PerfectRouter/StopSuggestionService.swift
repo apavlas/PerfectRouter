@@ -357,10 +357,16 @@ struct StopSuggestionService {
                     results.append(SuggestedStop(
                         mapItem: item,
                         category: category,
-                        distanceAlongRoute: RouteGeometry.preferredDistanceAlongRoute(
-                            projected: projected,
-                            known: sample.distanceAlongRoute
-                        ),
+                        // A sight's mile mark is its projection. The sample
+                        // fallback put Clara Luper Sit-in Plaza, a block
+                        // from the Oklahoma City start, at the mile-20
+                        // sample that found it.
+                        distanceAlongRoute: category == .attraction
+                            ? projected
+                            : RouteGeometry.preferredDistanceAlongRoute(
+                                projected: projected,
+                                known: sample.distanceAlongRoute
+                            ),
                         detourMeters: routeDetour
                             ?? RouteGeometry.distanceFromRoute(of: coord, alongPolylines: legPolylines)
                     ))

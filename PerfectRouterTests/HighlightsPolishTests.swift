@@ -329,4 +329,75 @@ final class HighlightsPolishTests: XCTestCase {
         XCTAssertTrue(viewModel.isRideHighlight(renamed))
         XCTAssertFalse(viewModel.isRideHighlight(pumpNextDoor))
     }
+
+    // MARK: Ralph v2: added state, measured detour copy
+
+    /// Tapping the row twice (or the pin after the row) adds one stop, and
+    /// the row reads as added.
+    func testTappingAHighlightTwiceAddsExactlyOneStop() {
+        let viewModel = RoutePlannerViewModel()
+        viewModel.waypoints = [waypoint("Start", lat: 33.0), waypoint("End", lat: 34.0)]
+        let sight = SuggestedStop(
+            name: "Overlook",
+            coordinate: CLLocationCoordinate2D(latitude: 33.7, longitude: -82.0),
+            category: .attraction,
+            distanceAlongRoute: 70_000,
+            detourMeters: 50
+        )
+        // The pin and a fresh search hand over the same place under a new id.
+        let pinCopy = SuggestedStop(
+            name: "Overlook",
+            coordinate: CLLocationCoordinate2D(latitude: 33.7, longitude: -82.0),
+            category: .attraction,
+            distanceAlongRoute: 70_000,
+            detourMeters: 50
+        )
+        viewModel.rideHighlights = [sight]
+        XCTAssertFalse(viewModel.isHighlightAdded(sight))
+        viewModel.addStop(from: sight)
+        viewModel.addStop(from: sight)
+        viewModel.addStop(from: pinCopy)
+        XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "Overlook", "End"])
+        XCTAssertTrue(viewModel.isHighlightAdded(sight))
+        XCTAssertTrue(viewModel.isHighlightAdded(pinCopy))
+
+        viewModel.undoFoodStop()
+        XCTAssertFalse(viewModel.isHighlightAdded(sight), "Undo clears the Added state")
+    }
+
+    func testHighlightUndoOutlastsFiveSeconds() {
+        XCTAssertGreaterThan(RoutePlannerViewModel.highlightUndoSeconds, 5)
+        XCTAssertEqual(RoutePlannerViewModel.foodUndoSeconds, 5)
+    }
+
+    func testDetourWithinHalfAMileIsOnRoute() {
+        let mile = AppSettings.metersPerMile
+        XCTAssertEqual(HighlightDetourCopy.detour(0, usesMetric: false), "On route")
+        XCTAssertEqual(HighlightDetourCopy.detour(150, usesMetric: false), "On route")
+        XCTAssertEqual(HighlightDetourCopy.detour(0.49 * mile, usesMetric: false), "On route")
+        XCTAssertEqual(HighlightDetourCopy.detour(0.5 * mile, usesMetric: false), "0.5 mi off route")
+        XCTAssertEqual(HighlightDetourCopy.detour(.nan, usesMetric: false), "On route")
+    }
+
+    func testDetourIsMeasuredMilesWithoutTilde() {
+        let mile = AppSettings.metersPerMile
+        XCTAssertEqual(HighlightDetourCopy.detour(8.5 * mile, usesMetric: false), "8.5 mi off route")
+        XCTAssertEqual(HighlightDetourCopy.detour(2.04 * mile, usesMetric: false), "2.0 mi off route")
+        XCTAssertEqual(HighlightDetourCopy.detour(12.4 * mile, usesMetric: false), "12 mi off route")
+        XCTAssertEqual(HighlightDetourCopy.detour(3_200, usesMetric: true), "3.2 km off route")
+        let caption = HighlightDetourCopy.caption(
+            distanceAlongRoute: 245 * mile, detourMeters: 8.5 * mile, usesMetric: false
+        )
+        XCTAssertEqual(caption, "245 mi from start · 8.5 mi off route")
+        XCTAssertFalse(caption.contains("~"))
+    }
+
+    /// Clara Luper Sit-in Plaza sits a block from the downtown Oklahoma City
+    /// start. Its row must say so, not the mile mark of the sample that found it.
+    func testSightAtTheStartReadsAtStart() {
+        XCTAssertEqual(
+            HighlightDetourCopy.caption(distanceAlongRoute: 120, detourMeters: 90, usesMetric: false),
+            "At start · On route"
+        )
+    }
 }
