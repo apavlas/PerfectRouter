@@ -659,18 +659,6 @@ struct ContentView: View {
                 // summary that used to be the only `activeRouteStyle`.
                 VStack(spacing: 0) {
                     sheetReplanBanner
-                    // A highlight add re-routes the ride and the list
-                    // remounts its sections. Pinned above the list, the
-                    // banner stays in view on every add, at any detent and
-                    // in the iPad sidebar, until its timer or Undo.
-                    if let undo = viewModel.foodStopUndo, undo.isHighlight {
-                        AddedStopUndoBanner(viewModel: viewModel, undo: undo)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 4)
-                            .frame(maxWidth: .infinity)
-                            .background(.regularMaterial)
-                            .transition(.move(edge: .top).combined(with: .opacity))
-                    }
                     Group {
                     Text(verbatim: viewModel.routeStyle.rawValue)
                         .font(.system(size: 1))
@@ -804,6 +792,19 @@ struct ContentView: View {
                 guard let day = viewModel.scrollToHotelDay else { return }
                 proxy.scrollTo(AccessibilityID.hotelDay(day), anchor: .center)
             }
+            }
+        }
+        // On the NavigationStack, not the List: a List safeAreaInset can
+        // show a tappable-looking Undo whose touches fall through to the
+        // list underneath, so the stop is never removed.
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if let undo = viewModel.foodStopUndo, undo.isHighlight {
+                AddedStopUndoBanner(viewModel: viewModel, undo: undo)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 4)
+                    .frame(maxWidth: .infinity)
+                    .background(.regularMaterial)
+                    .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
         .background {

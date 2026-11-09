@@ -254,10 +254,16 @@ final class CoreJourneyUITests: XCTestCase {
         snapHighlights("02_after_add_undo", app)
         // Still up, with a tappable Undo, 5 s after the add.
         assertUndoBannerVisible(naming: "Tallulah Gorge", forAtLeast: 5, since: firstTap, in: app)
-        let undo = identified("highlightUndoButton", in: app)
+        let undo = app.buttons["highlightUndoButton"].firstMatch
+        XCTAssertTrue(undo.exists && undo.isHittable, "Undo not tappable at tap time frame=\(undo.frame)")
         undo.tap()
+        var afterUndo = committed.label
+        for _ in 0..<15 where afterUndo.contains("Tallulah Gorge") {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+            afterUndo = committed.label
+        }
+        XCTAssertFalse(afterUndo.contains("Tallulah Gorge"), afterUndo)
         waitForBannerToFinish(in: app)
-        XCTAssertFalse(committed.label.contains("Tallulah Gorge"), committed.label)
 
         // Fuel first, then a highlight: the fills stay and the sight lands
         // in ride order between them.
