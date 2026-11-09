@@ -6,9 +6,18 @@ import MapKit
 /// data. UI tests pass it; normal launches never do.
 enum UITestStubLaunch {
     static let argument = "-UITestStubServices"
+    /// Live UI tests pass this so they skip the splash and first-run
+    /// screens without replacing MapKit with canned services.
+    static let skipOnboardingArgument = "-UITestSkipOnboarding"
 
     static var isEnabled: Bool {
         ProcessInfo.processInfo.arguments.contains(argument)
+    }
+
+    /// Stub launches already skip onboarding. Live smoke tests use the
+    /// dedicated flag so a fresh simulator reaches the planner.
+    static var skipsOnboarding: Bool {
+        isEnabled || ProcessInfo.processInfo.arguments.contains(skipOnboardingArgument)
     }
 
     /// UI tests share the simulator's defaults. A style change or tank edit

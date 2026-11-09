@@ -96,6 +96,7 @@ final class B11LongRouteSmokeUITests: XCTestCase {
         // with TEST_RUNNER_SMOKE_TANK_MILES for the 100 mi default check.
         let tankMiles = ProcessInfo.processInfo.environment["SMOKE_TANK_MILES"] ?? "170"
         app.launchArguments = [
+            "-UITestSkipOnboarding",
             "-RideSummaryProbe",
             "-RideDepartureOverride", "2026-10-23T08:00",
             "-RideTankMiles", tankMiles,
