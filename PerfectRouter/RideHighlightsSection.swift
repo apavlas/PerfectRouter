@@ -60,6 +60,9 @@ struct RideHighlightsSection: View {
                     titleIdentifier: AccessibilityID.rideHighlightName(stop.name),
                     descriptionIdentifier: AccessibilityID.rideHighlightDescription(stop.name),
                     rowIdentifier: AccessibilityID.rideHighlightRow(stop.name),
+                    detailIdentifier: AccessibilityID.rideHighlightDetail(stop.name),
+                    addIdentifier: AccessibilityID.rideHighlightAdd(stop.name),
+                    isAdded: viewModel.isHighlightAdded(stop),
                     alignment: .center,
                     onSelect: { focusFromSidebar(stop) },
                     onOpen: {
@@ -91,10 +94,10 @@ struct RideHighlightsSection: View {
     }
 
     private func detailText(for stop: SuggestedStop) -> String {
-        let along = "~\(formattedRideDistance(stop.distanceAlongRoute)) from start"
-        // Under ~100 m off the route reads as "on the way"; beyond that, tell
-        // the rider what the detour costs.
-        guard stop.detourMeters >= 100 else { return "\(along) · on your route" }
-        return "\(along) · \(formattedRideDistance(stop.detourMeters)) off route"
+        HighlightDetourCopy.caption(
+            distanceAlongRoute: stop.distanceAlongRoute,
+            detourMeters: stop.detourMeters,
+            usesMetric: AppSettings.usesMetricUnits
+        )
     }
 }

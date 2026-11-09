@@ -30,7 +30,8 @@ enum PlaceDescriptionDisplay {
         guard let social = PlaceDescriptionReader.droppingSocialEngagementSentences(in: text) else {
             return nil
         }
-        guard let prose = PlaceDescriptionReader.strippingRestatedNameAndLocality(in: social, name: name) else {
+        guard let restated = PlaceDescriptionReader.strippingRestatedNameAndLocality(in: social, name: name),
+              let prose = PlaceDescriptionReader.droppingListingFillerSentences(in: restated, name: name) else {
             return nil
         }
         if PlaceDescriptionReader.namesADifferentPlace(prose, placeName: name) { return nil }
@@ -125,7 +126,8 @@ enum PlaceDescriptionReader {
         if isReviewSiteFiller(text) { return nil }
         if isOnlyPhoneNumber(text) || isBareCategory(text) || isOnlyAddress(text) { return nil }
         guard let social = droppingSocialEngagementSentences(in: text) else { return nil }
-        guard let prose = strippingRestatedNameAndLocality(in: social, name: name) else { return nil }
+        guard let restated = strippingRestatedNameAndLocality(in: social, name: name),
+              let prose = droppingListingFillerSentences(in: restated, name: name) else { return nil }
         if namesADifferentPlace(prose, placeName: name) { return nil }
         if let name, same(prose, name) { return nil }
         if isNameAndLocality(prose, name: name) { return nil }
@@ -169,6 +171,46 @@ enum PlaceDescriptionReader {
         return jsonLDDescription(in: document, placeName: name)
     }
 
+    /// The passage a `#:~:text=start[,end]` link marks on the page, when it
+    /// names this place and survives the same filters as any description.
+    /// Nil when the link has no text fragment, the passage is not on the
+    /// page, or it does not name the place. Runs on the loader, off the
+    /// main actor.
+    static func textFragmentPassage(in document: String, url: URL, name: String?) -> String? {
+        guard let (start, end) = textFragment(of: url), !canonicalPlaceName(name).isEmpty else { return nil }
+        guard let body = normalize(document),
+              let startRange = body.range(of: start, options: [.caseInsensitive, .diacriticInsensitive]) else {
+            return nil
+        }
+        let tail = body[startRange.lowerBound...].prefix(800)
+        var passage = String(tail)
+        if let end, let endRange = passage.range(of: end, options: [.caseInsensitive, .diacriticInsensitive]) {
+            passage = String(passage[..<endRange.upperBound])
+        } else {
+            passage = firstSentences(in: passage, limit: 1)
+        }
+        guard containsPlaceName(passage, placeName: name) else { return nil }
+        return acceptedPlaceText(passage, name: name)
+    }
+
+    /// `textStart` and optional `textEnd` from the first `text=` directive of
+    /// a URL text fragment (`#:~:text=[prefix-,]start[,end][,-suffix]`).
+    static func textFragment(of url: URL) -> (start: String, end: String?)? {
+        guard let fragment = url.fragment(percentEncoded: true),
+              let marker = fragment.range(of: ":~:") else { return nil }
+        let directives = fragment[marker.upperBound...].split(separator: "&")
+        guard let text = directives.first(where: { $0.hasPrefix("text=") }) else { return nil }
+        var parts = text.dropFirst("text=".count)
+            .split(separator: ",", omittingEmptySubsequences: false)
+            .map { String($0) }
+        if let first = parts.first, first.hasSuffix("-") { parts.removeFirst() }
+        if let last = parts.last, last.hasPrefix("-") { parts.removeLast() }
+        let decoded = parts.compactMap { $0.removingPercentEncoding?.trimmingCharacters(in: .whitespaces) }
+        guard let start = decoded.first, start.count >= 8 else { return nil }
+        let end = decoded.count > 1 ? decoded[1] : nil
+        return (start, end?.isEmpty == true ? nil : end)
+    }
+
     /// HTTPS page Apple associated with the place. Map hosts are not the
     /// place speaking, and cleartext HTTP is not fetched.
     static func isPlaceWebsite(_ url: URL) -> Bool {
@@ -210,7 +252,8 @@ enum PlaceDescriptionReader {
         guard let text = normalize(raw) else { return nil }
         if isReviewSiteFiller(text) { return nil }
         guard let social = droppingSocialEngagementSentences(in: text) else { return nil }
-        guard let prose = strippingRestatedNameAndLocality(in: social, name: name) else { return nil }
+        guard let restated = strippingRestatedNameAndLocality(in: social, name: name),
+              let prose = droppingListingFillerSentences(in: restated, name: name) else { return nil }
         if namesADifferentPlace(prose, placeName: name) { return nil }
         if let name, same(prose, name) { return nil }
         if isNameAndLocality(prose, name: name) { return nil }
@@ -235,6 +278,8 @@ enum PlaceDescriptionReader {
         }
         if hasTruncatedQuotation(text) { return true }
         let tokens = matchKey(text).split(separator: " ").map(String.init)
+        if tokens.contains(where: { reviewSiteBrands.contains($0) }) { return true }
+        if matchKey(text).contains("google reviews") { return true }
         if hasCountedWord(tokens, words: ["review", "reviews"]) { return true }
         if hasCountedWord(tokens, words: ["photo", "photos"]) { return true }
         if hasCountedWord(tokens, words: ["star", "stars", "rating", "ratings"]) { return true }
@@ -420,9 +465,176 @@ enum PlaceDescriptionReader {
             let key = canonicalPlaceName(known)
             guard !key.isEmpty, key != place else { continue }
             if haystack.contains(" " + key + " ") { return true }
+            // The landmark's signature detail without its name is still
+            // that landmark: a 72 oz steak is not a sentence about a ranch
+            // of buried Beetles. Only checked when the card's place is known.
+            guard !place.isEmpty else { continue }
+            for signature in landmarkSignatures[known, default: []] {
+                if haystack.contains(" " + matchPhrase(signature) + " ") { return true }
+            }
         }
         return false
     }
+
+    /// Details that only one of `distinctivePlaceNames` has. Text carrying
+    /// one of these on any other place is wrong-place text.
+    static let landmarkSignatures: [String: [String]] = [
+        "Cadillac Ranch": ["ten vintage cadillacs", "ten cadillacs", "10 cadillacs", "buried cadillacs"],
+        "The Big Texan Steak Ranch": ["72oz", "72 oz", "72-ounce", "72 ounce", "steak challenge"],
+        "Slug Bug Ranch": ["volkswagen beetles", "vw beetles", "buried beetles", "five beetles", "buried bugs"],
+    ]
+
+    /// A highlight's text that names another highlight on the same ride, and
+    /// not itself, is about the other place. Only those descriptions are
+    /// cleared; every stop stays in the list, in order.
+    static func clearingCrossNamedDescriptions(_ stops: [SuggestedStop]) -> [SuggestedStop] {
+        stops.map { stop in
+            guard let text = stop.placeDescription else { return stop }
+            if containsPlaceName(text, placeName: stop.name) { return stop }
+            let namesSibling = stops.contains { other in
+                other.id != stop.id
+                    && !placeNamesMatch(other.name, stop.name)
+                    && canonicalPlaceName(other.name).split(separator: " ").count >= 2
+                    && containsPlaceName(text, placeName: other.name)
+            }
+            guard namesSibling else { return stop }
+            var copy = stop
+            copy.placeDescription = nil
+            return copy
+        }
+    }
+
+    // MARK: - Listing filler and location-only restatements
+
+    /// Drops sentences that only say where the place is ("Slug Bug Ranch is
+    /// located in Conway, Texas."), greet ("Welcome to Slug Bug Ranch!"),
+    /// pitch ("Plan your visit today!"), or are listing chrome ("Read reviews,
+    /// see photos and get directions.", "Open 24 hours."). Real prose around
+    /// them stays. Nil when nothing is left.
+    static func droppingListingFillerSentences(in text: String, name: String?) -> String? {
+        let parts = sentences(in: text)
+        guard !parts.isEmpty else { return nil }
+        let kept = parts.filter { sentence in
+            !isLocationOnlySentence(sentence, name: name)
+                && !isListingChromeSentence(sentence)
+                && !isPureCallToAction(removingPlaceName(from: sentence, name: name))
+        }
+        guard !kept.isEmpty else { return nil }
+        if kept.count == parts.count { return text }
+        return normalize(kept.joined(separator: " "))
+    }
+
+    /// A sentence whose words, once the place name is removed, are only
+    /// location words: prepositions, "is located", category labels, a city
+    /// (a capitalized word that is not the sentence opener), a state, a ZIP,
+    /// a street, or an exit. Any ordinary lowercase word, or a capitalized
+    /// opener that is not filler ("Ten vintage Cadillacs…"), keeps it.
+    static func isLocationOnlySentence(_ sentence: String, name: String?) -> Bool {
+        let edge = CharacterSet.punctuationCharacters
+            .union(.symbols)
+            .subtracting(CharacterSet(charactersIn: "-"))
+        var words = sentence
+            .split { $0.isWhitespace || $0 == "," || $0 == "|" || $0 == "·" }
+            .map { $0.trimmingCharacters(in: edge) }
+            .filter { !$0.isEmpty && $0 != "-" }
+        guard !words.isEmpty else { return false }
+        var removedName = false
+        let nameWords = canonicalPlaceName(name).split(separator: " ").map(String.init)
+        if !nameWords.isEmpty, words.count >= nameWords.count {
+            let keys = words.map { matchPhrase($0) }
+            for start in 0...(words.count - nameWords.count) {
+                if Array(keys[start..<(start + nameWords.count)]) == nameWords {
+                    var lower = start
+                    if lower > 0, keys[lower - 1] == "the" { lower -= 1 }
+                    words.removeSubrange(lower..<(start + nameWords.count))
+                    removedName = true
+                    break
+                }
+            }
+        }
+        if words.isEmpty { return removedName }
+        var hasCue = false
+        for (index, word) in words.enumerated() {
+            let key = matchPhrase(word)
+            if key.isEmpty { continue }
+            if locationCueWords.contains(key) { hasCue = true; continue }
+            if locationFillerWords.contains(key) || categoryWords.contains(key) { continue }
+            if key.contains(where: \.isNumber) { hasCue = true; continue }
+            if streetSuffixes.contains(key) || addressFillers.contains(key) { continue }
+            if stateAbbreviations.contains(key) || singleWordStates.contains(key)
+                || multiWordStateTokens.contains(key) {
+                hasCue = true
+                continue
+            }
+            let opensSentence = index == 0 && !removedName
+            if !opensSentence, word.first?.isUppercase == true { continue }
+            return false
+        }
+        return hasCue || removedName
+    }
+
+    /// Review-site and listing boilerplate. Phrases in the first list mark
+    /// any sentence. The second list only marks a short sentence, so
+    /// "Admission is free and the cars are repainted every week." stays.
+    static func isListingChromeSentence(_ sentence: String) -> Bool {
+        let key = " " + matchKey(sentence) + " "
+        if listingChromePhrases.contains(where: { key.contains(" \($0) ") }) { return true }
+        let words = key.split(separator: " ")
+        guard words.count <= 5 else { return false }
+        return shortListingChromePhrases.contains { key.contains(" \($0) ") }
+    }
+
+    private static func removingPlaceName(from sentence: String, name: String?) -> String {
+        let place = canonicalPlaceName(name)
+        guard !place.isEmpty else { return sentence }
+        let phrase = " " + matchPhrase(sentence) + " "
+        guard phrase.contains(" " + place + " ") else { return sentence }
+        return phrase.replacingOccurrences(of: " " + place + " ", with: " ")
+            .trimmingCharacters(in: .whitespaces)
+    }
+
+    private static let reviewSiteBrands: Set<String> = [
+        "tripadvisor", "yelp", "foursquare", "yellowpages", "mapquest", "wanderlog",
+    ]
+
+    private static let listingChromePhrases: [String] = [
+        "read reviews", "see reviews", "write a review", "see photos", "view photos",
+        "get directions", "things to do", "what to do", "best places to",
+        "places to see", "out of 5", "highly rated", "top rated", "toprated",
+        "loved by", "rated by", "ranked no", "ranked number", "claim this business",
+        "is this your business", "updated january", "updated february", "updated march",
+        "updated april", "updated may", "updated june", "updated july", "updated august",
+        "updated september", "updated october", "updated november", "updated december",
+    ]
+
+    private static let shortListingChromePhrases: [String] = [
+        "open 24 hours", "open now", "closed now", "free admission", "free parking",
+        "hours of operation", "opening hours", "open daily", "admission free",
+        "free entry", "must see", "mustsee",
+    ]
+
+    private static let locationCueWords: Set<String> = [
+        "in", "at", "near", "located", "situated", "outside", "off", "exit", "along",
+        "downtown", "between",
+    ]
+
+    private static let locationFillerWords: Set<String> = [
+        "the", "is", "are", "a", "an", "of", "on", "just", "right", "by", "and",
+        "here", "there", "it", "its", "this", "you", "can", "be", "find", "found",
+        "our", "from", "to", "welcome", "visit", "see", "explore", "discover",
+        "minutes", "minute", "miles", "mile", "mi", "km", "interstate", "i",
+        "us", "county", "city", "town", "area", "region", "panhandle", "today",
+        "come", "stop", "your", "next", "trip", "plan",
+    ]
+
+    private static let categoryWords: Set<String> = [
+        "tourist", "attraction", "attractions", "landmark", "landmarks", "roadside",
+        "place", "places", "spot", "site", "destination", "point", "interest",
+        "popular", "local", "historic", "historical", "famous", "iconic", "art",
+        "installation", "museum", "park", "monument", "sight", "sights", "scenic",
+        "viewpoint", "public", "sculpture", "oddity", "quirky", "unique", "classic",
+        "great", "fun", "must", "see", "favorite", "well", "known", "wellknown",
+    ]
 
     /// Same place after normalization. "The Filling Station" matches
     /// "Filling Station", and "Ben & Jerry's" matches "Ben and Jerry's".
@@ -1180,6 +1392,12 @@ enum PlaceDescriptionLoader {
         }
         guard let url = query.websiteURL, PlaceDescriptionReader.isPlaceWebsite(url) else { return nil }
         guard let document = await page(url) else { return nil }
+        // Apple's link can point at the passage about this place on a
+        // shared page (Slug Bug Ranch lives on bigtexan.com). That passage
+        // wins over the page's own meta text, which describes the host.
+        if let passage = PlaceDescriptionReader.textFragmentPassage(in: document, url: url, name: query.name) {
+            return passage
+        }
         return PlaceDescriptionReader.placeText(from: document, name: query.name, pageURL: url)
     }
 }

@@ -203,6 +203,182 @@ final class CoreJourneyUITests: XCTestCase {
         snapFoodPair("03_after_apply_fuel_kept", app)
     }
 
+    /// Highlights polish (H-2 / H-3 / H-4). Counted header, detour copy, a
+    /// row with no published text draws no description line, Add puts the
+    /// sight on the ride with the quiet Undo banner, and fuel stops already
+    /// on the ride stay when a highlight joins. Same flow on iPhone and iPad;
+    /// iPad also captures the landscape sidebar.
+    func testHighlightAddShowsUndoAndKeepsFuelStops() {
+        let app = launch()
+        let pad = UIDevice.current.userInterfaceIdiom == .pad
+        if pad {
+            addTeardownBlock { XCUIDevice.shared.orientation = .portrait }
+        }
+        planFixedRoute(in: app)
+
+        let header = revealPlanningRow("highlightsListHeader", in: app)
+        XCTAssertTrue(header.exists, diagnosticTree(app))
+        XCTAssertTrue(header.label.contains("Highlights (2)"), header.label)
+        let gorge = revealPlanningRow("highlight.Tallulah Gorge.name", in: app)
+        XCTAssertTrue(gorge.exists, diagnosticTree(app))
+        let detail = revealPlanningRow("highlight.Tallulah Gorge.detail", in: app)
+        XCTAssertTrue(
+            detail.label.contains("off route") || detail.label.contains("On route"),
+            detail.label
+        )
+        XCTAssertFalse(detail.label.contains("~"), "Detour copy is measured, not approximate: \(detail.label)")
+        XCTAssertTrue(revealPlanningRow("highlight.Bare Overlook.name", in: app).exists, diagnosticTree(app))
+        XCTAssertFalse(
+            identified("highlight.Bare Overlook.description", in: app).exists,
+            "A highlight with no published text drew a description line.\n\(diagnosticTree(app))"
+        )
+        // Not drawn a second time in the generic Sights list or as a plain pin.
+        XCTAssertEqual(
+            app.descendants(matching: .any).matching(identifier: "highlight.Tallulah Gorge.name").count, 1,
+            diagnosticTree(app)
+        )
+        snapHighlights("01_nested", app)
+
+        // Add from the list: quiet banner, stop on the ride, Undo removes it.
+        let add = revealPlanningRow("highlight.Tallulah Gorge.add", in: app)
+        XCTAssertTrue(add.exists, diagnosticTree(app))
+        scrollUntilInsidePlanningList(add, in: app)
+        add.tap()
+        let firstTap = Date()
+        let banner = identified("highlightUndoBanner", in: app)
+        XCTAssertTrue(banner.waitForExistence(timeout: 3), diagnosticTree(app))
+        XCTAssertTrue(banner.label.contains("Tallulah Gorge"), banner.label)
+        let committed = identified("committedWaypoints", in: app)
+        XCTAssertTrue(committed.exists, diagnosticTree(app))
+        XCTAssertTrue(committed.label.contains("Tallulah Gorge"), committed.label)
+        snapHighlights("02_after_add_undo", app)
+        // Still up, with a tappable Undo, 5 s after the add.
+        assertUndoBannerVisible(naming: "Tallulah Gorge", forAtLeast: 5, since: firstTap, in: app)
+        let undo = identified("highlightUndoButton", in: app)
+        undo.tap()
+        waitForBannerToFinish(in: app)
+        XCTAssertFalse(committed.label.contains("Tallulah Gorge"), committed.label)
+
+        // Fuel first, then a highlight: the fills stay and the sight lands
+        // in ride order between them.
+        let select = revealPlanningRow("selectRecommended", in: app)
+        XCTAssertTrue(select.exists, diagnosticTree(app))
+        scrollUntilInsidePlanningList(select, in: app)
+        select.tap()
+        waitForBannerToFinish(in: app)
+        var before = waypointNames(in: app)
+        for _ in 0..<20 where before.count <= 2 {
+            sleep(1)
+            waitForBannerToFinish(in: app)
+            before = waypointNames(in: app)
+        }
+        XCTAssertGreaterThan(before.count, 2, diagnosticTree(app))
+
+        let overlookAdd = revealPlanningRow("highlight.Bare Overlook.add", in: app)
+        XCTAssertTrue(overlookAdd.exists, diagnosticTree(app))
+        scrollUntilInsidePlanningList(overlookAdd, in: app)
+        overlookAdd.tap()
+        let secondTap = Date()
+        // Tap twice: the second tap must not add a duplicate stop.
+        if overlookAdd.exists, overlookAdd.isHittable { overlookAdd.tap() }
+        // Second add in the ride: the banner floats above the list, so the
+        // replan cannot unmount or scroll it away. Visible with Undo for 5 s.
+        let overlookBanner = identified("highlightUndoBanner", in: app)
+        XCTAssertTrue(overlookBanner.waitForExistence(timeout: 3), diagnosticTree(app))
+        XCTAssertTrue(overlookBanner.label.contains("Bare Overlook"), overlookBanner.label)
+        XCTAssertTrue(overlookBanner.isHittable, diagnosticTree(app))
+        snapHighlights("05_second_add_banner", app)
+        assertUndoBannerVisible(naming: "Bare Overlook", forAtLeast: 5, since: secondTap, in: app)
+        snapHighlights("05b_second_add_banner_5s", app)
+        waitForBannerToFinish(in: app)
+        var after = waypointNames(in: app)
+        for _ in 0..<10 where !after.contains("Bare Overlook") {
+            sleep(1)
+            after = waypointNames(in: app)
+        }
+        XCTAssertTrue(after.contains("Bare Overlook"), diagnosticTree(app))
+        for stop in before {
+            XCTAssertTrue(after.contains(stop), "\(stop) was dropped when a highlight was added: \(after)")
+        }
+        if let overlook = after.firstIndex(of: "Bare Overlook") {
+            XCTAssertEqual(after.last, "Test Destination", "\(after)")
+            if let shell = after.firstIndex(of: "Shell Knoxville") {
+                XCTAssertLessThan(overlook, shell, "Bare Overlook (mile 180) should ride before Shell (mile 230): \(after)")
+            }
+            if let onRoute = after.firstIndex(of: "On Route Fuel") {
+                XCTAssertGreaterThan(overlook, onRoute, "Bare Overlook (mile 180) should ride after On Route Fuel (mile 150): \(after)")
+            }
+        }
+        XCTAssertEqual(after.filter { $0 == "Bare Overlook" }.count, 1, "Two taps added a duplicate: \(after)")
+        snapHighlights("03_after_add_fuel_kept", app)
+
+        // Added state: checkmark + "Added", and another tap adds nothing.
+        let added = revealPlanningRow("highlight.Bare Overlook.add", in: app)
+        XCTAssertTrue(added.exists, diagnosticTree(app))
+        XCTAssertEqual(added.value as? String, "Added", "\(added.label) / \(String(describing: added.value))")
+        scrollUntilInsidePlanningList(added, in: app)
+        snapHighlights("06_added_row", app)
+        added.tap()
+        sleep(2)
+        waitForBannerToFinish(in: app)
+        let again = waypointNames(in: app)
+        XCTAssertEqual(again.filter { $0 == "Bare Overlook" }.count, 1, "Tapping Added re-added the stop: \(again)")
+        XCTAssertEqual(again.count, after.count, "\(again) vs \(after)")
+
+        if pad {
+            XCUIDevice.shared.orientation = .landscapeLeft
+            let deadline = Date().addingTimeInterval(5)
+            while Date() < deadline, app.frame.width < app.frame.height {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            }
+            sleep(1)
+            let sidebarHeader = revealPlanningRow("highlightsListHeader", in: app)
+            XCTAssertTrue(sidebarHeader.exists, diagnosticTree(app))
+            XCTAssertTrue(identified("routeSidebar", in: app).exists, diagnosticTree(app))
+            // Frame the rows, not just the header: the added row with its
+            // checkmark and the other highlight both in view.
+            let addedRow = revealPlanningRow("highlight.Bare Overlook.add", in: app)
+            XCTAssertTrue(addedRow.exists, diagnosticTree(app))
+            scrollUntilInsidePlanningList(addedRow, in: app)
+            let gorgeRow = identified("highlight.Tallulah Gorge.name", in: app)
+            XCTAssertTrue(addedRow.isHittable, diagnosticTree(app))
+            XCTAssertEqual(addedRow.value as? String, "Added")
+            if !gorgeRow.isHittable {
+                app.swipeDown()
+                sleep(1)
+            }
+            snapHighlights("04_sidebar_nested_after_add", app)
+        }
+    }
+
+    /// The highlight Undo banner and its button stay on screen and hittable
+    /// until `seconds` have passed since the add.
+    private func assertUndoBannerVisible(
+        naming name: String,
+        forAtLeast seconds: TimeInterval,
+        since start: Date,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let banner = identified("highlightUndoBanner", in: app)
+        let undo = identified("highlightUndoButton", in: app)
+        repeat {
+            XCTAssertTrue(banner.exists && banner.label.contains(name),
+                          "Undo banner gone \(String(format: "%.1f", Date().timeIntervalSince(start))) s after adding \(name)",
+                          file: file, line: line)
+            XCTAssertTrue(undo.exists && undo.isHittable, "Undo not tappable", file: file, line: line)
+            if !banner.exists { return }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        } while Date().timeIntervalSince(start) < seconds
+        XCTAssertTrue(banner.exists, "Undo banner gone before \(seconds) s", file: file, line: line)
+    }
+
+    private func snapHighlights(_ name: String, _ app: XCUIApplication) {
+        let device = UIDevice.current.userInterfaceIdiom == .pad ? "ipad" : "iphone"
+        snapFoodPair("highlights_\(device)_\(name)", app)
+    }
+
     private func snapFoodPair(_ name: String, _ app: XCUIApplication) {
         let shot = app.screenshot()
         let attachment = XCTAttachment(screenshot: shot)

@@ -33,6 +33,13 @@ struct PlaceDescriptionCard: View {
     /// `highlight.<name>.row`. Child name and description identifiers stay
     /// exposed because the button uses `accessibilityElement(children: .contain)`.
     var rowIdentifier: String = ""
+    /// Highlight cards stamp the detour line and the Add button so tests can
+    /// read "on your route" / "X off route" and tap Add. Empty elsewhere.
+    var detailIdentifier: String = ""
+    var addIdentifier: String = ""
+    /// Highlight already on the ride: a checkmark and "Added" replace the
+    /// plus, and the button does nothing.
+    var isAdded: Bool = false
     var alignment: VerticalAlignment = .top
     var spacing: CGFloat = 8
     /// Sidebar row tap when the place has no description to open. Empty for
@@ -46,13 +53,26 @@ struct PlaceDescriptionCard: View {
             icon
             rowBody
             Spacer(minLength: 0)
-            Button(action: onAdd) {
-                Image(systemName: "plus.circle.fill")
-                    .foregroundStyle(.blue)
-                    .contentShape(Rectangle())
+            Button {
+                guard !isAdded else { return }
+                onAdd()
+            } label: {
+                if isAdded {
+                    Label("Added", systemImage: "checkmark.circle.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .labelStyle(.titleAndIcon)
+                        .foregroundStyle(.green)
+                        .contentShape(Rectangle())
+                } else {
+                    Image(systemName: "plus.circle.fill")
+                        .foregroundStyle(.blue)
+                        .contentShape(Rectangle())
+                }
             }
             .buttonStyle(.borderless)
-            .accessibilityLabel("Add \(name)")
+            .accessibilityLabel(isAdded ? "\(name) added" : "Add \(name)")
+            .accessibilityValue(isAdded ? "Added" : "")
+            .modifier(IdentifierIfPresent(identifier: addIdentifier))
         }
     }
 
@@ -95,6 +115,7 @@ struct PlaceDescriptionCard: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.leading)
                 .lineLimit(6)
+                .modifier(IdentifierIfPresent(identifier: detailIdentifier))
                 .modifier(OpenDescriptionTap(isActive: placeDescription != nil, action: onOpen))
             if showsPastRange {
                 PastYourRangeLabel()

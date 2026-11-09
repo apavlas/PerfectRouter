@@ -406,6 +406,8 @@ struct ContentView: View {
                             .background(.white, in: Circle())
                             .shadow(radius: 3)
                     }
+                    .accessibilityIdentifier(AccessibilityID.highlightPin(stop.name))
+                    .accessibilityLabel("Highlight: \(stop.name)")
                 }
                 .tag(stop.id)
             }
@@ -657,6 +659,19 @@ struct ContentView: View {
                 // summary that used to be the only `activeRouteStyle`.
                 VStack(spacing: 0) {
                     sheetReplanBanner
+                    // A highlight add re-routes the ride and the list
+                    // remounts its sections. Pinned above the list, the
+                    // banner stays in view on every add, at any detent and
+                    // in the iPad sidebar, until its timer or Undo.
+                    if let undo = viewModel.foodStopUndo, undo.isHighlight {
+                        AddedStopUndoBanner(viewModel: viewModel, undo: undo)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
+                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 4)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
                     Text(verbatim: viewModel.routeStyle.rawValue)
                         .font(.system(size: 1))
                         .foregroundStyle(.clear)

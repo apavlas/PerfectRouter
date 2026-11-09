@@ -245,6 +245,7 @@ struct StopSuggestionService {
             samples = evenlySpaced(walked, max: maxSearches)
         }
         var seen = Set<String>()          // de-dup by name + rounded coords
+        var farFromRoute = Set<String>()  // sights already measured too far off the line
         var results: [SuggestedStop] = []
         var tally = GasSampleTally()
         var failedSampleDistances: [CLLocationDistance] = []
@@ -328,9 +329,24 @@ struct StopSuggestionService {
                     let distFromSample = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
                         .distance(from: CLLocation(latitude: sample.coordinate.latitude,
                                                    longitude: sample.coordinate.longitude))
-                    guard distFromSample <= corridor else { continue }
-
+                    // Sights: MapKit answers for the whole area, and samples
+                    // sit ~1/13 of the ride apart, so an 8 km circle around
+                    // each one skips most of the road. Slug Bug Ranch, on
+                    // I-40 a few miles before Amarillo, came back from every
+                    // sample and was dropped by all of them. A sight close
+                    // to the route line is kept whichever sample found it.
+                    // Gas and food keep the per-sample circle.
                     let key = "\(item.name ?? "")|\(round(coord.latitude * 1000))|\(round(coord.longitude * 1000))"
+                    var routeDetour: CLLocationDistance?
+                    if distFromSample > corridor {
+                        guard category == .attraction, !seen.contains(key), !farFromRoute.contains(key) else { continue }
+                        let detour = RouteGeometry.distanceFromRoute(of: coord, alongPolylines: legPolylines)
+                        guard detour <= corridor else {
+                            farFromRoute.insert(key)
+                            continue
+                        }
+                        routeDetour = detour
+                    }
                     guard seen.insert(key).inserted else { continue }
 
                     // Use the stop's true position along the route rather than the
@@ -341,11 +357,18 @@ struct StopSuggestionService {
                     results.append(SuggestedStop(
                         mapItem: item,
                         category: category,
-                        distanceAlongRoute: RouteGeometry.preferredDistanceAlongRoute(
-                            projected: projected,
-                            known: sample.distanceAlongRoute
-                        ),
-                        detourMeters: RouteGeometry.distanceFromRoute(of: coord, alongPolylines: legPolylines)
+                        // A sight's mile mark is its projection. The sample
+                        // fallback put Clara Luper Sit-in Plaza, a block
+                        // from the Oklahoma City start, at the mile-20
+                        // sample that found it.
+                        distanceAlongRoute: category == .attraction
+                            ? projected
+                            : RouteGeometry.preferredDistanceAlongRoute(
+                                projected: projected,
+                                known: sample.distanceAlongRoute
+                            ),
+                        detourMeters: routeDetour
+                            ?? RouteGeometry.distanceFromRoute(of: coord, alongPolylines: legPolylines)
                     ))
                 }
             }

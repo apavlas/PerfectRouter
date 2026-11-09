@@ -581,6 +581,10 @@ struct SuggestionsSection: View {
             if !viewModel.suggestedStops.isEmpty, viewModel.addableSuggestions.isEmpty, !viewModel.legs.isEmpty {
                 Text(viewModel.suggestedStops.allSatisfy { viewModel.isStopOnRoute($0) }
                      ? "Stops already on this route aren't listed again."
+                     : viewModel.suggestedStops.allSatisfy {
+                         viewModel.isStopOnRoute($0) || viewModel.isRideHighlight($0)
+                     }
+                     ? "These sights are listed under Highlights above."
                      : "Gas along this ride is listed with the fuel stops above.")
                     .foregroundStyle(.secondary)
                     .focusable()
