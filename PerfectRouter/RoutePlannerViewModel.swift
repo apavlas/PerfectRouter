@@ -5239,7 +5239,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// one — the leg Select recommended's replan actually rides. Food is
     /// optional: when the tank-interval ETA is near breakfast / lunch /
     /// dinner *and* `preferringFoodAt` lists an in-window pump, that pump
-    /// wins over gas-only in the same window. Off-meal or missing food never
+    /// wins over gas-only in the same window (FUEL-8), but the first fill of
+    /// a full tank never lands in the first ~20% of tank range when a later
+    /// in-window option exists (FUEL-7). Off-meal or missing food never
     /// skips the stop. That hop, including the leg into the destination,
     /// stays inside the reserve (tank × 0.85) when any station fits there.
     /// When the reserve window is empty, the nearest station still inside
@@ -5503,10 +5505,23 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             }
         }
 
+        // FUEL-7 / FUEL-8: on a full-tank start (first pick of this plan),
+        // drop pumps in the first ~20% of tank range when a later in-window
+        // option exists. Meal/food preference then chooses inside that floor,
+        // never pulling the first fill earlier than it.
+        let initialRefuel: CLLocationDistance = lastRefuel
+        func afterEarlyFloor(_ window: [FuelCandidate]) -> [FuelCandidate] {
+            guard recommendedIDs.isEmpty,
+                  abs(lastRefuel - initialRefuel) <= 1 else { return window }
+            let floor = lastRefuel + range * minimumSeparationFactor
+            let pastFloor = window.filter { $0.distanceAlongRoute >= floor }
+            return pastFloor.isEmpty ? window : pastFloor
+        }
+
         // Farthest station within the window. Food is a meal-time preference,
         // not a gate — off-meal we keep the tank-interval gas pick.
         func farthest(_ limit: CLLocationDistance, preferFood: Bool) -> FuelCandidate? {
-            let window = inWindow(limit)
+            let window = afterEarlyFloor(inWindow(limit))
             let withFood = (preferFood && !preferringFoodAt.isEmpty)
                 ? window.filter { preferringFoodAt.contains($0.id) }
                 : []
@@ -5517,7 +5532,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         /// Closest station still inside the tank. Used only when the reserve
         /// window is empty.
         func nearest(_ limit: CLLocationDistance) -> FuelCandidate? {
-            inWindow(limit).min(by: { $0.distanceAlongRoute < $1.distanceAlongRoute })
+            afterEarlyFloor(inWindow(limit)).min(by: { $0.distanceAlongRoute < $1.distanceAlongRoute })
         }
 
         /// A short hop is worth taking when the destination, or some later
@@ -5579,12 +5594,30 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                     // after this last reachable station, not after the
                     // previous fill that made the hop look short.
                     if nearest(range) == nil {
-                        let next = nextStation(after: stop.distanceAlongRoute)
+                        // FUEL-7 exception: on the first full-tank pick only,
+                        // keep the lone early pump rather than omitting the
+                        // only station the rider can reach. Mid-route near
+                        // duplicates still name the gap without recommending.
+                        let isFirstFullTankPick = recommendedIDs.isEmpty
+                            && abs(lastRefuel - initialRefuel) <= 1
+                        if isFirstFullTankPick {
+                            recommendedIDs.append(stop.id)
+                            entries.append(.recommended(stop.id))
+                            lastRefuel = stop.distanceAlongRoute
+                            lastDetour = finiteDetour(stop)
+                            skippedNear.removeAll()
+                        }
+                        // Gap / past-range resume from the skipped (or kept)
+                        // pump, not from the previous fill — otherwise the
+                        // skipped pump itself becomes a false past-range row.
+                        let anchor = stop.distanceAlongRoute
+                        let next = nextStation(after: anchor)
                         if let next, crossesUnsearched(next.distanceAlongRoute) {
+                            if isFirstFullTankPick { continue }
                             break
                         }
                         let end = next?.distanceAlongRoute ?? totalDistance
-                        appendGap(from: stop.distanceAlongRoute, to: end)
+                        appendGap(from: anchor, to: end)
                         if let next {
                             entries.append(.pastRange(next.id))
                             lastRefuel = next.distanceAlongRoute
