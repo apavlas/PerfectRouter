@@ -35,6 +35,11 @@ struct RideHighlightsSection: View {
                 .frame(maxWidth: .infinity, minHeight: 1, maxHeight: 1)
                 .accessibilityIdentifier(AccessibilityID.rideHighlights)
                 .accessibilityLabel("Ride Highlights")
+            if let undo = viewModel.foodStopUndo, undo.isHighlight {
+                AddedStopUndoBanner(viewModel: viewModel, undo: undo)
+            } else {
+                FocusPlaceholderRow()
+            }
             if expanded {
                 ForEach(viewModel.rideHighlights) { stop in
                     highlightCard(stop)
@@ -60,6 +65,8 @@ struct RideHighlightsSection: View {
                     titleIdentifier: AccessibilityID.rideHighlightName(stop.name),
                     descriptionIdentifier: AccessibilityID.rideHighlightDescription(stop.name),
                     rowIdentifier: AccessibilityID.rideHighlightRow(stop.name),
+                    detailIdentifier: AccessibilityID.rideHighlightDetail(stop.name),
+                    addIdentifier: AccessibilityID.rideHighlightAdd(stop.name),
                     alignment: .center,
                     onSelect: { focusFromSidebar(stop) },
                     onOpen: {

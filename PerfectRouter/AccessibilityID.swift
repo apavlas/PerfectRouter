@@ -73,6 +73,10 @@ enum AccessibilityID {
     /// The highlight row, excluding the Add button. Tapping it opens the
     /// description sheet when the place has one.
     static func rideHighlightRow(_ name: String) -> String { "highlight.\(name).row" }
+    /// Detour line under a highlight: "on your route" or "X off route" (H-2).
+    static func rideHighlightDetail(_ name: String) -> String { "highlight.\(name).detail" }
+    /// The plus button that adds the highlight as a stop (H-3).
+    static func rideHighlightAdd(_ name: String) -> String { "highlight.\(name).add" }
 
     static func rideHighlightName(_ name: String) -> String { "highlight.\(name).name" }
     /// Two-line clip under the place name.
@@ -87,4 +91,9 @@ enum AccessibilityID {
     /// Quiet banner after a food stop is added (FP-3).
     static let foodUndoBanner = "foodUndoBanner"
     static let foodUndoButton = "foodUndoButton"
+    /// Same quiet banner after a ride highlight is added (H-3).
+    static let highlightUndoBanner = "highlightUndoBanner"
+    static let highlightUndoButton = "highlightUndoButton"
+    /// The star pin for a ride highlight on the map (H-2).
+    static func highlightPin(_ name: String) -> String { "highlightPin.\(name)" }
 }

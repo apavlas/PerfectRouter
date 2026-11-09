@@ -48,20 +48,13 @@ struct RideSummarySection: View {
                 } else {
                     FocusPlaceholderRow()
                 }
-                if let undo = viewModel.foodStopUndo {
-                    HStack {
-                        Text("Added \(undo.name)")
-                            .font(.subheadline)
-                        Spacer()
-                        Button("Undo") {
-                            viewModel.undoFoodStop()
-                        }
-                        .font(.subheadline.weight(.semibold))
-                        .accessibilityIdentifier(AccessibilityID.foodUndoButton)
-                    }
-                    .accessibilityElement(children: .contain)
-                    .accessibilityIdentifier(AccessibilityID.foodUndoBanner)
-                    .accessibilityLabel("Added \(undo.name)")
+                // A highlight's banner sits in the Highlights section, under
+                // the rider's thumb (H-3). The replan clears that section
+                // until the new picks publish, so the banner falls back here
+                // meanwhile. Food keeps it here.
+                if let undo = viewModel.foodStopUndo,
+                   !undo.isHighlight || viewModel.rideHighlights.isEmpty {
+                    AddedStopUndoBanner(viewModel: viewModel, undo: undo)
                 } else {
                     FocusPlaceholderRow()
                 }
@@ -398,5 +391,32 @@ private struct FuelPlanRows: View {
 
     private func foodPair(for fuelStopID: UUID) -> FuelFoodStop? {
         viewModel.fuelFoodStops.first { $0.id == fuelStopID }
+    }
+}
+
+/// Quiet "Added <name> · Undo" row after a food stop (FP-3) or a ride
+/// highlight (H-3) is added. Same look for both; each has its own ids.
+struct AddedStopUndoBanner: View {
+    let viewModel: RoutePlannerViewModel
+    let undo: FoodStopUndo
+
+    var body: some View {
+        HStack {
+            Text("Added \(undo.name)")
+                .font(.subheadline)
+            Spacer()
+            Button("Undo") {
+                viewModel.undoFoodStop()
+            }
+            .font(.subheadline.weight(.semibold))
+            .accessibilityIdentifier(undo.isHighlight
+                                     ? AccessibilityID.highlightUndoButton
+                                     : AccessibilityID.foodUndoButton)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(undo.isHighlight
+                                 ? AccessibilityID.highlightUndoBanner
+                                 : AccessibilityID.foodUndoBanner)
+        .accessibilityLabel("Added \(undo.name)")
     }
 }

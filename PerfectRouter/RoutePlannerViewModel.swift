@@ -301,10 +301,13 @@ struct FuelRowLabelSet: Equatable, Sendable {
 
 /// Visible fuel rows and the labels those rows draw. One value, so a list
 /// update cannot show a fuel-stop number with another row's mile caption.
-/// Quiet undo chip after a food stop is added from a fuel-pair row or pin.
+/// Quiet undo chip after a food stop (fuel-pair row or pin) or a ride
+/// highlight (list row or star pin) is added.
 struct FoodStopUndo: Equatable {
     let waypointID: UUID
     let name: String
+    /// The added stop is a ride highlight (H-3). Same banner, its own ids.
+    var isHighlight = false
 }
 
 struct FuelListPresentation {
@@ -1606,8 +1609,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// sheet does not list the same pump twice (riding time in the summary,
     /// and again as "~80 mi from start").
     var addableSuggestions: [SuggestedStop] {
+        // Ride highlights have their own section and star pins (H-3); the
+        // generic Sights list does not draw them a second time.
         suggestedStops.filter { stop in
-            !isStopOnRoute(stop) && !isShownAsFuelPlanRow(stop)
+            !isStopOnRoute(stop) && !isShownAsFuelPlanRow(stop) && !isRideHighlight(stop)
         }
     }
 
@@ -2169,6 +2174,17 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             toggleBufferedHotelStop(suggestion)
             return
         }
+        // A highlight (list row or star pin) goes in ride order so fuel and
+        // food stops already on the ride keep their places, then gets the
+        // same quiet Undo banner as food (H-3).
+        if isRideHighlight(suggestion) {
+            insertHighlightStop(suggestion)
+            if let added = waypoints.first(where: { Self.sameCoordinate($0.coordinate, suggestion.coordinate) }) {
+                presentFoodStopUndo(waypointID: added.id, name: added.name, isHighlight: true)
+            }
+            scheduleRecalculation()
+            return
+        }
         if suggestion.category == .food {
             appliedFoodKeys.insert(Self.coordinateKey(suggestion.coordinate))
         }
@@ -2196,9 +2212,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         foodStopUndo = nil
     }
 
-    private func presentFoodStopUndo(waypointID: UUID, name: String) {
+    private func presentFoodStopUndo(waypointID: UUID, name: String, isHighlight: Bool = false) {
         foodStopUndoClearTask?.cancel()
-        foodStopUndo = FoodStopUndo(waypointID: waypointID, name: name)
+        foodStopUndo = FoodStopUndo(waypointID: waypointID, name: name, isHighlight: isHighlight)
         foodStopUndoClearTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(5))
             guard !Task.isCancelled else { return }
@@ -2938,6 +2954,41 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         if scrolling {
             scrollToWaypointID = waypoint.id
         }
+    }
+
+    /// Puts a highlight before the first middle stop that sits farther along
+    /// the ride. Reads the measurement already taken for this line (built off
+    /// the main actor for long rides); with none yet, the stop goes before
+    /// the destination like any other added stop. The sheet does not scroll:
+    /// the banner confirms the add.
+    private func insertHighlightStop(_ stop: SuggestedStop) {
+        guard !waypoints.contains(where: { Self.sameCoordinate($0.coordinate, stop.coordinate) }) else { return }
+        guard waypoints.count > 2,
+              measuredRouteGeneration == routeGeometryGeneration,
+              let route = cachedMeasuredRoute else {
+            insertStop(stop, scrolling: false)
+            return
+        }
+        let along = cachedDistance(for: stop)
+        let middle = waypoints.dropFirst().dropLast().map(\.coordinate)
+        let index = Self.rideOrderIndex(
+            forStopAt: along,
+            middleDistances: middle.map { RouteGeometry.distanceAlongRoute(of: $0, on: route) }
+        )
+        waypoints.insert(Self.waypoint(from: stop), at: index)
+    }
+
+    /// Index in the full waypoint list (start at 0, destination last) for a
+    /// stop `along` meters into the ride, given the mile marks of the middle
+    /// stops in their current order.
+    nonisolated static func rideOrderIndex(
+        forStopAt along: CLLocationDistance,
+        middleDistances: [CLLocationDistance]
+    ) -> Int {
+        if let later = middleDistances.firstIndex(where: { $0 > along }) {
+            return later + 1
+        }
+        return middleDistances.count + 1
     }
 
     private nonisolated static func waypoint(from suggestion: SuggestedStop) -> Waypoint {
@@ -5687,13 +5738,17 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             }
         }
 
-        let picked = applyingKnownPlaceDescriptions(Self.selectHighlights(
-            from: candidates,
-            totalDistance: totalDistanceMeters
-        ))
+        let picked = PlaceDescriptionReader.clearingCrossNamedDescriptions(
+            applyingKnownPlaceDescriptions(Self.selectHighlights(
+                from: candidates,
+                totalDistance: totalDistanceMeters
+            ))
+        )
         rideHighlights = picked
         guard generation == highlightGeneration else { return }
-        let enriched = await attachingPlaceDescriptions(picked)
+        let enriched = PlaceDescriptionReader.clearingCrossNamedDescriptions(
+            await attachingPlaceDescriptions(picked)
+        )
         // A rejected description blanks that card's text. It must not drop
         // the row, and a failed fetch must not replace the list with a
         // shorter one. Cancellation leaves the picks already published.
@@ -5767,9 +5822,19 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         }
     }
 
-    /// Whether a stop is one of the auto-recommended ride highlights.
+    /// Whether a stop is one of the auto-recommended ride highlights. A
+    /// separate Sights search returns the same place under a new id, so the
+    /// coordinate or the place name also counts.
     func isRideHighlight(_ stop: SuggestedStop) -> Bool {
-        rideHighlights.contains { $0.id == stop.id }
+        guard !rideHighlights.isEmpty else { return false }
+        let key = Self.coordinateKey(stop.coordinate)
+        return rideHighlights.contains { highlight in
+            if highlight.id == stop.id { return true }
+            // A pump or a diner next door to a sight is not that sight.
+            guard highlight.category == stop.category else { return false }
+            return Self.coordinateKey(highlight.coordinate) == key
+                || PlaceDescriptionReader.placeNamesMatch(highlight.name, stop.name)
+        }
     }
 
     /// Pure selection of ride highlights from the places of interest found
@@ -5794,6 +5859,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         // just past the city, and the row is parked inside this window
         // instead of being dropped. Other sights keep the 8 km cap.
         let endMargin = min(5_000, totalDistance * 0.05)
+        // The parked ranch's mile mark is a stand-in, not where it is. It
+        // does not crowd out a real sight near the end (Slug Bug Ranch, a
+        // few miles before Amarillo), and a real sight does not crowd it out.
+        var parkedIDs = Set<UUID>()
         let eligible = candidates.compactMap { stop -> SuggestedStop? in
             let ranch = PlaceDescriptionReader.placeNamesMatch(stop.name, "Cadillac Ranch")
             let detourLimit = ranch
@@ -5805,6 +5874,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 let parked = totalDistance - endMargin - 1
                 guard parked > endMargin else { return nil }
                 along = parked
+                parkedIDs.insert(stop.id)
             }
             guard along > endMargin, along < totalDistance - endMargin else { return nil }
             if along == stop.distanceAlongRoute { return stop }
@@ -5812,10 +5882,20 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         }
 
         var chosen: [SuggestedStop] = []
-        for stop in eligible.sorted(by: { $0.detourMeters < $1.detourMeters }) {
+        // The parked ranch takes its slot first: its detour is the long
+        // way round past Amarillo, so smallest-detour-first would always
+        // fill the cap before it once a real search answers.
+        let ordered = eligible.sorted { lhs, rhs in
+            let lParked = parkedIDs.contains(lhs.id)
+            let rParked = parkedIDs.contains(rhs.id)
+            if lParked != rParked { return lParked }
+            return lhs.detourMeters < rhs.detourMeters
+        }
+        for stop in ordered {
             guard chosen.count < maxCount else { break }
             let farEnough = chosen.allSatisfy {
-                abs($0.distanceAlongRoute - stop.distanceAlongRoute) >= minSeparationMeters
+                parkedIDs.contains($0.id) || parkedIDs.contains(stop.id)
+                    || abs($0.distanceAlongRoute - stop.distanceAlongRoute) >= minSeparationMeters
             }
             if farEnough {
                 chosen.append(stop)

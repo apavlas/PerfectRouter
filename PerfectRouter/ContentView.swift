@@ -406,6 +406,8 @@ struct ContentView: View {
                             .background(.white, in: Circle())
                             .shadow(radius: 3)
                     }
+                    .accessibilityIdentifier(AccessibilityID.highlightPin(stop.name))
+                    .accessibilityLabel("Highlight: \(stop.name)")
                 }
                 .tag(stop.id)
             }

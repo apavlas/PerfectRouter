@@ -33,6 +33,10 @@ struct PlaceDescriptionCard: View {
     /// `highlight.<name>.row`. Child name and description identifiers stay
     /// exposed because the button uses `accessibilityElement(children: .contain)`.
     var rowIdentifier: String = ""
+    /// Highlight cards stamp the detour line and the Add button so tests can
+    /// read "on your route" / "X off route" and tap Add. Empty elsewhere.
+    var detailIdentifier: String = ""
+    var addIdentifier: String = ""
     var alignment: VerticalAlignment = .top
     var spacing: CGFloat = 8
     /// Sidebar row tap when the place has no description to open. Empty for
@@ -53,6 +57,7 @@ struct PlaceDescriptionCard: View {
             }
             .buttonStyle(.borderless)
             .accessibilityLabel("Add \(name)")
+            .modifier(IdentifierIfPresent(identifier: addIdentifier))
         }
     }
 
@@ -95,6 +100,7 @@ struct PlaceDescriptionCard: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.leading)
                 .lineLimit(6)
+                .modifier(IdentifierIfPresent(identifier: detailIdentifier))
                 .modifier(OpenDescriptionTap(isActive: placeDescription != nil, action: onOpen))
             if showsPastRange {
                 PastYourRangeLabel()
