@@ -5535,7 +5535,14 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                   abs(lastRefuel - initialRefuel) <= 1 else { return window }
             let floor = lastRefuel + range * fuelFirstFillEarlyFloorFactor
             let pastFloor = window.filter { $0.distanceAlongRoute >= floor }
-            return pastFloor.isEmpty ? window : pastFloor
+            if !pastFloor.isEmpty { return pastFloor }
+            // Comfort may be empty past the floor while the full tank still
+            // has a later pump (e.g. 25 mi early + 86 mi just past reserve).
+            // Return empty so farthest(comfort) yields to nearest(tank) with
+            // the floor still applied — only fall back to early pumps when
+            // the whole tank has nothing past the floor (lone-early exception).
+            let tankPastFloor = inWindow(range).filter { $0.distanceAlongRoute >= floor }
+            return tankPastFloor.isEmpty ? window : []
         }
 
         // Farthest station within the window. Food is a meal-time preference,

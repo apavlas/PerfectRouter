@@ -172,6 +172,26 @@ final class FuelPlanningTests: XCTestCase {
         XCTAssertGreaterThanOrEqual((stops.first?.distanceAlongRoute ?? 0) / mile, 35 - 0.5)
     }
 
+    /// Live Atlanta shape: the only comfort-window pump can sit under the
+    /// 35% floor while the next pump is just past the 0.85 reserve. Floor
+    /// must still prefer that later in-tank pump over the early one.
+    func testFloorPrefersInTankPumpJustPastComfortReserve() {
+        let mile = AppSettings.metersPerMile
+        let early = gas(at: 25.4 * mile)
+        let justPastComfort = gas(at: 85.4 * mile)
+        let (stops, _) = RoutePlannerViewModel.planFuelStops(
+            from: [early, justPastComfort],
+            totalDistance: 1_400 * mile,
+            range: 100 * mile,
+            preferringFoodAt: [early.id],
+            departure: utcDate(hour: 11, minute: 30),
+            totalTravelTime: 20 * 60 * 60,
+            calendar: utcCalendar
+        )
+        XCTAssertEqual(stops.first?.id, justPastComfort.id)
+        XCTAssertGreaterThanOrEqual((stops.first?.distanceAlongRoute ?? 0) / mile, 35 - 0.5)
+    }
+
     func testFlagsFuelGapWhenNoReachableStation() {
         // Stations only near the start; a long dry stretch follows.
         let (stops, hasGap) = RoutePlannerViewModel.planFuelStops(
