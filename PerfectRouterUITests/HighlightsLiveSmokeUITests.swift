@@ -27,7 +27,7 @@ final class HighlightsLiveSmokeUITests: XCTestCase {
 
     func testOklahomaCityToAmarilloHighlights() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-RideSummaryProbe"]
+        app.launchArguments = ["-UITestSkipOnboarding", "-RideSummaryProbe"]
         addUIInterruptionMonitor(withDescription: "Location") { alert in
             for title in ["Allow While Using App", "Allow Once", "OK"] where alert.buttons[title].exists {
                 alert.buttons[title].tap()

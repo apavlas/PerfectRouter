@@ -666,12 +666,12 @@ struct ContentView: View {
                     if let undo = viewModel.foodStopUndo, undo.isHighlight {
                         AddedStopUndoBanner(viewModel: viewModel, undo: undo)
                             .padding(.horizontal, 16)
-                            .padding(.vertical, 10)
-                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-                            .padding(.horizontal, 12)
                             .padding(.vertical, 4)
+                            .frame(maxWidth: .infinity)
+                            .background(.regularMaterial)
                             .transition(.move(edge: .top).combined(with: .opacity))
                     }
+                    Group {
                     Text(verbatim: viewModel.routeStyle.rawValue)
                         .font(.system(size: 1))
                         .foregroundStyle(.clear)
@@ -712,8 +712,9 @@ struct ContentView: View {
                         .accessibilityLabel(viewModel.committedWaypointMarker)
                         .accessibilityValue(viewModel.committedWaypointMarker)
                         .focusable()
+                    }
+                    .allowsHitTesting(false)
                 }
-                .accessibilityElement(children: .contain)
             }
             .navigationTitle("Plan Ride")
             .navigationBarTitleDisplayMode(.inline)

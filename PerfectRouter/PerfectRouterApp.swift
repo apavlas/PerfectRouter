@@ -4,14 +4,14 @@ import SwiftUI
 struct PerfectRouterApp: App {
     /// Controls whether the scenic launch animation is still on screen.
     /// UI tests skip it so the planner is on screen when the suite starts.
-    @State private var showSplash = !UITestStubLaunch.isEnabled
+    @State private var showSplash = !UITestStubLaunch.skipsOnboarding
     /// One-time post-splash intro. Returning riders skip it.
     @AppStorage(AppSettings.Keys.hasCompletedFirstRun)
     private var hasCompletedFirstRun = false
 
     init() {
         AppSettings.registerDefaults()
-        if UITestStubLaunch.isEnabled {
+        if UITestStubLaunch.skipsOnboarding {
             AppSettings.completeFirstRun()
         }
     }
@@ -25,8 +25,8 @@ struct PerfectRouterApp: App {
                 // underneath so a shared-route deep link can import while the
                 // intro is up and land after dismiss.
                 ContentView(
-                    readyForPermissions: !showSplash && (hasCompletedFirstRun || UITestStubLaunch.isEnabled),
-                    planningSheetEnabled: hasCompletedFirstRun || UITestStubLaunch.isEnabled
+                    readyForPermissions: !showSplash && (hasCompletedFirstRun || UITestStubLaunch.skipsOnboarding),
+                    planningSheetEnabled: hasCompletedFirstRun || UITestStubLaunch.skipsOnboarding
                 )
 
                 if showSplash {
@@ -40,7 +40,7 @@ struct PerfectRouterApp: App {
                                 showSplash = false
                             }
                         }
-                } else if !hasCompletedFirstRun && !UITestStubLaunch.isEnabled {
+                } else if !hasCompletedFirstRun && !UITestStubLaunch.skipsOnboarding {
                     FirstRunView()
                         .transition(.opacity)
                 }

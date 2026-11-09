@@ -398,22 +398,30 @@ struct AddedStopUndoBanner: View {
     let undo: FoodStopUndo
 
     var body: some View {
-        HStack {
+        // The label and the Undo button are siblings, not combined into one
+        // accessibility element. A parent `.accessibilityLabel` on a contain
+        // stack made the button exist in the tree but fail `isHittable`, so
+        // a test (and VoiceOver) could see Undo without a rider being able
+        // to tap it.
+        HStack(spacing: 12) {
             Text("Added \(undo.name)")
                 .font(.subheadline)
-            Spacer()
+                .accessibilityIdentifier(undo.isHighlight
+                                         ? AccessibilityID.highlightUndoBanner
+                                         : AccessibilityID.foodUndoBanner)
+                .accessibilityLabel("Added \(undo.name)")
+            Spacer(minLength: 8)
             Button("Undo") {
                 viewModel.undoFoodStop()
             }
             .font(.subheadline.weight(.semibold))
+            .buttonStyle(.borderless)
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
             .accessibilityIdentifier(undo.isHighlight
                                      ? AccessibilityID.highlightUndoButton
                                      : AccessibilityID.foodUndoButton)
+            .accessibilityLabel("Undo")
         }
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier(undo.isHighlight
-                                 ? AccessibilityID.highlightUndoBanner
-                                 : AccessibilityID.foodUndoBanner)
-        .accessibilityLabel("Added \(undo.name)")
     }
 }

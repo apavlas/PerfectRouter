@@ -362,12 +362,20 @@ final class CoreJourneyUITests: XCTestCase {
         line: UInt = #line
     ) {
         let banner = identified("highlightUndoBanner", in: app)
-        let undo = identified("highlightUndoButton", in: app)
+        // Prefer the Button query: a wrapping Other with the same id is not
+        // hittable even when the control itself is.
+        let undo = app.buttons["highlightUndoButton"].firstMatch.exists
+            ? app.buttons["highlightUndoButton"].firstMatch
+            : identified("highlightUndoButton", in: app)
         repeat {
             XCTAssertTrue(banner.exists && banner.label.contains(name),
                           "Undo banner gone \(String(format: "%.1f", Date().timeIntervalSince(start))) s after adding \(name)",
                           file: file, line: line)
-            XCTAssertTrue(undo.exists && undo.isHittable, "Undo not tappable", file: file, line: line)
+            XCTAssertTrue(
+                undo.exists && undo.isHittable,
+                "Undo not tappable exists=\(undo.exists) hittable=\(undo.isHittable) frame=\(undo.frame)",
+                file: file, line: line
+            )
             if !banner.exists { return }
             RunLoop.current.run(until: Date().addingTimeInterval(0.5))
         } while Date().timeIntervalSince(start) < seconds
