@@ -13,6 +13,7 @@ struct PerfectRouterApp: App {
         AppSettings.registerDefaults()
         if UITestStubLaunch.skipsOnboarding {
             AppSettings.completeFirstRun()
+            UITestStubLaunch.installFocusPlaceSearchBridge()
         }
     }
 

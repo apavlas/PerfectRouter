@@ -12,9 +12,11 @@ struct SearchSection: View {
     let currentRegion: MKCoordinateRegion
     /// Called with each added waypoint so the map can frame it.
     let onWaypointAdded: (Waypoint) -> Void
+    /// Owned by ContentView so a SearchSection identity reset (iPad
+    /// sheet / first-responder churn) does not drop the query or results.
+    @Binding var searchText: String
+    @Binding var searchResults: [MKMapItem]
 
-    @State private var searchText = ""
-    @State private var searchResults: [MKMapItem] = []
     @State private var showingContactPicker = false
     @FocusState private var searchFocused: Bool
 
@@ -28,6 +30,10 @@ struct SearchSection: View {
                     .focused($searchFocused)
                     .autocorrectionDisabled()
                     .submitLabel(.search)
+                    // Keep the field itself the hit target. An empty parent
+                    // focus container on a regular-width iPad sheet can
+                    // otherwise swallow the tap (no keyboard, map pans).
+                    .contentShape(Rectangle())
                 // Stays in the row while the field is empty. Removing it
                 // left the search stack with a focus child that appeared
                 // and disappeared as a replan cleared the query.
@@ -43,6 +49,7 @@ struct SearchSection: View {
                 .disabled(searchText.isEmpty)
                 .accessibilityHidden(searchText.isEmpty)
             }
+            .contentShape(Rectangle())
             // Live search, debounced: re-fires 0.4s after the user stops typing.
             .task(id: searchText) {
                 guard !searchText.isEmpty else {
@@ -94,6 +101,24 @@ struct SearchSection: View {
         .background {
             ContactAddressPicker(isPresented: $showingContactPicker) { name, address in
                 addContactAddress(named: name, at: address)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UITestStubLaunch.focusPlaceSearchNotification)) { _ in
+            guard UITestStubLaunch.skipsOnboarding else { return }
+            NSLog("PerfectRouter UITest placeSearch taking focus")
+            searchFocused = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UITestStubLaunch.typePlaceSearchNotification)) { note in
+            guard UITestStubLaunch.skipsOnboarding, let text = note.object as? String else { return }
+            NSLog("PerfectRouter UITest placeSearch applying %@", text)
+            // Set the query only. Focusing here expands an iPad medium sheet
+            // to the large detent and invalidates the map-fit check.
+            searchText = text
+            Task { @MainActor in
+                let results = await viewModel.searchPlaces(query: text, near: currentRegion)
+                    .filter { $0.placemark.coordinate.isValidLocation }
+                NSLog("PerfectRouter UITest placeSearch results %d", results.count)
+                searchResults = results
             }
         }
     }

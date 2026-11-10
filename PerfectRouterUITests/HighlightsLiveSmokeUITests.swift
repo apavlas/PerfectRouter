@@ -46,9 +46,7 @@ final class HighlightsLiveSmokeUITests: XCTestCase {
 
         let field = placeSearch(app)
         XCTAssertTrue(field.waitForExistence(timeout: 15), "placeSearch missing")
-        field.tap()
-        if !app.keyboards.firstMatch.waitForExistence(timeout: 4), field.isHittable { field.tap() }
-        field.typeText("Amarillo")
+        PlaceSearchTyping.type("Amarillo", into: field, in: app)
         let result = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'searchResult.Amarillo'")).firstMatch
         XCTAssertTrue(result.waitForExistence(timeout: 30), "No Amarillo search result")
         result.tap()

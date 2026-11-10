@@ -124,9 +124,7 @@ final class B11LongRouteSmokeUITests: XCTestCase {
         // Route: Current Location -> Denver.
         let field = placeSearch(app)
         XCTAssertTrue(field.waitForExistence(timeout: 15), "placeSearch missing")
-        field.tap()
-        if !app.keyboards.firstMatch.waitForExistence(timeout: 4), field.isHittable { field.tap() }
-        field.typeText("Denver")
+        PlaceSearchTyping.type("Denver", into: field, in: app)
         let result = app.buttons["searchResult.Denver"]
         XCTAssertTrue(result.waitForExistence(timeout: 30), "No Denver search result")
         result.tap()
