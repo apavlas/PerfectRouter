@@ -10,14 +10,25 @@ enum PlaceSearchTyping {
 
     /// Type into placeSearch. On iPhone, a normal tap and typeText works. On
     /// a 13-inch iPad floating sheet, synthesized taps can be delivered to
-    /// the map and typeText reports no keyboard focus even after the field
-    /// is first responder, so the fallback asks the app over loopback to
-    /// focus the UITextField and insert the text.
-    static func type(_ name: String, into field: XCUIElement, in app: XCUIApplication) {
-        focus(field, in: app)
-        if field.hasFocus || app.keyboards.firstMatch.exists {
-            field.typeText(name)
-            return
+    /// the map and typeText reports no keyboard focus, so the fallback asks
+    /// the app over loopback to set the query. That path must not make the
+    /// field first responder: focusing expands a medium iPad sheet to large
+    /// and breaks the map-fit test.
+    static func type(
+        _ name: String,
+        into field: XCUIElement,
+        in app: XCUIApplication,
+        avoidFocus: Bool = false
+    ) {
+        // A tap on placeSearch expands an iPad medium sheet to large, even
+        // when XCTest never reports keyboard focus. Callers that have locked
+        // the medium detent must set the query in-app and skip the tap.
+        if !avoidFocus, field.exists {
+            field.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.5)).tap()
+            if field.hasFocus || app.keyboards.firstMatch.waitForExistence(timeout: 2) {
+                field.typeText(name)
+                return
+            }
         }
         postTypeRequest(name)
         let deadline = Date().addingTimeInterval(4)
@@ -35,6 +46,8 @@ enum PlaceSearchTyping {
             if app.keyboards.firstMatch.waitForExistence(timeout: 2) { return }
             if field.hasFocus { return }
         }
+        // Used only when a test needs the keyboard itself. Do not call this
+        // from type(): becoming first responder expands the iPad sheet.
         postFocusRequest()
         RunLoop.current.run(until: Date().addingTimeInterval(0.35))
         _ = app.keyboards.firstMatch.waitForExistence(timeout: 3)

@@ -111,8 +111,9 @@ struct SearchSection: View {
         .onReceive(NotificationCenter.default.publisher(for: UITestStubLaunch.typePlaceSearchNotification)) { note in
             guard UITestStubLaunch.skipsOnboarding, let text = note.object as? String else { return }
             NSLog("PerfectRouter UITest placeSearch applying %@", text)
+            // Set the query only. Focusing here expands an iPad medium sheet
+            // to the large detent and invalidates the map-fit check.
             searchText = text
-            searchFocused = true
             Task { @MainActor in
                 let results = await viewModel.searchPlaces(query: text, near: currentRegion)
                     .filter { $0.placemark.coordinate.isValidLocation }

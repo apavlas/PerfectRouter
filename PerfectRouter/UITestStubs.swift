@@ -110,26 +110,16 @@ extension UITestStubLaunch {
         return nil
     }
 
-    /// UI-test only. Focus placeSearch and insert `text` (XCTest typeText
-    /// cannot, even after the field is first responder, on a 13-inch iPad
-    /// floating sheet).
+    /// UI-test only. Set the placeSearch query without becoming first
+    /// responder. Focusing the field expands an iPad medium sheet to large.
     @discardableResult
     static func applyPlaceSearchText(_ text: String) -> Bool {
-        guard let field = makePlaceSearchFirstResponder(), !text.isEmpty else { return false }
-        if let textField = field as? UITextField {
-            textField.insertText(text)
-        } else if let textView = field as? UITextView {
-            textView.insertText(text)
-        } else if let input = field as? UIKeyInput {
-            input.insertText(text)
-        } else {
-            return false
-        }
+        guard !text.isEmpty else { return false }
         NotificationCenter.default.post(
             name: typePlaceSearchNotification,
             object: text
         )
-        NSLog("PerfectRouter UITest placeSearch insertText %@", text)
+        NSLog("PerfectRouter UITest placeSearch apply text %@", text)
         return true
     }
 

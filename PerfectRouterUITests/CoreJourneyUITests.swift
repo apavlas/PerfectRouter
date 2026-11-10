@@ -842,7 +842,7 @@ final class CoreJourneyUITests: XCTestCase {
         // A field tucked under the sheet's navigation bar is still "hittable",
         // but typeText's tap lands on the bar and the field never takes focus.
         scrollSearchFieldBelowChrome(field, in: app)
-        PlaceSearchTyping.type(name, into: field, in: app)
+        PlaceSearchTyping.type(name, into: field, in: app, avoidFocus: locksPlanningDetent)
         let result = app.buttons["searchResult.\(name)"]
         XCTAssertTrue(
             result.waitForExistence(timeout: 6),
