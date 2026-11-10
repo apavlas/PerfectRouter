@@ -842,8 +842,7 @@ final class CoreJourneyUITests: XCTestCase {
         // A field tucked under the sheet's navigation bar is still "hittable",
         // but typeText's tap lands on the bar and the field never takes focus.
         scrollSearchFieldBelowChrome(field, in: app)
-        focusPlaceSearch(field, in: app)
-        field.typeText(name)
+        PlaceSearchTyping.type(name, into: field, in: app)
         let result = app.buttons["searchResult.\(name)"]
         XCTAssertTrue(
             result.waitForExistence(timeout: 6),
@@ -878,14 +877,7 @@ final class CoreJourneyUITests: XCTestCase {
     /// A keyboard left up by the previous search does not count.
     private func focusPlaceSearch(_ field: XCUIElement, in app: XCUIApplication) {
         dismissKeyboard(app)
-        let point = field.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.5))
-        point.tap()
-        if app.keyboards.firstMatch.waitForExistence(timeout: 3) {
-            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
-            return
-        }
-        point.tap()
-        _ = app.keyboards.firstMatch.waitForExistence(timeout: 3)
+        PlaceSearchTyping.focus(field, in: app)
         RunLoop.current.run(until: Date().addingTimeInterval(0.25))
     }
 

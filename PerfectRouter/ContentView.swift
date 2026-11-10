@@ -84,6 +84,8 @@ struct ContentView: View {
     /// Full place description. Held here, not on a list row: a `.sheet` inside
     /// a `List` section does not present when the row handles the tap.
     @State private var openPlaceDescription: OpenPlaceDescription?
+    @State private var placeSearchText = ""
+    @State private var placeSearchResults: [MKMapItem] = []
 
     var body: some View {
         GeometryReader { geo in
@@ -611,7 +613,9 @@ struct ContentView: View {
                 SearchSection(
                     viewModel: viewModel,
                     currentRegion: currentRegion,
-                    onWaypointAdded: { recenter(on: $0.coordinate, spanDelta: 0.3) }
+                    onWaypointAdded: { recenter(on: $0.coordinate, spanDelta: 0.3) },
+                    searchText: $placeSearchText,
+                    searchResults: $placeSearchResults
                 )
                 WaypointsSection(viewModel: viewModel, onUseMapCenterAsStart: addStartFromMapCenter)
                 RideSummarySection(viewModel: viewModel)
@@ -797,16 +801,11 @@ struct ContentView: View {
         // On the NavigationStack, not the List: a List safeAreaInset can
         // show a tappable-looking Undo whose touches fall through to the
         // list underneath, so the stop is never removed.
-        .safeAreaInset(edge: .top, spacing: 0) {
-            if let undo = viewModel.foodStopUndo, undo.isHighlight {
-                AddedStopUndoBanner(viewModel: viewModel, undo: undo)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 4)
-                    .frame(maxWidth: .infinity)
-                    .background(.regularMaterial)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-            }
-        }
+        // Apply the inset only while the banner is visible. An always-on
+        // inset whose `if` is empty is an empty focus container, and on a
+        // regular-width iPad sheet that steals keyboard focus from
+        // placeSearch (and can let the tap fall through to the map).
+        .modifier(HighlightUndoNavigationInset(viewModel: viewModel))
         .background {
             MapFitFrameReporter { frame in
                 noteSheetFrame(frame)
@@ -1058,6 +1057,27 @@ struct ContentView: View {
         if FeatureFlags.hotelsAlongRoute, viewModel.waypoints[index].isOvernight { return "bed.double.fill" }
         if index == viewModel.waypoints.count - 1 { return "flag.checkered" }
         return "mappin"
+    }
+}
+
+/// Pins the highlight Undo banner to the NavigationStack only while it is
+/// on screen, so the inset is never an empty focus container.
+private struct HighlightUndoNavigationInset: ViewModifier {
+    let viewModel: RoutePlannerViewModel
+
+    func body(content: Content) -> some View {
+        if let undo = viewModel.foodStopUndo, undo.isHighlight {
+            content.safeAreaInset(edge: .top, spacing: 0) {
+                AddedStopUndoBanner(viewModel: viewModel, undo: undo)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 4)
+                    .frame(maxWidth: .infinity)
+                    .background(.regularMaterial)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        } else {
+            content
+        }
     }
 }
 

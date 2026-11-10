@@ -1,5 +1,7 @@
 import CoreLocation
 import Foundation
+import UIKit
+import Darwin
 import MapKit
 
 /// Launch argument that swaps MapKit directions and stop search for canned
@@ -20,6 +22,31 @@ enum UITestStubLaunch {
         isEnabled || ProcessInfo.processInfo.arguments.contains(skipOnboardingArgument)
     }
 
+    /// In-process notice that placeSearch should take @FocusState.
+    static let focusPlaceSearchNotification = Notification.Name("PerfectRouter.UITestFocusPlaceSearch")
+    static let typePlaceSearchNotification = Notification.Name("PerfectRouter.UITestTypePlaceSearch")
+    /// Cross-process name the UI test posts via `notify_post`. A synthesized
+    /// tap on the 13-inch iPad floating sheet's field can be delivered to
+    /// the map instead, so tests ask the field to focus this way.
+    static let focusPlaceSearchNotifyName = "com.apavlas.PerfectRouter.UITestFocusPlaceSearch"
+    private static var focusPlaceSearchBridgeInstalled = false
+
+    /// Bridges the Darwin notification from the UI test runner into
+    /// `focusPlaceSearchNotification`. No-op in a normal launch.
+    static func installFocusPlaceSearchBridge() {
+        guard skipsOnboarding, !focusPlaceSearchBridgeInstalled else { return }
+        focusPlaceSearchBridgeInstalled = true
+        UITestPlaceSearchListener.shared.start()
+        CFNotificationCenterAddObserver(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            UnsafeRawPointer(bitPattern: 1),
+            uiTestFocusPlaceSearchDarwinCallback,
+            focusPlaceSearchNotifyName as CFString,
+            nil,
+            .deliverImmediately
+        )
+    }
+
     /// UI tests share the simulator's defaults. A style change or tank edit
     /// in one test must not decide the next test's fuel plan. Called only
     /// from a stub launch.
@@ -32,6 +59,105 @@ enum UITestStubLaunch {
             AppSettings.defaultFuelRangeMilesDefault,
             forKey: AppSettings.Keys.defaultFuelRangeMiles
         )
+    }
+}
+
+/// Must be a C function so the Darwin observer is not a short-lived Swift closure.
+private func uiTestFocusPlaceSearchDarwinCallback(
+    _ center: CFNotificationCenter?,
+    _ observer: UnsafeMutableRawPointer?,
+    _ name: CFNotificationName?,
+    _ object: UnsafeRawPointer?,
+    _ userInfo: CFDictionary?
+) {
+    DispatchQueue.main.async {
+        NSLog("PerfectRouter UITest focusPlaceSearch Darwin notify received")
+        NotificationCenter.default.post(
+            name: UITestStubLaunch.focusPlaceSearchNotification,
+            object: nil
+        )
+        UITestStubLaunch.makePlaceSearchFirstResponder()
+    }
+}
+
+extension UITestStubLaunch {
+    /// UI-test only. A 13-inch iPad floating sheet can stay out of the key
+    /// window, so @FocusState alone does not give placeSearch first responder.
+    @discardableResult
+    static func makePlaceSearchFirstResponder() -> UIView? {
+        var windowCount = 0
+        for scene in UIApplication.shared.connectedScenes {
+            guard let scene = scene as? UIWindowScene else { continue }
+            for window in scene.windows {
+                windowCount += 1
+                if let field = findPlaceSearchTextInput(in: window) {
+                    if !window.isKeyWindow {
+                        window.makeKeyAndVisible()
+                    }
+                    let accepted = field.becomeFirstResponder()
+                    NSLog(
+                        "PerfectRouter UITest placeSearch becomeFirstResponder accepted=%d isFirst=%d keyWindow=%d frame=%@",
+                        accepted ? 1 : 0,
+                        field.isFirstResponder ? 1 : 0,
+                        window.isKeyWindow ? 1 : 0,
+                        NSCoder.string(for: field.frame)
+                    )
+                    return field
+                }
+            }
+        }
+        NSLog("PerfectRouter UITest placeSearch UITextField not found windows=%d", windowCount)
+        return nil
+    }
+
+    /// UI-test only. Focus placeSearch and insert `text` (XCTest typeText
+    /// cannot, even after the field is first responder, on a 13-inch iPad
+    /// floating sheet).
+    @discardableResult
+    static func applyPlaceSearchText(_ text: String) -> Bool {
+        guard let field = makePlaceSearchFirstResponder(), !text.isEmpty else { return false }
+        if let textField = field as? UITextField {
+            textField.insertText(text)
+        } else if let textView = field as? UITextView {
+            textView.insertText(text)
+        } else if let input = field as? UIKeyInput {
+            input.insertText(text)
+        } else {
+            return false
+        }
+        NotificationCenter.default.post(
+            name: typePlaceSearchNotification,
+            object: text
+        )
+        NSLog("PerfectRouter UITest placeSearch insertText %@", text)
+        return true
+    }
+
+    private static func findPlaceSearchTextInput(in view: UIView) -> UIView? {
+        if (view is UITextField || view is UITextView),
+           view.accessibilityIdentifier == AccessibilityID.placeSearch {
+            return view
+        }
+        for sub in view.subviews {
+            if let found = findPlaceSearchTextInput(in: sub) {
+                return found
+            }
+        }
+        // Identifier may sit on a SwiftUI wrapper around the field.
+        if view.accessibilityIdentifier == AccessibilityID.placeSearch {
+            if let field = view as? UITextField ?? deepestTextInput(in: view) {
+                return field
+            }
+        }
+        return nil
+    }
+
+    private static func deepestTextInput(in view: UIView) -> UIView? {
+        if view is UITextField || view is UITextView { return view }
+        for sub in view.subviews {
+            if let found = deepestTextInput(in: sub) { return found }
+        }
+        return nil
     }
 }
 
@@ -553,6 +679,97 @@ final class UITestStubServices: DirectionsProviding, StopSearching, PlaceSearchi
             let item = MKMapItem(placemark: MKPlacemark(coordinate: UITestFixture.coordinate(for: place)))
             item.name = place.name
             return item
+        }
+    }
+}
+
+
+/// UI-test-only IPv4 loopback server. XCTest cannot type into placeSearch
+/// on a 13-inch iPad floating sheet, so the test writes the query here and
+/// the app focuses the field and inserts the text. Bound only when a UI
+/// test launch argument is present.
+final class UITestPlaceSearchListener {
+    static let shared = UITestPlaceSearchListener()
+    static let port: in_port_t = 17321
+
+    private var listenFD: Int32 = -1
+    private let lock = NSLock()
+
+    private init() {}
+
+    func start() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard listenFD < 0 else { return }
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else {
+            NSLog("PerfectRouter UITest placeSearch socket failed errno=%d", errno)
+            return
+        }
+        var reuse: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
+        var addr = sockaddr_in()
+        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = Self.port.bigEndian
+        inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr)
+        let bound = withUnsafePointer(to: &addr) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPointer in
+                bind(fd, sockaddrPointer, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        if bound != 0 {
+            NSLog("PerfectRouter UITest placeSearch bind failed errno=%d", errno)
+            close(fd)
+            return
+        }
+        if listen(fd, 4) != 0 {
+            NSLog("PerfectRouter UITest placeSearch listen failed errno=%d", errno)
+            close(fd)
+            return
+        }
+        listenFD = fd
+        NSLog("PerfectRouter UITest placeSearch POSIX listener on %d", Int(Self.port))
+        Thread.detachNewThread { [weak self] in self?.acceptLoop() }
+    }
+
+    private func acceptLoop() {
+        while true {
+            lock.lock()
+            let fd = listenFD
+            lock.unlock()
+            guard fd >= 0 else { return }
+            var addr = sockaddr_in()
+            var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+            let conn = withUnsafeMutablePointer(to: &addr) { pointer in
+                pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPointer in
+                    accept(fd, sockaddrPointer, &len)
+                }
+            }
+            if conn < 0 {
+                if errno == EINTR { continue }
+                NSLog("PerfectRouter UITest placeSearch accept failed errno=%d", errno)
+                return
+            }
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            let capacity = buffer.count
+            let n = buffer.withUnsafeMutableBytes { raw in
+                read(conn, raw.baseAddress, capacity)
+            }
+            close(conn)
+            NSLog("PerfectRouter UITest placeSearch POSIX received %d bytes", n)
+            guard n > 0, let raw = String(bytes: buffer[0..<n], encoding: .utf8) else { continue }
+            let text: String?
+            if raw.hasPrefix("TYPE ") {
+                text = raw.dropFirst(5).trimmingCharacters(in: .whitespacesAndNewlines)
+            } else {
+                text = nil
+            }
+            if let text {
+                DispatchQueue.main.async {
+                    _ = UITestStubLaunch.applyPlaceSearchText(text)
+                }
+            }
         }
     }
 }
