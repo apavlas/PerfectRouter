@@ -684,7 +684,17 @@ final class CoreJourneyUITests: XCTestCase {
             waypointNames(in: app),
             ["Test Origin", "Pilot Madison", "On Route Fuel", "Shell Knoxville", "Test Destination"]
         )
-        XCTAssertFalse(app.buttons["selectRecommended"].firstMatch.exists, diagnosticTree(app))
+        // Select recommended stays above the gas corridor after Apply
+        // (0818c5d, GasListGroupingTests), so whether it is in the tree
+        // only says how tall the sheet is: a 13-inch iPad builds that row,
+        // a phone does not. What Apply must leave is nothing to apply:
+        // both picks are waypoints, not open recommendations, and Apply
+        // is gone.
+        for name in ["Pilot Madison", "Shell Knoxville"] {
+            XCTAssertFalse(fuel(name, checked: false, in: app).exists, "\(name) still recommended\n\n\(diagnosticTree(app))")
+            XCTAssertFalse(fuel(name, checked: true, in: app).exists, "\(name) still a checked row\n\n\(diagnosticTree(app))")
+        }
+        XCTAssertFalse(app.buttons["applyStops"].firstMatch.exists, diagnosticTree(app))
         assertNoEmptyGasMessage(in: app)
     }
 
