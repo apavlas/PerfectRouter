@@ -1013,6 +1013,14 @@ final class FuelPlanningTests: XCTestCase {
         XCTAssertFalse(FuelPumpCheck.mayBeFuelPump(category: .museum, name: "Route 66 Gas Station"))
         XCTAssertFalse(FuelPumpCheck.mayBeFuelPump(category: .park, name: "Gas Station"))
         XCTAssertFalse(FuelPumpCheck.mayBeFuelPump(category: .restaurant, name: "Conoco Diner"))
+        XCTAssertFalse(FuelPumpCheck.mayBeFuelPump(
+            category: MKPointOfInterestCategory(rawValue: "MKPOICategoryLandmark"),
+            name: "Route 66 Gas Station"
+        ))
+        // Real pumps Apple Maps files elsewhere on I-40 stay in the pool.
+        XCTAssertTrue(FuelPumpCheck.mayBeFuelPump(category: .parking, name: "Flying J Travel Center"))
+        XCTAssertTrue(FuelPumpCheck.mayBeFuelPump(category: .foodMarket, name: "Domino Food & Fuel"))
+        XCTAssertTrue(FuelPumpCheck.mayBeFuelPump(category: MKPointOfInterestCategory(rawValue: "MKPOICategoryAutomotiveRepair"), name: "Rick's Citgo"))
     }
 
     func testFuelPumpCheckNameBackstopCatchesRestoredStationsFiledAsGas() {
