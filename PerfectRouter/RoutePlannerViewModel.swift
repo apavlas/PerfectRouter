@@ -5830,7 +5830,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         rideHighlights = picked
         // FUEL-7: highlights can publish after the fuel plan. A sight that
         // was also in the gas pool leaves it, and the plan moves on.
-        if gasStations.contains(where: { !FuelPumpCheck.isFuelPump($0, highlights: picked) }) {
+        // Only a pump the new highlights rule out; places the category or
+        // name check already rejects must not force a replan every refresh.
+        if gasStations.contains(where: { $0.mayBeFuelPump && !FuelPumpCheck.isFuelPump($0, highlights: picked) }) {
             applyFuelCandidatePool()
         }
         guard generation == highlightGeneration else { return }
