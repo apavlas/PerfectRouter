@@ -132,6 +132,14 @@ final class HighlightsLiveSmokeUITests: XCTestCase {
         snap("01_okc_amarillo_highlights", app)
 
         // Fuel first, so there is something to keep.
+        let probe = element("rideSummaryProbe", app)
+        if probe.exists { print("HLSMOKE probe=\(probe.label)") }
+        let fuelRows = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label BEGINSWITH 'Fuel stop '")).allElementsBoundByIndex
+            .compactMap { (try? $0.snapshot())?.label }
+        print("HLSMOKE fuelRows=\(fuelRows)")
+        record("fuel rows", fuelRows.joined(separator: "\n"))
+        let waypointsBeforeFuel = element("committedWaypoints", app).label.split(separator: "|").map(String.init)
         if scrollTo("selectRecommended", app) {
             element("selectRecommended", app).tap()
             sleep(8)
@@ -139,6 +147,15 @@ final class HighlightsLiveSmokeUITests: XCTestCase {
         let committed = element("committedWaypoints", app)
         let before = committed.exists ? committed.label.split(separator: "|").map(String.init) : []
         print("HLSMOKE before=\(before)")
+        // FUEL-7: what Select recommended added must all be working pumps.
+        let notAPump = ["restored", "historic", "museum", "replica", "memorial", "monument", "landmark"]
+        for stop in before where !waypointsBeforeFuel.contains(stop) {
+            XCTAssertFalse(
+                notAPump.contains { stop.lowercased().contains($0) },
+                "Select recommended added a place that is not a pump: \(stop)"
+            )
+            XCTAssertFalse(names.contains(stop), "Select recommended added a highlight as fuel: \(stop)")
+        }
 
         // Prefer a known landmark; otherwise any listed row. One that is
         // already on the ride (start or destination) cannot be added.

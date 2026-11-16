@@ -159,6 +159,10 @@ struct SuggestedStop: Identifiable {
     /// these instead of touching `MKMapItem` again.
     let latitude: Double
     let longitude: Double
+    /// FUEL-7: whether Apple Maps' category and the name allow this place
+    /// to be a fuel stop. Copied once in `init`, so the detached fuel scan
+    /// never touches `MKMapItem`. See `FuelPumpCheck`.
+    let mayBeFuelPump: Bool
 
     var name: String { mapItem.name ?? "Unknown" }
     var coordinate: CLLocationCoordinate2D {
@@ -180,6 +184,65 @@ struct SuggestedStop: Identifiable {
         let coordinate = mapItem.placemark.coordinate
         self.latitude = coordinate.latitude
         self.longitude = coordinate.longitude
+        self.mayBeFuelPump = FuelPumpCheck.mayBeFuelPump(
+            category: mapItem.pointOfInterestCategory,
+            name: mapItem.name ?? ""
+        )
+    }
+}
+
+/// FUEL-7: a fuel stop has to be a place that sells fuel. A text search
+/// for "gas station" also returns landmarks, museums, and restored
+/// historic stations ("Restored 1929 Route 66 Gas Station" on OKC ->
+/// Amarillo). Those can still be highlights; they never take a fuel slot
+/// or count toward range.
+enum FuelPumpCheck {
+    /// Words that mark a historic or display station, not a working pump.
+    /// Backstop only: the category check and the highlight check come first.
+    static let notAPumpWords: [String] = [
+        "restored", "historic", "museum", "replica", "memorial", "monument",
+        "landmark", "exhibit", "heritage", "antique", "vintage", "relic",
+        "visitor center", "visitors center", "welcome center",
+    ]
+
+    /// Apple Maps categories that are sights or venues, never a pump. Raw
+    /// values so iOS 18 categories (landmark, castle, ...) work on iOS 17.
+    /// Not an allowlist: real truck stops and c-stores that sell fuel are
+    /// often filed as parking (Flying J), food market (Domino Food & Fuel),
+    /// or auto repair, and must stay in the pool.
+    static let notAPumpCategories: Set<String> = [
+        "MKPOICategoryLandmark", "MKPOICategoryMuseum", "MKPOICategoryPark",
+        "MKPOICategoryNationalPark", "MKPOICategoryNationalMonument",
+        "MKPOICategoryCastle", "MKPOICategoryFortress", "MKPOICategoryAmusementPark",
+        "MKPOICategoryAquarium", "MKPOICategoryZoo", "MKPOICategoryLibrary",
+        "MKPOICategoryTheater", "MKPOICategoryMovieTheater", "MKPOICategoryPlanetarium",
+        "MKPOICategoryStadium", "MKPOICategoryMusicVenue", "MKPOICategoryBeach",
+        "MKPOICategoryCampground", "MKPOICategoryRestaurant", "MKPOICategoryCafe",
+        "MKPOICategoryHotel", "MKPOICategoryWinery", "MKPOICategoryBrewery",
+        "MKPOICategoryNightlife", "MKPOICategorySchool", "MKPOICategoryUniversity",
+        "MKPOICategoryEVCharger",
+    ]
+
+    /// Apple Maps' category rules a place out when it names a sight or venue
+    /// (a landmark, museum, park, restaurant ...). Any other category, or
+    /// none (shared-route stops, test fixtures), passes unless the name says
+    /// it is a display or historic site.
+    static func mayBeFuelPump(category: MKPointOfInterestCategory?, name: String) -> Bool {
+        if let category, notAPumpCategories.contains(category.rawValue) { return false }
+        let lower = name.lowercased()
+        return !notAPumpWords.contains { lower.contains($0) }
+    }
+
+    /// Same check plus: a place listed as a ride highlight is a sight, not
+    /// a pump, even when Apple Maps files it under gas stations. Matches by
+    /// name, or by a coordinate within ~30 m.
+    static func isFuelPump(_ stop: SuggestedStop, highlights: [SuggestedStop]) -> Bool {
+        guard stop.mayBeFuelPump else { return false }
+        let here = CLLocation(latitude: stop.latitude, longitude: stop.longitude)
+        return !highlights.contains { sight in
+            sight.name.compare(stop.name, options: .caseInsensitive) == .orderedSame
+                || CLLocation(latitude: sight.latitude, longitude: sight.longitude).distance(from: here) <= 30
+        }
     }
 }
 

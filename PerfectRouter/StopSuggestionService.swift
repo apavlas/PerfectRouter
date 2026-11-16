@@ -325,6 +325,13 @@ struct StopSuggestionService {
                     // Skip results with no usable coordinate (invalid / NaN), which
                     // would otherwise crash MapKit when drawn as a map annotation.
                     guard coord.isValidLocation else { continue }
+                    // FUEL-7: a "gas station" text hit can be a landmark or
+                    // a restored historic station. Only places that may sell
+                    // fuel are gas results.
+                    if category == .gas,
+                       !FuelPumpCheck.mayBeFuelPump(category: item.pointOfInterestCategory, name: item.name ?? "") {
+                        continue
+                    }
                     // Enforce the corridor: discard results too far from the sample.
                     let distFromSample = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
                         .distance(from: CLLocation(latitude: sample.coordinate.latitude,

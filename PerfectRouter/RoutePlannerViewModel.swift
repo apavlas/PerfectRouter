@@ -1637,7 +1637,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         let fills = appliedGasFillStops
         var seen = Set<String>()
         var pool: [SuggestedStop] = []
+        let highlights = rideHighlights
         for stop in corridor where stop.category == .gas && !isStopOnRoute(stop) {
+            // FUEL-7: a sight is listed under Highlights, not as gas.
+            guard FuelPumpCheck.isFuelPump(stop, highlights: highlights) else { continue }
             if fills.contains(where: { appliedFill($0, matches: stop) }) {
                 continue
             }
@@ -2391,8 +2394,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             pastRangeKeys.insert(Self.coordinateKey(stop.coordinate))
         }
         let corridorReady = plannedCorridor.contains(where: { $0.count > 1 })
+        // FUEL-7: Select recommended scans only real pumps.
+        let highlights = rideHighlights
         return FuelSelectionInput(
-            stations: gasStations.map(station),
+            stations: gasStations.filter { FuelPumpCheck.isFuelPump($0, highlights: highlights) }.map(station),
             existingFuelStops: fuelStops.map(station),
             existingRows: fuelPlanInputs().rows,
             buffered: bufferedGasStops.map(station),
@@ -4017,7 +4022,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// falls back to the full list so an interstate filter cannot zero out recs.
     func applyFuelCandidatePool() {
         let extraGas = suggestedStops.filter { $0.category == .gas }
+        // FUEL-7: landmarks and sights never enter the fuel pool.
+        let highlights = rideHighlights
         gasStations = Self.mergedGasCandidates([gasStations, extraGas])
+            .filter { FuelPumpCheck.isFuelPump($0, highlights: highlights) }
         let travelSide = travelSideStations(from: gasStations)
         travelSideGasStations = Self.preferredFuelPool(
             from: gasStations,
@@ -5386,6 +5394,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         calendar: Calendar = .current,
         unsearched: [CLLocationDistance] = []
     ) -> FuelPlan {
+        // FUEL-7: a place that does not sell fuel never takes a slot or
+        // counts toward range; the planner moves on to the next real pump.
+        let gasStops = gasStops.filter(\.mayBeFuelPump)
         let draft = fuelPlanDraft(
             from: gasStops.map {
                 FuelCandidate(
@@ -5817,6 +5828,13 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             ))
         ))
         rideHighlights = picked
+        // FUEL-7: highlights can publish after the fuel plan. A sight that
+        // was also in the gas pool leaves it, and the plan moves on.
+        // Only a pump the new highlights rule out; places the category or
+        // name check already rejects must not force a replan every refresh.
+        if gasStations.contains(where: { $0.mayBeFuelPump && !FuelPumpCheck.isFuelPump($0, highlights: picked) }) {
+            applyFuelCandidatePool()
+        }
         guard generation == highlightGeneration else { return }
         let enriched = PlaceDescriptionReader.clearingCrossNamedDescriptions(
             await attachingPlaceDescriptions(picked)

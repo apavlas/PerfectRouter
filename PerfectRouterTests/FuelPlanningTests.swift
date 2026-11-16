@@ -1,5 +1,6 @@
 import XCTest
 import CoreLocation
+import MapKit
 @testable import PerfectRouter
 
 /// Unit tests for the pure fuel-stop planner. These exercise the greedy
@@ -988,5 +989,111 @@ final class FuelPlanningTests: XCTestCase {
             )
             previous = distance
         }
+    }
+
+    // MARK: - FUEL-7: only real pumps are fuel stops
+
+    /// A stop whose Apple Maps item carries `category`.
+    private func place(
+        _ name: String,
+        category: MKPointOfInterestCategory?,
+        at meters: CLLocationDistance,
+        latitude: Double = 0
+    ) -> SuggestedStop {
+        let item = MKMapItem(placemark: MKPlacemark(coordinate: CLLocationCoordinate2D(latitude: latitude, longitude: 0)))
+        item.name = name
+        item.pointOfInterestCategory = category
+        return SuggestedStop(mapItem: item, category: .gas, distanceAlongRoute: meters)
+    }
+
+    func testFuelPumpCheckUsesTheMapsCategoryFirst() {
+        XCTAssertTrue(FuelPumpCheck.mayBeFuelPump(category: .gasStation, name: "Loaf 'N Jug"))
+        XCTAssertTrue(FuelPumpCheck.mayBeFuelPump(category: nil, name: "Shell"))
+        // "Gas station" in the name does not make a museum or landmark a pump.
+        XCTAssertFalse(FuelPumpCheck.mayBeFuelPump(category: .museum, name: "Route 66 Gas Station"))
+        XCTAssertFalse(FuelPumpCheck.mayBeFuelPump(category: .park, name: "Gas Station"))
+        XCTAssertFalse(FuelPumpCheck.mayBeFuelPump(category: .restaurant, name: "Conoco Diner"))
+        XCTAssertFalse(FuelPumpCheck.mayBeFuelPump(
+            category: MKPointOfInterestCategory(rawValue: "MKPOICategoryLandmark"),
+            name: "Route 66 Gas Station"
+        ))
+        // Real pumps Apple Maps files elsewhere on I-40 stay in the pool.
+        XCTAssertTrue(FuelPumpCheck.mayBeFuelPump(category: .parking, name: "Flying J Travel Center"))
+        XCTAssertTrue(FuelPumpCheck.mayBeFuelPump(category: .foodMarket, name: "Domino Food & Fuel"))
+        XCTAssertTrue(FuelPumpCheck.mayBeFuelPump(category: MKPointOfInterestCategory(rawValue: "MKPOICategoryAutomotiveRepair"), name: "Rick's Citgo"))
+    }
+
+    func testFuelPumpCheckNameBackstopCatchesRestoredStationsFiledAsGas() {
+        XCTAssertFalse(FuelPumpCheck.mayBeFuelPump(category: .gasStation, name: "Restored 1929 Route 66 Gas Station"))
+        XCTAssertFalse(FuelPumpCheck.mayBeFuelPump(category: nil, name: "Historic Magnolia Service Station"))
+        XCTAssertFalse(FuelPumpCheck.mayBeFuelPump(category: .gasStation, name: "Vintage Phillips 66 Museum"))
+        XCTAssertTrue(FuelPumpCheck.mayBeFuelPump(category: .gasStation, name: "Love's Travel Stop"))
+        XCTAssertTrue(FuelPumpCheck.mayBeFuelPump(category: .gasStation, name: "Phillips 66"))
+        XCTAssertFalse(place("Restored 1929 Route 66 Gas Station", category: .gasStation, at: 1).mayBeFuelPump)
+        XCTAssertTrue(place("Chevron", category: .gasStation, at: 1).mayBeFuelPump)
+    }
+
+    func testAPlaceListedAsAHighlightIsNotAFuelPump() {
+        let pump = place("Tower Station", category: .gasStation, at: 10_000)
+        let sameName = place("tower station", category: .park, at: 10_000, latitude: 1)
+        // ~11 m north: the same spot under another name.
+        let samePlace = place("U-Drop Inn", category: .park, at: 10_000, latitude: 0.0001)
+        let elsewhere = place("Cadillac Ranch", category: .park, at: 10_000, latitude: 0.02)
+        XCTAssertFalse(FuelPumpCheck.isFuelPump(pump, highlights: [sameName]))
+        XCTAssertFalse(FuelPumpCheck.isFuelPump(pump, highlights: [samePlace]))
+        XCTAssertTrue(FuelPumpCheck.isFuelPump(pump, highlights: [elsewhere]))
+        XCTAssertTrue(FuelPumpCheck.isFuelPump(pump, highlights: []))
+    }
+
+    func testPlannerSkipsANonFuelPlaceAndTakesTheNextRealPump() {
+        // Same grid as testLongRidePicksFarthestWithinComfortWindow, which
+        // picks 80 / 160 / 240 km. Make 80 and 160 km restored stations.
+        var stations = stride(from: 20_000.0, through: 240_000.0, by: 20_000.0).map { gas(at: $0) }
+        stations[3] = place("Restored 1929 Route 66 Gas Station", category: .gasStation, at: 80_000)
+        stations[7] = place("Route 66 Museum", category: .museum, at: 160_000)
+        let (stops, hasGap) = RoutePlannerViewModel.planFuelStops(
+            from: stations,
+            totalDistance: 250_000,
+            range: 100_000
+        )
+        XCTAssertFalse(hasGap)
+        XCTAssertFalse(stops.contains { !$0.mayBeFuelPump }, stops.map(\.name).description)
+        XCTAssertEqual(stops.map { Int($0.distanceAlongRoute) }, [60_000, 140_000, 220_000])
+    }
+
+    func testOnlyALandmarkInTheTankIsAGapNotAStop() {
+        // The landmark must not count toward range: the tight-leg warning shows.
+        let (stops, hasGap) = RoutePlannerViewModel.planFuelStops(
+            from: [place("Restored 1929 Route 66 Gas Station", category: .gasStation, at: 60_000)],
+            totalDistance: 150_000,
+            range: 100_000
+        )
+        XCTAssertTrue(stops.isEmpty)
+        XCTAssertTrue(hasGap)
+    }
+
+    func testPerLegPlanSkipsNonFuelPlacesToo() {
+        var stations = stride(from: 20_000.0, through: 240_000.0, by: 20_000.0).map { gas(at: $0) }
+        stations[3] = place("Historic Conoco Station", category: nil, at: 80_000)
+        let plan = RoutePlannerViewModel.fuelPlanPerLeg(
+            from: stations,
+            totalDistance: 250_000,
+            range: 100_000,
+            overnightDistances: [130_000]
+        )
+        XCTAssertFalse(plan.stops.contains { $0.distanceAlongRoute == 80_000 }, plan.stops.map(\.name).description)
+        XCTAssertFalse(plan.stops.isEmpty)
+    }
+
+    @MainActor
+    func testFuelPoolDropsAStationThatIsAlsoARideHighlight() {
+        let viewModel = RoutePlannerViewModel()
+        let real = place("Chevron", category: .gasStation, at: 40_000)
+        let sight = place("Tower Station and U-Drop Inn Café", category: .gasStation, at: 60_000, latitude: 0.5)
+        viewModel.rideHighlights = [place("Tower Station and U-Drop Inn Café", category: .park, at: 60_000, latitude: 0.5)]
+        viewModel.gasStations = [real, sight]
+        viewModel.applyFuelCandidatePool()
+        XCTAssertEqual(viewModel.gasStations.map(\.name), ["Chevron"])
+        XCTAssertFalse(viewModel.gasListStations.contains { $0.name == sight.name })
     }
 }

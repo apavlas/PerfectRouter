@@ -196,6 +196,11 @@ enum UITestFixture {
         Place(name: "Alt 180", milesNorth: 180, eastMeters: 800, searchable: false, gasStation: true),
         Place(name: "Alt 200", milesNorth: 200, eastMeters: 800, searchable: false, gasStation: true),
         Place(name: "Alt 210", milesNorth: 210, eastMeters: 800, searchable: false, gasStation: true),
+        // FUEL-7: a restored display station the gas search also returns.
+        // At 84 mi it would beat Pilot Madison (80) for the first tank if
+        // it counted, so the stub plan staying Pilot / On Route / Shell
+        // proves it never takes a fuel slot.
+        Place(name: "Restored 1929 Route 66 Gas Station", milesNorth: 84, eastMeters: 800, searchable: false, gasStation: true),
         Place(name: "Test Destination", milesNorth: routeMiles, eastMeters: 0, searchable: true, gasStation: false),
         // Food within a short walk of recommended pumps (FP-1). Shell has
         // none so the nested row can show "No food nearby" (FP-2).
