@@ -163,6 +163,9 @@ struct SuggestedStop: Identifiable {
     /// to be a fuel stop. Copied once in `init`, so the detached fuel scan
     /// never touches `MKMapItem`. See `FuelPumpCheck`.
     let mayBeFuelPump: Bool
+    /// Apple Maps files this place as a gas station. A filed pump next to a
+    /// sight is its own business; only a same-name match makes it the sight.
+    let filedAsGasStation: Bool
 
     var name: String { mapItem.name ?? "Unknown" }
     var coordinate: CLLocationCoordinate2D {
@@ -188,6 +191,7 @@ struct SuggestedStop: Identifiable {
             category: mapItem.pointOfInterestCategory,
             name: mapItem.name ?? ""
         )
+        self.filedAsGasStation = mapItem.pointOfInterestCategory == .gasStation
     }
 }
 
@@ -240,8 +244,11 @@ enum FuelPumpCheck {
         guard stop.mayBeFuelPump else { return false }
         let here = CLLocation(latitude: stop.latitude, longitude: stop.longitude)
         return !highlights.contains { sight in
-            sight.name.compare(stop.name, options: .caseInsensitive) == .orderedSame
-                || CLLocation(latitude: sight.latitude, longitude: sight.longitude).distance(from: here) <= 30
+            if sight.name.compare(stop.name, options: .caseInsensitive) == .orderedSame { return true }
+            // A pump Apple files as a gas station beside a sight ("Ranch
+            // Fuel" at Cadillac Ranch) is a separate business and stays.
+            guard !stop.filedAsGasStation else { return false }
+            return CLLocation(latitude: sight.latitude, longitude: sight.longitude).distance(from: here) <= 30
         }
     }
 }

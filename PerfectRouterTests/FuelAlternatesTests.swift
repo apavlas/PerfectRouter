@@ -80,7 +80,7 @@ final class FuelAlternatesTests: XCTestCase {
             totalDistance: 250 * mile, limit: tank * RoutePlannerViewModel.fuelSafetyFactor)
         let ids = RoutePlannerViewModel.acrossDividedHighwayIDs(pool: pool, travelSide: travelSide)
         XCTAssertEqual(ids, [across.id])
-        XCTAssertEqual(GasListGrouping.acrossDividedHighwayTag, "Across divided highway")
+        XCTAssertEqual(GasListGrouping.acrossDividedHighwayTag, "Across the road")
     }
 
     func testNoTagWhenTheTravelSideIsEmptyOrHasNoGap() {

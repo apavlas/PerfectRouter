@@ -836,7 +836,7 @@ final class FuelPlanningTests: XCTestCase {
                 rangeMeters: gap.rangeMeters,
                 usesMetric: false
             ),
-            "No gas between mile 2,328 and 2,602 (274 mi, beyond your 170 mi range)"
+            "No fuel for 274 mi, fill up here. No gas between mile 2,328 and 2,602, beyond your 170 mi range"
         )
         guard case .pastRange(let far) = plan.entries.last else {
             return XCTFail("the station after the gap should be listed past range")
@@ -1040,7 +1040,12 @@ final class FuelPlanningTests: XCTestCase {
         let samePlace = place("U-Drop Inn", category: .park, at: 10_000, latitude: 0.0001)
         let elsewhere = place("Cadillac Ranch", category: .park, at: 10_000, latitude: 0.02)
         XCTAssertFalse(FuelPumpCheck.isFuelPump(pump, highlights: [sameName]))
-        XCTAssertFalse(FuelPumpCheck.isFuelPump(pump, highlights: [samePlace]))
+        // A pump Apple files as a gas station beside a sight is its own
+        // business ("Ranch Fuel" at Cadillac Ranch) and stays a pump.
+        XCTAssertTrue(FuelPumpCheck.isFuelPump(pump, highlights: [samePlace]))
+        // Without that filing, the same spot under another name is the sight.
+        let unfiled = place("Tower Station", category: nil, at: 10_000)
+        XCTAssertFalse(FuelPumpCheck.isFuelPump(unfiled, highlights: [samePlace]))
         XCTAssertTrue(FuelPumpCheck.isFuelPump(pump, highlights: [elsewhere]))
         XCTAssertTrue(FuelPumpCheck.isFuelPump(pump, highlights: []))
     }

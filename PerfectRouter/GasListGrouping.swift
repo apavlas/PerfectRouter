@@ -35,7 +35,7 @@ struct GasListGrouping: Equatable {
     /// unless they are the leg's only option: the rider left on a full tank.
     static let earlyAlternateFraction = 0.2
 
-    static let acrossDividedHighwayTag = "Across divided highway"
+    static let acrossDividedHighwayTag = "Across the road"
 
     /// Leg alternates kept for display. `start` is the previous fill (or
     /// the route start). The recommended stop is never passed in here.

@@ -140,6 +140,18 @@ final class HighlightsLiveSmokeUITests: XCTestCase {
         print("HLSMOKE fuelRows=\(fuelRows)")
         record("fuel rows", fuelRows.joined(separator: "\n"))
         let waypointsBeforeFuel = element("committedWaypoints", app).label.split(separator: "|").map(String.init)
+        // Evidence for review: the fuel list as the rider sees it.
+        if scrollTo("gasListHeader", app) { snap("00_okc_amarillo_fuel_list", app) }
+        let planText = probe.exists ? probe.label : ""
+        func probeField(_ key: String) -> String {
+            planText.split(separator: " ").first { $0.hasPrefix(key + "=") }.map { String($0.dropFirst(key.count + 1)) } ?? ""
+        }
+        let planMiles = probeField("fuel").split(separator: ",").compactMap { Double($0) }
+        let totalMiles = Double(probeField("total")) ?? 0
+        let tankMiles = Double(probeField("tank")) ?? 0
+        let marks = [0] + planMiles + [totalMiles]
+        let legMiles = zip(marks.dropFirst(), marks).map { (($0 - $1) * 10).rounded() / 10 }
+        print("HLSMOKE fuelPlanMiles=\(planMiles) legs=\(legMiles) tank=\(tankMiles)")
         if scrollTo("selectRecommended", app) {
             element("selectRecommended", app).tap()
             sleep(8)
@@ -147,6 +159,15 @@ final class HighlightsLiveSmokeUITests: XCTestCase {
         let committed = element("committedWaypoints", app)
         let before = committed.exists ? committed.label.split(separator: "|").map(String.init) : []
         print("HLSMOKE before=\(before)")
+        if scrollTo("gasListHeader", app) { snap("00b_okc_amarillo_fuel_after_select", app) }
+        // FUEL-8: every planned stop is committed, and no leg is past the tank.
+        let fuelAdded = before.filter { !waypointsBeforeFuel.contains($0) }
+        print("HLSMOKE fuel8 added=\(fuelAdded)")
+        XCTAssertEqual(fuelAdded.count, planMiles.count, "Select recommended dropped planned stops: plan=\(planMiles) added=\(fuelAdded)")
+        XCTAssertGreaterThanOrEqual(planMiles.count, 3, "Fewer than 3 fuel stops on OKC -> Amarillo: \(planMiles)")
+        if tankMiles > 0 {
+            XCTAssertTrue(legMiles.allSatisfy { $0 <= tankMiles }, "Leg past the \(tankMiles) mi tank: \(legMiles)")
+        }
         // FUEL-7: what Select recommended added must all be working pumps.
         let notAPump = ["restored", "historic", "museum", "replica", "memorial", "monument", "landmark"]
         for stop in before where !waypointsBeforeFuel.contains(stop) {
