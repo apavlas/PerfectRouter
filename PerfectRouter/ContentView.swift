@@ -796,6 +796,11 @@ struct ContentView: View {
                 guard let day = viewModel.scrollToHotelDay else { return }
                 proxy.scrollTo(AccessibilityID.hotelDay(day), anchor: .center)
             }
+            .onReceive(NotificationCenter.default.publisher(for: UITestStubLaunch.scrollPlanningListNotification)) { note in
+                // UI tests only: the listener runs only on -UITestSkipOnboarding.
+                guard UITestStubLaunch.skipsOnboarding, let id = note.object as? String else { return }
+                proxy.scrollTo(id, anchor: .top)
+            }
             }
         }
         // On the NavigationStack, not the List: a List safeAreaInset can

@@ -25,6 +25,10 @@ enum UITestStubLaunch {
     /// In-process notice that placeSearch should take @FocusState.
     static let focusPlaceSearchNotification = Notification.Name("PerfectRouter.UITestFocusPlaceSearch")
     static let typePlaceSearchNotification = Notification.Name("PerfectRouter.UITestTypePlaceSearch")
+    /// Object is a planning-list row id (`gasDay.3`, `hotelDay.2`). The
+    /// list scrolls it to the top with its ScrollViewReader, so a smoke
+    /// test does not have to find one header among hundreds of lazy rows.
+    static let scrollPlanningListNotification = Notification.Name("PerfectRouter.UITestScrollPlanningList")
     /// Cross-process name the UI test posts via `notify_post`. A synthesized
     /// tap on the 13-inch iPad floating sheet's field can be delivered to
     /// the map instead, so tests ask the field to focus this way.
@@ -754,6 +758,14 @@ final class UITestPlaceSearchListener {
                 text = raw.dropFirst(5).trimmingCharacters(in: .whitespacesAndNewlines)
             } else {
                 text = nil
+            }
+            if raw.hasPrefix("SCROLL ") {
+                let id = raw.dropFirst(7).trimmingCharacters(in: .whitespacesAndNewlines)
+                DispatchQueue.main.async {
+                    NSLog("PerfectRouter UITest planning list scroll to %@", id)
+                    NotificationCenter.default.post(name: UITestStubLaunch.scrollPlanningListNotification, object: id)
+                }
+                continue
             }
             if let text {
                 DispatchQueue.main.async {

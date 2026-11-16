@@ -65,6 +65,16 @@ enum PlaceSearchTyping {
 
     /// Raw TCP, not HTTP/URLSession, so ATS in the test runner cannot block it.
     static func postTypeRequest(_ name: String) {
+        post("TYPE \(name)")
+    }
+
+    /// Asks the planning list to scroll row `identifier` (`gasDay.3`,
+    /// `hotelDay.2`, `gasListHeader`) to the top.
+    static func postScrollRequest(_ identifier: String) {
+        post("SCROLL \(identifier)")
+    }
+
+    private static func post(_ line: String) {
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else {
             print("PLACESEARCH socket failed")
@@ -85,7 +95,7 @@ enum PlaceSearchTyping {
             print("PLACESEARCH connect failed errno=\(errno)")
             return
         }
-        var payload = Array("TYPE \(name)\n".utf8)
+        let payload = Array("\(line)\n".utf8)
         let written = payload.withUnsafeBytes { raw in
             write(fd, raw.baseAddress, payload.count)
         }
