@@ -606,6 +606,8 @@ struct SuggestionsSection: View {
                     showsPastRange: !expanded && grouping.pastRange,
                     action: { viewModel.toggleGasList() }
                 )
+                // Scroll target for the UI-test SCROLL request.
+                .id(AccessibilityID.gasListHeader)
                 if expanded, !viewModel.gasListRows.isEmpty {
                     let stops = Dictionary(
                         viewModel.gasListStations.map { ($0.id, $0) },
@@ -689,6 +691,8 @@ struct SuggestionsSection: View {
                 showsPastRange: !expanded && day.pastRange,
                 action: { viewModel.toggleGasDay(day.dayNumber) }
             )
+            // Scroll target, like `hotelDay.N`.
+            .id(AccessibilityID.gasDay(day.dayNumber))
         case .legHeader(let leg):
             legHeader(leg)
         case .station(let station):

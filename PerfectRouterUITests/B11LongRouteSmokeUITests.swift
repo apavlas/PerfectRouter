@@ -54,6 +54,22 @@ final class B11LongRouteSmokeUITests: XCTestCase {
             loading = fields["loading"] == "true"
         }
 
+        /// Riding day of the last gas-list leg. Legs start at the route start
+        /// and at each recommended fill, and a leg is listed under the day it
+        /// starts (GasListGrouping), so a short last day after the final
+        /// fill has no `gasDay` header of its own.
+        var lastGasListDay: Int {
+            var cursor = 0.0
+            var spans: [(day: Int, start: Double, end: Double)] = []
+            for (day, miles) in days {
+                spans.append((day, cursor, cursor + miles))
+                cursor += miles
+            }
+            let lastStart = fuel.max() ?? 0
+            return spans.first { lastStart >= $0.start - 0.5 && lastStart < $0.end - 0.5 }?.day
+                ?? spans.last?.day ?? 1
+        }
+
         /// Days whose longest hop between anchors (start, each overnight is
         /// NOT a fill, recommended pumps, the destination) exceeds the tank.
         func daysWithHopPastTank() -> Set<Int> {
@@ -275,34 +291,42 @@ final class B11LongRouteSmokeUITests: XCTestCase {
         } else {
             print("B11SMOKE skipped (section not present): gasDay.1")
         }
-        if gasHeaderFound, scrollTo("gasDay.\(lastDay)", app) {
-            snap("b_final_gas_day\(lastDay)", app)
+        // The last day header the gas list should have. A miss fails.
+        let lastGasDay = final.lastGasListDay
+        print("B11SMOKE lastGasListDay=\(lastGasDay) lastRidingDay=\(lastDay)")
+        let lastGasDayFound = gasHeaderFound && scrollTo("gasDay.\(lastGasDay)", app)
+        XCTAssertTrue(lastGasDayFound, "gasDay.\(lastGasDay) not reachable in the open gas list: \(final.raw)")
+        if lastGasDayFound {
+            snap("b_final_gas_day\(lastGasDay)", app)
             swipe(app, up: true)
-            snap("b_final_gas_day\(lastDay)_more", app)
+            snap("b_final_gas_day\(lastGasDay)_more", app)
             // The last Day 3 stop sits at the bottom of the gas list.
             let lastStop = app.descendants(matching: .any).matching(
                 NSPredicate(format: "label BEGINSWITH %@", "Fuel stop \(final.fuel.count):")
             ).firstMatch
             let listFrame = list(app).frame
+            // Snapshots: the lazy list drops and rebuilds this row while it
+            // scrolls, and reading `frame` on a dropped row fails the test.
+            func lastStopFrame() -> CGRect? { (try? lastStop.snapshot())?.frame }
             var swipes = 0
-            while swipes < 40 && !(lastStop.exists && lastStop.frame.maxY <= listFrame.maxY
-                                   && lastStop.frame.minY >= listFrame.minY) {
+            while swipes < 40 {
+                if let frame = lastStopFrame(), frame.maxY <= listFrame.maxY, frame.minY >= listFrame.minY { break }
                 swipe(app, up: true); swipes += 1
             }
-            if lastStop.exists {
-                if lastStop.frame.minY > listFrame.midY { swipe(app, up: true) }
-                print("B11SMOKE lastStop=\(lastStop.label)")
-                snap("b_final_gas_day\(lastDay)_last", app)
+            if let snapshot = try? lastStop.snapshot() {
+                if snapshot.frame.minY > listFrame.midY { swipe(app, up: true) }
+                print("B11SMOKE lastStop=\(snapshot.label)")
+                snap("b_final_gas_day\(lastGasDay)_last", app)
             } else {
                 print("B11SMOKE skipped (section not present): Fuel stop \(final.fuel.count) (last Day \(lastDay) stop) not found")
             }
-        } else {
-            print("B11SMOKE skipped (section not present): gasDay.\(lastDay) not found in the final gas list")
         }
-        if scrollTo("hotelDay.2", app) {
-            snap("b_final_hotel_day2", app)
-        } else {
-            print("B11SMOKE skipped (section not present): hotelDay.2 not found")
+        // Every overnight has hotels (check 3), so its evening header must be
+        // reachable: a miss here fails instead of skipping the screenshot.
+        for (evening, _) in final.days.dropLast() {
+            let found = scrollTo("hotelDay.\(evening)", app)
+            XCTAssertTrue(found, "hotelDay.\(evening) not reachable though the probe lists hotels: \(final.raw)")
+            if found { snap("b_final_hotel_day\(evening)", app) }
         }
     }
 
@@ -341,64 +365,73 @@ final class B11LongRouteSmokeUITests: XCTestCase {
         start.press(forDuration: 0.05, thenDragTo: end)
     }
 
+    private enum ScrollResult {
+        case found
+        /// The list scrolled to the id and no such row came into the tree.
+        case notPresent
+        /// The row is in the list but never settled inside it.
+        case gaveUp
+    }
+
+    /// True when `identifier` is in view. `upFirst` is unused; the list
+    /// jumps straight to the row.
     private func scrollTo(_ identifier: String, _ app: XCUIApplication, upFirst: Bool = false) -> Bool {
+        switch scrollToRow(identifier, app) {
+        case .found:
+            return true
+        case .notPresent:
+            print("B11SMOKE scrollTo \(identifier): no such row in the list")
+        case .gaveUp:
+            XCTFail("\(identifier) is in the planning list but never came into view")
+        }
+        return false
+    }
+
+    /// Asks the app to scroll the row into view by its id (the planning
+    /// list's ScrollViewReader, UI-test launch only), then nudges it inside
+    /// the list frame. Swiping hunted for these headers through hundreds of
+    /// lazy rows and missed `gasDay.3` and `hotelDay.2` on iPad and iPhone.
+    /// A row the list never builds after the jump is not in the list.
+    private func scrollToRow(_ identifier: String, _ app: XCUIApplication) -> ScrollResult {
         let element = app.descendants(matching: .any).matching(identifier: identifier).firstMatch
-        let frame = list(app).frame
-        func visible() -> Bool {
+        /// One snapshot: reading `frame` on a row the lazy list just dropped
+        /// fails the test instead of returning nil.
+        func rowFrame() -> CGRect? { (try? element.snapshot())?.frame }
+        func visible(_ frame: CGRect) -> Bool {
             // iPad's split sheet can clip a header by a point or two, so
             // a header whose top is inside the list counts.
-            guard element.exists else { return false }
-            let elementFrame = element.frame
-            return elementFrame.height > 0
-                && elementFrame.minY >= frame.minY - 2 && elementFrame.minY < frame.maxY - 40
+            guard let rowFrame = rowFrame() else { return false }
+            return rowFrame.height > 0
+                && rowFrame.minY >= frame.minY - 2 && rowFrame.minY < frame.maxY - 40
         }
-        // Down first, then back up: the lazy list may have passed the row.
-        // Day 1 sits near the top: on a long list, searching downward first
-        // walks past ~300 rows before turning back.
-        // iPad's floating sheet is short and each fuel stop carries food
-        // rows, so slow 40% swipes never get back to Day 1. Fling first.
-        if upFirst {
-            for flick in 0..<40 {
-                if visible() { return true }
-                list(app).swipeDown(velocity: .fast)
-                if flick % 4 == 3, element.exists { break }
+        if visible(list(app).frame) { return .found }
+        for attempt in 0..<2 {
+            PlaceSearchTyping.postScrollRequest(identifier)
+            if element.waitForExistence(timeout: attempt == 0 ? 3 : 5) { break }
+        }
+        guard element.exists else {
+            snap("notpresent_\(identifier)", app)
+            return .notPresent
+        }
+        for _ in 0..<12 {
+            let frame = list(app).frame
+            if visible(frame) { return .found }
+            guard let rowFrame = rowFrame() else {
+                PlaceSearchTyping.postScrollRequest(identifier)
+                _ = element.waitForExistence(timeout: 2)
+                continue
             }
+            // Short drag toward the row, ending with a hold so the list
+            // does not coast past it.
+            let towardBottom = rowFrame.minY >= frame.maxY - 40
+            let target = list(app)
+            let start = target.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: towardBottom ? 0.65 : 0.35))
+            let end = target.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: towardBottom ? 0.35 : 0.65))
+            start.press(forDuration: 0.05, thenDragTo: end, withVelocity: 800, thenHoldForDuration: 0.15)
         }
-        // swipe(up: true) moves down the list. After the upFirst flings the
-        // list is at (or near) the top, so search downward first in both modes;
-        // searching "up" first there only bounced off the top.
-        // The iPad sheet list runs to ~400 pages (each fuel stop carries
-        // food rows), so slow swipes never reach the gas header. Fling down
-        // until the element is in the tree, then fine-tune below.
-        if !element.exists {
-            for _ in 0..<200 {
-                list(app).swipeUp(velocity: .fast)
-                if element.exists { break }
-            }
-        }
-        for direction in [true, false] {
-            for _ in 0..<60 {
-                if visible() {
-                    // Bring it near the top third of the list.
-                    if element.frame.minY > frame.minY + frame.height * 0.4 {
-                        swipe(app, up: true, fraction: 0.3)
-                        if visible() { return true }
-                        continue
-                    }
-                    return true
-                }
-                if element.exists {
-                    print("B11SMOKE scrollTo \(identifier) exists frame=\(element.frame) list=\(frame)")
-                }
-                swipe(app, up: direction, fraction: 0.4)
-            }
-        }
-        print("B11SMOKE scrollTo \(identifier) gave up exists=\(element.exists) list=\(frame) lists=\(app.collectionViews.count)")
-        let ids = list(app).descendants(matching: .any).allElementsBoundByIndex.prefix(80)
-            .map { "\($0.identifier)|\($0.label.prefix(40))" }
-        print("B11SMOKE gave-up tree: \(ids.joined(separator: " ; "))")
+        print("B11SMOKE scrollTo \(identifier) gave up frame=\(String(describing: rowFrame())) list=\(list(app).frame)")
         snap("giveup_\(identifier)", app)
-        return visible()
+        return visible(list(app).frame) ? .found : .gaveUp
     }
 
     private func expandSheet(_ app: XCUIApplication) {
