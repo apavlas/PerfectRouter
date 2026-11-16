@@ -67,7 +67,7 @@ final class HighlightsLiveSmokeUITests: XCTestCase {
         // polls in a row. Both known landmarks listed ends the wait early.
         var stablePolls = 0
         while Date() < deadline {
-            if scrollTo("highlightsListHeader", app) {
+            if revealHighlights(app) {
                 let current = highlightNames(app)
                 stablePolls = (!current.isEmpty && current == names) ? stablePolls + 1 : 0
                 names = current
@@ -80,7 +80,7 @@ final class HighlightsLiveSmokeUITests: XCTestCase {
         // Descriptions load after the rows; give them a moment.
         if !names.isEmpty {
             sleep(6)
-            _ = scrollTo("highlightsListHeader", app)
+            _ = revealHighlights(app)
             names = highlightNames(app)
         }
         XCTAssertTrue(header.exists, "Highlights header never appeared")
@@ -128,7 +128,7 @@ final class HighlightsLiveSmokeUITests: XCTestCase {
                 }
             }
         }
-        _ = scrollTo("highlightsListHeader", app)
+        _ = revealHighlights(app)
         snap("01_okc_amarillo_highlights", app)
 
         // Fuel first, so there is something to keep.
@@ -217,6 +217,19 @@ final class HighlightsLiveSmokeUITests: XCTestCase {
     }
 
     // MARK: - Helpers
+
+    /// The header plus its rows. The lazy list only builds rows on screen,
+    /// and a taller ride summary (three fuel stops with food) can leave the
+    /// header at the bottom edge with every row below it.
+    private func revealHighlights(_ app: XCUIApplication) -> Bool {
+        guard scrollTo("highlightsListHeader", app) else { return false }
+        if let row = try? element("highlightsListHeader", app).snapshot(),
+           let pane = try? list(app).snapshot(),
+           row.frame.midY > pane.frame.midY {
+            swipe(app, up: true, fraction: 0.4)
+        }
+        return true
+    }
 
     private func highlightNames(_ app: XCUIApplication) -> [String] {
         let rows = app.descendants(matching: .any)

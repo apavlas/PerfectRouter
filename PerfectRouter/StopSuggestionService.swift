@@ -461,8 +461,10 @@ struct StopSuggestionService {
             // own location Apple Maps answered a sample 84 mi out with 25
             // pumps around Oklahoma City (nearest 124 km away), so whole
             // stretches of I-40 came back empty and the plan had a 140 mi
-            // "gap" through towns full of pumps. Keep results in the region.
-            if #available(iOS 18.0, *) {
+            // "gap" through towns full of pumps. Keep gas results in the
+            // region. Sights keep the hint: their search leans on the wider
+            // answer (a required region emptied Highlights on this ride).
+            if category == .gas, #available(iOS 18.0, *) {
                 request.regionPriority = .required
             }
             do {
