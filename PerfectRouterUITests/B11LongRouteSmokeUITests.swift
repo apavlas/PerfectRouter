@@ -305,14 +305,17 @@ final class B11LongRouteSmokeUITests: XCTestCase {
                 NSPredicate(format: "label BEGINSWITH %@", "Fuel stop \(final.fuel.count):")
             ).firstMatch
             let listFrame = list(app).frame
+            // Snapshots: the lazy list drops and rebuilds this row while it
+            // scrolls, and reading `frame` on a dropped row fails the test.
+            func lastStopFrame() -> CGRect? { (try? lastStop.snapshot())?.frame }
             var swipes = 0
-            while swipes < 40 && !(lastStop.exists && lastStop.frame.maxY <= listFrame.maxY
-                                   && lastStop.frame.minY >= listFrame.minY) {
+            while swipes < 40 {
+                if let frame = lastStopFrame(), frame.maxY <= listFrame.maxY, frame.minY >= listFrame.minY { break }
                 swipe(app, up: true); swipes += 1
             }
-            if lastStop.exists {
-                if lastStop.frame.minY > listFrame.midY { swipe(app, up: true) }
-                print("B11SMOKE lastStop=\(lastStop.label)")
+            if let snapshot = try? lastStop.snapshot() {
+                if snapshot.frame.minY > listFrame.midY { swipe(app, up: true) }
+                print("B11SMOKE lastStop=\(snapshot.label)")
                 snap("b_final_gas_day\(lastGasDay)_last", app)
             } else {
                 print("B11SMOKE skipped (section not present): Fuel stop \(final.fuel.count) (last Day \(lastDay) stop) not found")
