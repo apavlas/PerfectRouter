@@ -316,6 +316,10 @@ final class CoreJourneyUITests: XCTestCase {
             }
         }
         XCTAssertEqual(after.filter { $0 == "Bare Overlook" }.count, 1, "Two taps added a duplicate: \(after)")
+        // The ride itself, not the rows on screen: one Bare Overlook.
+        let committedAfter = committed.label.split(separator: "|").map(String.init)
+        XCTAssertEqual(committedAfter.filter { $0 == "Bare Overlook" }.count, 1, "Two taps added a duplicate stop: \(committedAfter)")
+        XCTAssertEqual(after, committedAfter, "Route rows do not match the ride")
         snapHighlights("03_after_add_fuel_kept", app)
 
         // Added state: checkmark + "Added", and another tap adds nothing.
@@ -1576,7 +1580,13 @@ final class CoreJourneyUITests: XCTestCase {
             let elements = app.descendants(matching: .any)
                 .matching(NSPredicate(format: "identifier BEGINSWITH 'waypoint.'"))
                 .allElementsBoundByIndex
-                .filter { $0.exists && $0.frame.height > 1 }
+                // On screen only. The lazy list keeps some cells it has
+                // scrolled past and has not built others yet: on iPad the
+                // destination row sat below the sheet (not hittable) while
+                // Shell Knoxville above it had no cell, so this screen read
+                // [.., Bare Overlook, Test Destination] and the next one
+                // appended the real tail again.
+                .filter { $0.exists && $0.frame.height > 1 && $0.isHittable }
                 .sorted { $0.frame.minY < $1.frame.minY }
             var names: [String] = []
             var lastFrame: CGRect = .null

@@ -428,6 +428,12 @@ struct StopSuggestionService {
         guard await MapSearchGate.shared.prepare(), !Task.isCancelled else { return nil }
         let request = MKLocalPointsOfInterestRequest(center: coordinate, radius: min(radius, MKLocalPointsOfInterestRequest.maxRadius))
         request.pointOfInterestFilter = MKPointOfInterestFilter(including: [.gasStation])
+        if let items = try? await MKLocalSearch(request: request).start().mapItems {
+            return items
+        }
+        // FUEL-8: one paced retry. A dropped fallback left a sample with no
+        // pumps at all (mile 84, OKC -> Amarillo).
+        guard await MapSearchGate.shared.prepare(), !Task.isCancelled else { return nil }
         return try? await MKLocalSearch(request: request).start().mapItems
     }
 
@@ -451,6 +457,16 @@ struct StopSuggestionService {
                 latitudinalMeters: corridor * 2,
                 longitudinalMeters: corridor * 2
             )
+            // FUEL-8: the region is only a hint by default. Near the rider's
+            // own location Apple Maps answered a sample 84 mi out with 25
+            // pumps around Oklahoma City (nearest 124 km away), so whole
+            // stretches of I-40 came back empty and the plan had a 140 mi
+            // "gap" through towns full of pumps. Keep gas results in the
+            // region. Sights keep the hint: their search leans on the wider
+            // answer (a required region emptied Highlights on this ride).
+            if category == .gas, #available(iOS 18.0, *) {
+                request.regionPriority = .required
+            }
             do {
                 let response = try await MKLocalSearch(request: request).start()
                 return .hit(response)

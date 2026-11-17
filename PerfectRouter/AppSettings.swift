@@ -92,12 +92,12 @@ func formattedRideDistance(_ meters: CLLocationDistance) -> String {
     return formatter.string(fromDistance: meters)
 }
 
-/// "From start" on a suggested stop. Whole miles or kilometers, so a station
-/// a short way down the road is "~1 mi from start" and never "~400 ft".
+/// "From start" on a suggested stop. Whole measured miles or kilometers, so
+/// a station a short way down the road is "1 mi from start", never "400 ft".
 func milesFromStartCaption(_ meters: CLLocationDistance) -> String {
     let distance = FuelStopRidingTime.formatDistance(
         meters,
         usesMetric: AppSettings.usesMetricUnits
     )
-    return "~\(distance) from start"
+    return "\(distance) from start"
 }

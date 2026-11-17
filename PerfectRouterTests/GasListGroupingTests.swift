@@ -81,9 +81,9 @@ final class GasListGroupingTests: XCTestCase {
         XCTAssertEqual(legs.map(\.number), [1, 2, 3])
         XCTAssertEqual(legs.map(\.dayNumber), [1, 1, 2], "A leg that runs past an overnight stays on the day it starts")
         XCTAssertEqual(legs.map(\.title), [
-            "Leg 1 · ~80 mi",
-            "Leg 2 · ~150 mi",
-            "Leg 3 · ~230 mi",
+            "Leg 1 · 80 mi",
+            "Leg 2 · 70 mi (150 mi from start)",
+            "Leg 3 · 80 mi (230 mi from start)",
         ])
         XCTAssertEqual(legs[0].preview.map(\.name), ["Pilot Madison", "Alt 55", "Alt 100"])
         XCTAssertEqual(legs[0].overflow.map(\.name), ["Home Fuel", "Alt 15", "Alt 25", "Quick Stop"])
@@ -113,8 +113,8 @@ final class GasListGroupingTests: XCTestCase {
         )
         let legs = grouping.days.flatMap(\.legs)
         XCTAssertEqual(legs.map(\.title), [
-            "Leg 1 · ~1192 mi",
-            "Leg 2 · ~1500 mi",
+            "Leg 1 · 1192 mi",
+            "Leg 2 · 308 mi (1500 mi from start)",
         ])
         XCTAssertEqual(legs[0].preview.map(\.name), ["Pilot", "Alt A", "Alt B"])
         XCTAssertEqual(legs[0].preview.first?.distance ?? -1, 1192 * mile, accuracy: 1)
@@ -146,10 +146,10 @@ final class GasListGroupingTests: XCTestCase {
         )
         let legs = grouping.days.flatMap(\.legs)
         XCTAssertEqual(legs.map(\.title), [
-            "Leg 1 · ~850 mi",
-            "Leg 2 · ~1020 mi",
-            "Leg 3 · ~1191 mi",
-            "Leg 4 · ~1400 mi",
+            "Leg 1 · 850 mi",
+            "Leg 2 · 170 mi (1020 mi from start)",
+            "Leg 3 · 171 mi (1191 mi from start)",
+            "Leg 4 · 209 mi (1400 mi from start)",
         ])
         XCTAssertEqual(legs[1].preview.map(\.name), ["Stop B", "Alt 1022", "Alt 1029"])
         XCTAssertEqual(legs[1].overflow.map(\.name), ["Early"])
@@ -177,8 +177,8 @@ final class GasListGroupingTests: XCTestCase {
         )
         let legs = grouping.days.flatMap(\.legs)
         XCTAssertEqual(legs.map(\.title), [
-            "Leg 1 · ~1192 mi",
-            "Leg 2 · ~1264 mi",
+            "Leg 1 · 1192 mi",
+            "Leg 2 · 72 mi (1264 mi from start)",
         ])
         XCTAssertEqual(legs[0].preview.map(\.name), ["Phillips 66", "Conoco", "Old Route 66"])
         XCTAssertTrue(legs[0].overflow.isEmpty)
@@ -330,12 +330,16 @@ final class GasListGroupingTests: XCTestCase {
         XCTAssertEqual(CollapsibleListCopy.showMoreTitle(expanded: false), "Show more")
         XCTAssertEqual(CollapsibleListCopy.showMoreTitle(expanded: true), "Show less")
         XCTAssertEqual(
-            GasListGrouping.legTitle(number: 3, markerMeters: 498 * mile, usesMetric: false),
-            "Leg 3 · ~498 mi"
+            GasListGrouping.legTitle(number: 3, startMeters: 412 * mile, markerMeters: 498 * mile, usesMetric: false),
+            "Leg 3 · 86 mi (498 mi from start)"
         )
         XCTAssertEqual(
-            GasListGrouping.legAccessibilityLabel(title: "Leg 3 · ~498 mi", pastRange: true),
-            "Leg 3 · ~498 mi, Past your range"
+            GasListGrouping.legTitle(number: 1, startMeters: 0, markerMeters: 80 * mile, usesMetric: false),
+            "Leg 1 · 80 mi"
+        )
+        XCTAssertEqual(
+            GasListGrouping.legAccessibilityLabel(title: "Leg 3 · 86 mi (498 mi from start)", pastRange: true),
+            "Leg 3 · 86 mi (498 mi from start), Past your range"
         )
     }
 

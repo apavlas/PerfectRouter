@@ -67,7 +67,7 @@ final class HighlightsLiveSmokeUITests: XCTestCase {
         // polls in a row. Both known landmarks listed ends the wait early.
         var stablePolls = 0
         while Date() < deadline {
-            if scrollTo("highlightsListHeader", app) {
+            if revealHighlights(app) {
                 let current = highlightNames(app)
                 stablePolls = (!current.isEmpty && current == names) ? stablePolls + 1 : 0
                 names = current
@@ -80,7 +80,7 @@ final class HighlightsLiveSmokeUITests: XCTestCase {
         // Descriptions load after the rows; give them a moment.
         if !names.isEmpty {
             sleep(6)
-            _ = scrollTo("highlightsListHeader", app)
+            _ = revealHighlights(app)
             names = highlightNames(app)
         }
         XCTAssertTrue(header.exists, "Highlights header never appeared")
@@ -128,7 +128,7 @@ final class HighlightsLiveSmokeUITests: XCTestCase {
                 }
             }
         }
-        _ = scrollTo("highlightsListHeader", app)
+        _ = revealHighlights(app)
         snap("01_okc_amarillo_highlights", app)
 
         // Fuel first, so there is something to keep.
@@ -140,6 +140,38 @@ final class HighlightsLiveSmokeUITests: XCTestCase {
         print("HLSMOKE fuelRows=\(fuelRows)")
         record("fuel rows", fuelRows.joined(separator: "\n"))
         let waypointsBeforeFuel = element("committedWaypoints", app).label.split(separator: "|").map(String.init)
+        // Evidence for review: the fuel list as the rider sees it.
+        if scrollTo("gasListHeader", app) { snap("00_okc_amarillo_fuel_list", app) }
+        // Leg copy evidence: every leg header and its rows, top to bottom,
+        // in overlapping shots that review stitches into one image.
+        if ProcessInfo.processInfo.environment["SMOKE_LEG_SHOTS"] == "1", scrollTo("gasListHeader", app) {
+            if let row = try? element("gasListHeader", app).snapshot(),
+               let pane = try? list(app).snapshot(),
+               row.frame.minY > pane.frame.minY + pane.frame.height * 0.2 {
+                swipe(app, up: true, fraction: 0.4)
+            }
+            var titles: [Int: String] = [:]
+            for shot in 0..<7 {
+                for number in 1...8 {
+                    let header = element("gasLeg.\(number)", app)
+                    if header.exists, titles[number] == nil { titles[number] = header.label }
+                }
+                snap("00_legs_\(shot)", app)
+                swipe(app, up: true, fraction: 0.3)
+                sleep(1)
+            }
+            print("HLSMOKE legTitles=\(titles.keys.sorted().compactMap { titles[$0] })")
+        }
+        let planText = probe.exists ? probe.label : ""
+        func probeField(_ key: String) -> String {
+            planText.split(separator: " ").first { $0.hasPrefix(key + "=") }.map { String($0.dropFirst(key.count + 1)) } ?? ""
+        }
+        let planMiles = probeField("fuel").split(separator: ",").compactMap { Double($0) }
+        let totalMiles = Double(probeField("total")) ?? 0
+        let tankMiles = Double(probeField("tank")) ?? 0
+        let marks = [0] + planMiles + [totalMiles]
+        let legMiles = zip(marks.dropFirst(), marks).map { (($0 - $1) * 10).rounded() / 10 }
+        print("HLSMOKE fuelPlanMiles=\(planMiles) legs=\(legMiles) tank=\(tankMiles)")
         if scrollTo("selectRecommended", app) {
             element("selectRecommended", app).tap()
             sleep(8)
@@ -147,6 +179,15 @@ final class HighlightsLiveSmokeUITests: XCTestCase {
         let committed = element("committedWaypoints", app)
         let before = committed.exists ? committed.label.split(separator: "|").map(String.init) : []
         print("HLSMOKE before=\(before)")
+        if scrollTo("gasListHeader", app) { snap("00b_okc_amarillo_fuel_after_select", app) }
+        // FUEL-8: every planned stop is committed, and no leg is past the tank.
+        let fuelAdded = before.filter { !waypointsBeforeFuel.contains($0) }
+        print("HLSMOKE fuel8 added=\(fuelAdded)")
+        XCTAssertEqual(fuelAdded.count, planMiles.count, "Select recommended dropped planned stops: plan=\(planMiles) added=\(fuelAdded)")
+        XCTAssertGreaterThanOrEqual(planMiles.count, 3, "Fewer than 3 fuel stops on OKC -> Amarillo: \(planMiles)")
+        if tankMiles > 0 {
+            XCTAssertTrue(legMiles.allSatisfy { $0 <= tankMiles }, "Leg past the \(tankMiles) mi tank: \(legMiles)")
+        }
         // FUEL-7: what Select recommended added must all be working pumps.
         let notAPump = ["restored", "historic", "museum", "replica", "memorial", "monument", "landmark"]
         for stop in before where !waypointsBeforeFuel.contains(stop) {
@@ -196,6 +237,19 @@ final class HighlightsLiveSmokeUITests: XCTestCase {
     }
 
     // MARK: - Helpers
+
+    /// The header plus its rows. The lazy list only builds rows on screen,
+    /// and a taller ride summary (three fuel stops with food) can leave the
+    /// header at the bottom edge with every row below it.
+    private func revealHighlights(_ app: XCUIApplication) -> Bool {
+        guard scrollTo("highlightsListHeader", app) else { return false }
+        if let row = try? element("highlightsListHeader", app).snapshot(),
+           let pane = try? list(app).snapshot(),
+           row.frame.midY > pane.frame.midY {
+            swipe(app, up: true, fraction: 0.4)
+        }
+        return true
+    }
 
     private func highlightNames(_ app: XCUIApplication) -> [String] {
         let rows = app.descendants(matching: .any)

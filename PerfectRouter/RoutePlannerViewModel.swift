@@ -240,7 +240,7 @@ struct FuelGap: Equatable {
         Self.warning(fromMeters: fromMeters, toMeters: toMeters, rangeMeters: rangeMeters)
     }
 
-    /// "No gas between mile 2,328 and 2,602 (274 mi, beyond your 170 mi range)".
+    /// "No fuel for 274 mi, fill up here. No gas between mile 2,328 and 2,602, beyond your 170 mi range".
     /// Digits are grouped so the sentence matches the rider-facing copy.
     static func warning(
         fromMeters: CLLocationDistance,
@@ -255,7 +255,8 @@ struct FuelGap: Equatable {
         let to = Int((toMeters / unitMeters).rounded())
         let span = abs(to - from)
         let range = max(Int((rangeMeters / unitMeters).rounded()), 0)
-        return "No gas between \(unitName) \(grouped(from)) and \(grouped(to)) (\(grouped(span)) \(unitAbbrev), beyond your \(grouped(range)) \(unitAbbrev) range)"
+        // FUEL-8: lead with what the rider does about it.
+        return "No fuel for \(grouped(span)) \(unitAbbrev), fill up here. No gas between \(unitName) \(grouped(from)) and \(grouped(to)), beyond your \(grouped(range)) \(unitAbbrev) range"
     }
 
     private static func grouped(_ value: Int) -> String {
@@ -1295,12 +1296,26 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// a stop is not added.
     func fuelStopRidingCaption(for stop: SuggestedStop) -> String {
         let distance = distanceFromStart(of: stop)
-        return FuelStopRidingTime.caption(
+        return FuelStopRidingTime.fuelRowCaption(
             distanceMeters: distance,
             anchors: fuelRidingAnchorDistances(including: distance),
             legs: driveLegTimings(),
             dayStartMeters: dayStartMeters(for: distance)
         )
+    }
+
+    /// Gas row with no stored label: "3 mi (83 mi from start)", the hop
+    /// from the fill behind it, then the mile mark. Before any fill it is
+    /// "83 mi from start". Measured, never "~".
+    func fuelListDistanceCaption(for stop: SuggestedStop) -> String {
+        let along = distanceFromStart(of: stop)
+        guard let previous = FuelStopRidingTime.previousFill(
+            before: along,
+            anchors: fuelRidingAnchorDistances(including: along)
+        ) else {
+            return milesFromStartCaption(along)
+        }
+        return FuelStopRidingTime.legDistanceText(fromMeters: previous, toMeters: along)
     }
 
     /// Visible fuel rows plus applied gas fills. The fill is no longer a
@@ -1482,60 +1497,89 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     }
 
     var routeListEntries: [RouteListEntry] {
-        let days = rideDays
+        Self.routeListEntries(
+            waypointIDs: waypoints.map(\.id),
+            distances: waypoints.indices.map { waypointDistance(at: $0) },
+            days: rideDays
+        )
+    }
+
+    /// Route-list rows for `waypointIDs` in list order. Every id is unique.
+    ///
+    /// Mid-replan the list already has the new stop while the legs (and so
+    /// `distances`) still describe the previous line, so the marks are not
+    /// in ride order. A destination read as mile 0 put "Day 1" back after
+    /// "Day 2" and gave the `ForEach` two rows with one id. SwiftUI then
+    /// dropped a real stop and showed the tail twice (iPad,
+    /// testHighlightAddShowsUndoAndKeepsFuelStops). Days only move forward
+    /// here, each marker is emitted once, and a repeated id is skipped.
+    nonisolated static func routeListEntries(
+        waypointIDs: [UUID],
+        distances: [CLLocationDistance],
+        days: [HotelAlongRoute.RideDay],
+        tolerance: CLLocationDistance = FuelStopRidingTime.sameStopToleranceMeters
+    ) -> [RouteListEntry] {
         guard days.count > 1 else {
-            return waypoints.enumerated().map { index, waypoint in
+            return waypointIDs.enumerated().map { index, id in
                 RouteListEntry(
-                    id: waypoint.id.uuidString,
+                    id: id.uuidString,
                     waypointIndex: index,
                     unpickedDay: nil,
                     headingTitle: nil
                 )
             }
         }
-        let tolerance = FuelStopRidingTime.sameStopToleranceMeters
         let unpicked = days.filter { $0.unpickedEvening != nil }
         var nextUnpicked = 0
         var entries: [RouteListEntry] = []
+        var seen = Set<String>()
+        func append(_ entry: RouteListEntry) {
+            guard seen.insert(entry.id).inserted else { return }
+            entries.append(entry)
+        }
         var lastDay: Int?
-        for index in waypoints.indices {
-            let distance = waypointDistance(at: index)
+        var floor: CLLocationDistance = 0
+        for (index, id) in waypointIDs.enumerated() {
+            let raw = distances.indices.contains(index) ? distances[index] : 0
+            let measured = raw.isFinite ? raw : 0
+            // Ride order: a stale mark never sends a later row back a day.
+            let distance = index == 0 ? 0 : max(measured, floor)
+            floor = distance
             while nextUnpicked < unpicked.count,
                   unpicked[nextUnpicked].endDistance < distance - tolerance {
                 let day = unpicked[nextUnpicked]
-                let startsDay = lastDay != day.dayNumber
+                let startsDay = lastDay.map { day.dayNumber > $0 } ?? true
                 if startsDay {
-                    entries.append(Self.dayMarkerEntry(day))
+                    append(Self.dayMarkerEntry(day))
                 }
-                entries.append(RouteListEntry(
+                append(RouteListEntry(
                     id: "noHotel-\(day.dayNumber)",
                     waypointIndex: nil,
                     unpickedDay: day,
                     headingTitle: startsDay ? "Day \(day.dayNumber)" : nil
                 ))
-                lastDay = day.dayNumber
+                lastDay = max(lastDay ?? day.dayNumber, day.dayNumber)
                 nextUnpicked += 1
             }
             let day = days.first {
                 distance >= $0.startDistance - tolerance && distance <= $0.endDistance + tolerance
             }
-            let startsDay = day.map { lastDay != $0.dayNumber } ?? false
+            let startsDay = day.map { found in lastDay.map { found.dayNumber > $0 } ?? true } ?? false
             if startsDay, let day {
-                entries.append(Self.dayMarkerEntry(day))
+                append(Self.dayMarkerEntry(day))
             }
-            let waypoint = waypoints[index]
-            entries.append(RouteListEntry(
-                id: waypoint.id.uuidString,
+            append(RouteListEntry(
+                id: id.uuidString,
                 waypointIndex: index,
                 unpickedDay: nil,
                 headingTitle: startsDay ? day.map { "Day \($0.dayNumber)" } : nil
             ))
-            if let day { lastDay = day.dayNumber }
+            if let day { lastDay = max(lastDay ?? day.dayNumber, day.dayNumber) }
         }
         return entries
     }
 
-    private static func dayMarkerEntry(_ day: HotelAlongRoute.RideDay) -> RouteListEntry {
+    private nonisolated static func dayMarkerEntry(_ day: HotelAlongRoute.RideDay) -> RouteListEntry {
         RouteListEntry(
             id: "ride-day-\(day.dayNumber)",
             waypointIndex: nil,
@@ -4067,7 +4111,17 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             guard seen.insert(key).inserted else { continue }
             merged.append(stop)
         }
-        return merged.sorted { $0.distanceAlongRoute < $1.distanceAlongRoute }
+        // FUEL-8: total order, so search arrival order never changes the plan.
+        return merged.sorted(by: Self.fuelOrder)
+    }
+
+    /// Ride order with tie-breaks: mile, detour, name, then coordinate.
+    nonisolated static func fuelOrder(_ a: SuggestedStop, _ b: SuggestedStop) -> Bool {
+        if a.distanceAlongRoute != b.distanceAlongRoute { return a.distanceAlongRoute < b.distanceAlongRoute }
+        if a.detourMeters != b.detourMeters { return a.detourMeters < b.detourMeters }
+        if a.name != b.name { return a.name < b.name }
+        if a.latitude != b.latitude { return a.latitude < b.latitude }
+        return a.longitude < b.longitude
     }
 
     /// Travel-side pumps when any exist; otherwise the unfiltered list so a
@@ -4098,19 +4152,44 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         totalDistance: CLLocationDistance,
         limit: CLLocationDistance
     ) -> [SuggestedStop] {
-        let base = preferredFuelPool(from: stations, travelSide: travelSide)
-        guard base.count < stations.count, limit > 0, totalDistance > 0 else { return base }
+        let ids = preferredFuelPoolIDs(
+            marks: stations.map { ($0.id, $0.distanceAlongRoute) },
+            travelSide: Set(travelSide.map(\.id)),
+            totalDistance: totalDistance,
+            limit: limit
+        )
+        let byID = Dictionary(stations.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return ids.compactMap { byID[$0] }
+    }
+
+    /// Ids of `preferredFuelPool(from:travelSide:totalDistance:limit:)` on
+    /// plain (id, mile) pairs, so the off-main Select recommended scan plans
+    /// from exactly the pool the fuel list shows.
+    nonisolated static func preferredFuelPoolIDs(
+        marks stations: [(id: UUID, distance: CLLocationDistance)],
+        travelSide: Set<UUID>,
+        totalDistance: CLLocationDistance,
+        limit: CLLocationDistance
+    ) -> [UUID] {
+        let travel = stations.filter { travelSide.contains($0.id) }
+        let base = travel.isEmpty ? stations : travel
+        guard base.count < stations.count, limit > 0, totalDistance > 0 else { return base.map(\.id) }
         let ids = Set(base.map(\.id))
-        let marks = [0] + base.map(\.distanceAlongRoute).sorted() + [totalDistance]
+        let marks = [0] + base.map(\.distance).sorted() + [totalDistance]
         var gaps: [(CLLocationDistance, CLLocationDistance)] = []
         for i in 1..<marks.count where marks[i] - marks[i - 1] > limit {
             gaps.append((marks[i - 1], marks[i]))
         }
-        guard !gaps.isEmpty else { return base }
+        guard !gaps.isEmpty else { return base.map(\.id) }
         let fill = stations.filter { stop in
-            !ids.contains(stop.id) && gaps.contains { stop.distanceAlongRoute > $0.0 && stop.distanceAlongRoute < $0.1 }
+            !ids.contains(stop.id) && gaps.contains { stop.distance > $0.0 && stop.distance < $0.1 }
         }
-        return (base + fill).sorted { $0.distanceAlongRoute < $1.distanceAlongRoute }
+        // Stable: equal miles keep the input order, which is totally ordered.
+        return (base + fill).enumerated().sorted { lhs, rhs in
+            lhs.element.distance != rhs.element.distance
+                ? lhs.element.distance < rhs.element.distance
+                : lhs.offset < rhs.offset
+        }.map(\.element.id)
     }
 
     /// True when the published fuel list still has a pump to add and this
@@ -4163,7 +4242,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
         if input.replan {
             if let route {
-                let travel = input.stations.filter { station in
+                let travelIDs = Set(input.stations.filter { station in
                     let coordinate = CLLocationCoordinate2D(
                         latitude: station.latitude,
                         longitude: station.longitude
@@ -4173,8 +4252,18 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                         on: route,
                         drivesOnRight: input.drivesOnRight
                     )
-                }
-                pool = travel.isEmpty ? input.stations : travel
+                }.map(\.id))
+                // FUEL-8: the same pool the fuel list plans from. Rider's
+                // side first; the other side fills any hop the rider's side
+                // leaves longer than the reserve. A travel-side-only pool
+                // used to stop the plan at the first long hop.
+                let poolIDs = Set(preferredFuelPoolIDs(
+                    marks: input.stations.map { ($0.id, $0.distance) },
+                    travelSide: travelIDs,
+                    totalDistance: input.totalDistance,
+                    limit: input.tank * fuelSafetyFactor
+                ))
+                pool = input.stations.filter { poolIDs.contains($0.id) }
             }
             draft = fuelPlanDraft(
                 from: pool.map {
@@ -4192,37 +4281,28 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 totalTravelTime: input.totalTravelTime,
                 unsearched: input.unsearched
             )
-            var pastIDs = Set<UUID>()
-            var pastKeys = Set<String>()
+            // FUEL-8: every pump the plan names, in ride order. A pump past a
+            // dry stretch (a `.pastRange` row right after the gap warning) is
+            // where the rider fills next, so it is selected too and the tanks
+            // after it are planned instead of the scan stopping at the gap.
+            var planned: [UUID] = []
             for entry in draft.entries {
-                guard case .pastRange(let id) = entry else { continue }
-                pastIDs.insert(id)
-                if let key = stationByID[id]?.key {
-                    pastKeys.insert(key)
+                switch entry {
+                case .recommended(let id), .pastRange(let id):
+                    planned.append(id)
+                case .gap:
+                    continue
                 }
             }
-            let recommended = draft.recommendedIDs.compactMap { stationByID[$0] }
-            let selectable = recommended.filter { station in
-                station.isGas
-                    && !pastIDs.contains(station.id)
-                    && !pastKeys.contains(station.key)
-                    && !preKeys.contains(station.key)
-            }
-            let anchors = selectionAnchors(
-                input: input,
-                distances: distances,
-                keys: preKeys,
-                extra: recommended
-            )
-            let reachable = reachableStopIDs(
-                candidates: selectable.map { TankCandidate(id: $0.id, distance: cached($0)) },
-                onRoute: anchors,
-                tank: input.tank
-            )
-            for station in selectable.sorted(by: { cached($0) < cached($1) }) {
-                guard reachable.contains(station.id) else { break }
+            var taken = Set<String>()
+            for id in planned {
+                guard let station = stationByID[id],
+                      station.isGas,
+                      !preKeys.contains(station.key),
+                      taken.insert(station.key).inserted else { continue }
                 chosen.append(station)
             }
+            chosen.sort { cached($0) < cached($1) }
         } else {
             let selectable = input.existingFuelStops.filter { station in
                 station.isGas
@@ -4410,28 +4490,6 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             }
             return distances[waypoint.id] ?? 0
         }
-    }
-
-    /// Anchors for the within-tank walk: fills already on the route, plus
-    /// any newly planned stop that sits on a waypoint.
-    private nonisolated static func selectionAnchors(
-        input: FuelSelectionInput,
-        distances: [UUID: CLLocationDistance],
-        keys: Set<String>,
-        extra: [FuelSelectionStation]
-    ) -> [CLLocationDistance] {
-        var anchors = plannedFillDistances(input, distances: distances)
-        func append(_ station: FuelSelectionStation) {
-            guard keys.contains(station.key) else { return }
-            anchors.append(distances[station.id] ?? station.distance)
-        }
-        for station in input.stations {
-            append(station)
-        }
-        for stop in extra {
-            append(stop)
-        }
-        return anchors
     }
 
     /// Mile marks stored with the fuel snapshot after the insert.
@@ -4696,7 +4754,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         }
         for (number, stop) in recommended.enumerated() {
             let title = "Fuel stop \(number + 1): \(stop.name)"
-            let caption = FuelStopRidingTime.caption(
+            let caption = FuelStopRidingTime.fuelRowCaption(
                 distanceMeters: stop.distance,
                 anchors: anchors,
                 legs: legs,
@@ -4720,7 +4778,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             )
         }
         for stop in pastRange {
-            let caption = FuelStopRidingTime.caption(
+            let caption = FuelStopRidingTime.fuelRowCaption(
                 distanceMeters: stop.distance,
                 anchors: anchors,
                 legs: legs,
@@ -5560,7 +5618,14 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
         let comfortRange = range * safetyFactor
         let minimumSeparation = range * minimumSeparationFactor
-        let sorted = candidates.sorted { $0.distanceAlongRoute < $1.distanceAlongRoute }
+        // FUEL-8: stable ride order. Equal miles keep the caller's order
+        // (`mergedGasCandidates` is totally ordered), so ties never flip.
+        let sorted = candidates.enumerated().sorted { lhs, rhs in
+            if lhs.element.distanceAlongRoute != rhs.element.distanceAlongRoute {
+                return lhs.element.distanceAlongRoute < rhs.element.distanceAlongRoute
+            }
+            return lhs.offset < rhs.offset
+        }.map(\.element)
         var recommendedIDs: [UUID] = []
         var entries: [FuelPlanDraftEntry] = []
         var skippedNear = Set<UUID>()
@@ -5659,6 +5724,25 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         func appendGap(from start: CLLocationDistance, to end: CLLocationDistance) {
             guard end - start > range else { return }
             entries.append(.gap(fromMeters: start, toMeters: end, rangeMeters: range))
+        }
+
+        // FUEL-8: a dry stretch behind the last committed fill is still on
+        // the ride. Select recommended now plans past a gap, so the pump
+        // after it becomes a fill and planning resumes beyond it; without
+        // this the replan dropped that gap's warning (Codex review, #52).
+        // Only hops between known pumps in this pool (and the start) count.
+        // A hand-placed fill that is not one of these pumps, or a day that
+        // starts at a hotel with this leg's pumps only, is not called dry,
+        // and neither is a span with an unsearched sample.
+        if lastRefuel > range {
+            let samePump: CLLocationDistance = 1_000
+            let behind = sorted.map(\.distanceAlongRoute).filter { $0 > 0 && $0 < lastRefuel - samePump }
+            let endsOnPump = sorted.contains { abs($0.distanceAlongRoute - lastRefuel) <= samePump }
+            let marks = [0] + behind + (endsOnPump ? [lastRefuel] : [])
+            for (from, to) in zip(marks, marks.dropFirst()) where to - from > range {
+                guard !unsearched.contains(where: { $0 > from + 1 && $0 < to - 1 }) else { continue }
+                entries.append(.gap(fromMeters: from, toMeters: to, rangeMeters: range))
+            }
         }
 
         // Keep refueling until the remaining distance fits in the reserve.

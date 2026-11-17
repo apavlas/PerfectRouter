@@ -588,7 +588,7 @@ final class StopSelectionTests: XCTestCase {
     /// not the pick. A window with nothing inside 170 takes the nearest
     /// station still inside the tank. The station 348 mi later, and the
     /// recommendation after that gap, are not inserted.
-    func testSelectRecommendedCapsSparseLegsAndDoesNotCrossTheGap() async {
+    func testSelectRecommendedCapsSparseLegsAndPlansPastTheGap() async {
         let mile = AppSettings.metersPerMile
         let totalMiles = 2_497.0
         // North from Charlotte. Stations sit on polyline vertices so the
@@ -649,20 +649,19 @@ final class StopSelectionTests: XCTestCase {
 
         XCTAssertEqual(
             viewModel.waypoints.map(\.name),
-            ["Charlotte", "Shelby", "Memphis", "Amarillo", "Los Angeles"]
+            // FUEL-8: the 348 mi dry stretch after Amarillo is warned, not
+            // the end of the plan. Barstow is the next fill, then Needles.
+            ["Charlotte", "Shelby", "Memphis", "Amarillo", "Barstow", "Needles", "Los Angeles"]
         )
-        XCTAssertEqual(viewModel.waypoints.map(\.isGasFill), [false, true, true, true, false])
-        XCTAssertFalse(viewModel.waypoints.contains {
-            ["Bypass", "Barstow", "Needles"].contains($0.name)
-        })
+        XCTAssertEqual(viewModel.waypoints.map(\.isGasFill), [false, true, true, true, true, true, false])
+        XCTAssertFalse(viewModel.waypoints.contains { $0.name == "Bypass" })
         let summaryNames = viewModel.visibleFuelPlanEntries.compactMap { entry -> String? in
             if case .recommended(let stop) = entry { return stop.name }
             return nil
         }
         let onRoute = Set(viewModel.waypoints.map(\.name))
         XCTAssertTrue(summaryNames.allSatisfy { onRoute.contains($0) })
-        XCTAssertFalse(summaryNames.contains("Needles"))
-        XCTAssertFalse(summaryNames.contains("Barstow"))
+        XCTAssertFalse(summaryNames.contains("Bypass"))
     }
 
     /// The UI fixture's 100-mile tank. Search adds On Route Fuel at mile 150
@@ -762,7 +761,9 @@ final class StopSelectionTests: XCTestCase {
 
         await viewModel.toggleRecommendedFuelSelection()
 
-        XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "Stranded", "End"])
+        // FUEL-8: Stranded is past the tank from the start (a warned gap),
+        // and the plan keeps going: After is the next tank from there.
+        XCTAssertEqual(viewModel.waypoints.map(\.name), ["Start", "Stranded", "After", "End"])
     }
 
     /// 200 mi tank. Where nothing sits inside 170 mi, Select recommended
@@ -816,8 +817,9 @@ final class StopSelectionTests: XCTestCase {
             station("Past", miles: 603),
         ])
         await chosen.toggleRecommendedFuelSelection()
-        XCTAssertEqual(chosen.waypoints.map(\.name), ["Start", "Near A", "Near B", "End"])
-        XCTAssertFalse(chosen.waypoints.contains { ["Far A", "Far B", "Past"].contains($0.name) })
+        // FUEL-8: Past (603 mi) is the first pump after a warned dry stretch.
+        XCTAssertEqual(chosen.waypoints.map(\.name), ["Start", "Near A", "Near B", "Past", "End"])
+        XCTAssertFalse(chosen.waypoints.contains { ["Far A", "Far B"].contains($0.name) })
         XCTAssertFalse(
             chosen.waypointRangeNotices(at: 1).joined(separator: " ").contains("No fuel within range")
         )
