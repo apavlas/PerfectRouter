@@ -158,4 +158,99 @@ private struct SeededGenerator: RandomNumberGenerator {
         z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
         return z ^ (z >> 31)
     }
+
+}
+
+extension FuelFullRouteTests {
+    // Codex review on #52: planning past a dry stretch commits the pump
+    // after it, and the replan from those fills must keep the warning.
+    func testTheWarningSurvivesSelectingPastTheGap() {
+        let stops = [80.0, 230, 310, 395].map { station("P\(Int($0))", miles: $0) }
+        let plan = RoutePlannerViewModel.fuelPlan(
+            from: stops,
+            totalDistance: 400 * mile,
+            range: 100 * mile,
+            filledAt: [80, 230, 310, 395].map { $0 * mile }
+        )
+        XCTAssertTrue(plan.hasGap)
+        let warnings = plan.entries.compactMap { entry -> String? in
+            if case .gap(let gap) = entry { return gap.warning }
+            return nil
+        }
+        XCTAssertEqual(warnings.count, 1, "\(warnings)")
+        XCTAssertTrue(warnings.first?.hasPrefix("No fuel for 150 mi, fill up here.") ?? false, "\(warnings)")
+    }
+
+    func testCommittedFillsInsideTheTankNameNoGap() {
+        let stops = [80.0, 165, 247].map { station("P\(Int($0))", miles: $0) }
+        let plan = RoutePlannerViewModel.fuelPlan(
+            from: stops,
+            totalDistance: 259 * mile,
+            range: 100 * mile,
+            filledAt: [80, 165, 247].map { $0 * mile }
+        )
+        XCTAssertFalse(plan.hasGap)
+    }
+
+    // Ralph's copy: the leg's own length first, then the mile mark.
+    func testFuelRowsShowTheHopThenMilesFromStart() {
+        XCTAssertEqual(
+            FuelStopRidingTime.legDistanceText(fromMeters: 80 * mile, toMeters: 166 * mile, usesMetric: false),
+            "86 mi (166 mi from start)"
+        )
+        XCTAssertEqual(
+            FuelStopRidingTime.legDistanceText(fromMeters: 0, toMeters: 80 * mile, usesMetric: false),
+            "80 mi"
+        )
+        let rideLegs = [FuelStopRidingTime.Leg(distanceMeters: 260 * mile, expectedTravelTime: 4 * 3_600)]
+        let second = FuelStopRidingTime.fuelRowCaption(
+            distanceMeters: 166 * mile,
+            anchors: [80 * mile, 166 * mile],
+            legs: rideLegs,
+            usesMetric: false
+        )
+        XCTAssertTrue(second.hasPrefix("86 mi (166 mi from start) · "), second)
+        XCTAssertTrue(second.hasSuffix("since last)"), second)
+        XCTAssertFalse(second.contains("~"))
+        let first = FuelStopRidingTime.fuelRowCaption(
+            distanceMeters: 80 * mile,
+            anchors: [80 * mile, 166 * mile],
+            legs: rideLegs,
+            usesMetric: false
+        )
+        XCTAssertTrue(first.hasPrefix("80 mi · "), first)
+        XCTAssertFalse(first.contains("from start"), first)
+    }
+
+    // iPad race: mid-replan the list has the new stop but the old legs, so
+    // the destination read as mile 0 and "Day 1" came back after "Day 2".
+    // Two rows with one id made SwiftUI drop a stop and repeat the tail.
+    func testStaleMilesNeverRepeatARouteListRow() {
+        func day(_ number: Int, _ start: Double, _ end: Double, unpicked: Int?) -> HotelAlongRoute.RideDay {
+            HotelAlongRoute.RideDay(
+                dayNumber: number,
+                startDistance: start * mile,
+                endDistance: end * mile,
+                ridingSeconds: 3_600,
+                unpickedEvening: unpicked,
+                exceedsDailyLimit: false
+            )
+        }
+        let days = [day(1, 0, 90, unpicked: 0), day(2, 90, 200, unpicked: 1), day(3, 200, 300, unpicked: nil)]
+        let ids = (0..<6).map { _ in UUID() }
+        // Origin, Pilot, On Route, the new Overlook (old leg prefix), Shell, destination read as 0.
+        let stale = [0, 80, 150, 230, 300, 0].map { $0 * mile }
+        let entries = RoutePlannerViewModel.routeListEntries(waypointIDs: ids, distances: stale, days: days)
+        XCTAssertEqual(Set(entries.map(\.id)).count, entries.count, "\(entries.map(\.id))")
+        XCTAssertEqual(entries.compactMap(\.waypointIndex), Array(0..<6))
+        let markers = entries.compactMap { $0.dayMarker?.dayNumber }
+        XCTAssertEqual(markers, markers.sorted())
+
+        // Fresh miles keep the usual split.
+        let fresh = [0, 80, 150, 180, 230, 300].map { $0 * mile }
+        let settled = RoutePlannerViewModel.routeListEntries(waypointIDs: ids, distances: fresh, days: days)
+        XCTAssertEqual(Set(settled.map(\.id)).count, settled.count)
+        XCTAssertEqual(settled.compactMap { $0.dayMarker?.dayNumber }, [1, 2, 3])
+        XCTAssertEqual(settled.compactMap(\.waypointIndex), Array(0..<6))
+    }
 }

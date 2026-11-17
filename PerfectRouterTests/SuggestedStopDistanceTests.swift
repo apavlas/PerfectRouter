@@ -70,8 +70,7 @@ final class SuggestedStopDistanceTests: XCTestCase {
             accuracy: 1
         )
         let caption = milesFromStartCaption(80 * mile)
-        XCTAssertTrue(caption.hasPrefix("~"))
-        XCTAssertTrue(caption.hasSuffix(" from start"))
+        XCTAssertEqual(caption, "80 mi from start", "Measured, never \"~\"")
         XCTAssertFalse(caption.contains("ft"))
         XCTAssertFalse(milesFromStartCaption(18).contains("ft"))
         XCTAssertFalse(milesFromStartCaption(122).contains("ft"))
@@ -122,9 +121,9 @@ final class SuggestedStopDistanceTests: XCTestCase {
             XCTAssertGreaterThan(pair.1, pair.0)
         }
         let farCaption = milesFromStartCaption(viewModel.distanceFromStart(of: listed[listed.count - 1]))
-        XCTAssertTrue(farCaption.hasPrefix("~"))
+        XCTAssertFalse(farCaption.contains("~"))
         XCTAssertTrue(farCaption.hasSuffix(" from start"))
-        XCTAssertFalse(farCaption.hasPrefix("~0"))
+        XCTAssertFalse(farCaption.hasPrefix("0 "))
     }
 
     /// Northbound line. Vertices are about `stepMiles` apart; the test

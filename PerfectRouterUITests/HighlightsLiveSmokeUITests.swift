@@ -142,6 +142,26 @@ final class HighlightsLiveSmokeUITests: XCTestCase {
         let waypointsBeforeFuel = element("committedWaypoints", app).label.split(separator: "|").map(String.init)
         // Evidence for review: the fuel list as the rider sees it.
         if scrollTo("gasListHeader", app) { snap("00_okc_amarillo_fuel_list", app) }
+        // Leg copy evidence: every leg header and its rows, top to bottom,
+        // in overlapping shots that review stitches into one image.
+        if ProcessInfo.processInfo.environment["SMOKE_LEG_SHOTS"] == "1", scrollTo("gasListHeader", app) {
+            if let row = try? element("gasListHeader", app).snapshot(),
+               let pane = try? list(app).snapshot(),
+               row.frame.minY > pane.frame.minY + pane.frame.height * 0.2 {
+                swipe(app, up: true, fraction: 0.4)
+            }
+            var titles: [Int: String] = [:]
+            for shot in 0..<7 {
+                for number in 1...8 {
+                    let header = element("gasLeg.\(number)", app)
+                    if header.exists, titles[number] == nil { titles[number] = header.label }
+                }
+                snap("00_legs_\(shot)", app)
+                swipe(app, up: true, fraction: 0.3)
+                sleep(1)
+            }
+            print("HLSMOKE legTitles=\(titles.keys.sorted().compactMap { titles[$0] })")
+        }
         let planText = probe.exists ? probe.label : ""
         func probeField(_ key: String) -> String {
             planText.split(separator: " ").first { $0.hasPrefix(key + "=") }.map { String($0.dropFirst(key.count + 1)) } ?? ""

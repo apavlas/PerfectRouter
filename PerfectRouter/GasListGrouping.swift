@@ -77,6 +77,9 @@ struct GasListGrouping: Equatable {
         /// The rest of the leg, in ride order. Shown after Show more.
         var overflow: [Station]
         var pastRange: Bool
+        /// Previous leg's fill (0 on the first leg). The leg's own length
+        /// and each row's hop are measured from here.
+        var hopStartDistance: CLLocationDistance = 0
 
         var id: Int { number }
 
@@ -120,15 +123,35 @@ struct GasListGrouping: Equatable {
     var stationCount: Int
     var pastRange: Bool
 
-    /// "Leg 3 · ~498 mi". The mile is the recommended fill. A leg with no
-    /// pick uses the end of its window, so it does not repeat the previous fill.
+    /// "Leg 2 · 86 mi (166 mi from start)". The leg's own length comes
+    /// first, from the previous leg's fill to this leg's recommended fill,
+    /// so a rider never reads the mile mark as the hop. A leg with no pick
+    /// uses the end of its window. The first leg starts at the origin, so
+    /// its length is the mile mark and the parenthetical is dropped.
     static func legTitle(
         number: Int,
+        startMeters: CLLocationDistance,
         markerMeters: CLLocationDistance,
         usesMetric: Bool
     ) -> String {
-        let distance = FuelStopRidingTime.formatDistance(markerMeters, usesMetric: usesMetric)
-        return "Leg \(number) · ~\(distance)"
+        "Leg \(number) · " + FuelStopRidingTime.legDistanceText(
+            fromMeters: startMeters,
+            toMeters: markerMeters,
+            usesMetric: usesMetric
+        )
+    }
+
+    /// Where each listed station's hop starts: its leg's previous fill.
+    var hopStartByStation: [UUID: CLLocationDistance] {
+        var starts: [UUID: CLLocationDistance] = [:]
+        for day in days {
+            for leg in day.legs {
+                for station in leg.preview + leg.overflow {
+                    starts[station.id] = leg.hopStartDistance
+                }
+            }
+        }
+        return starts
     }
 
     static func legAccessibilityLabel(title: String, pastRange: Bool) -> String {
@@ -217,6 +240,7 @@ struct GasListGrouping: Equatable {
             let built = leg(
                 number: number,
                 start: start,
+                previousMarker: legs.last?.markerDistance ?? 0,
                 end: end,
                 stations: buckets[index],
                 dayNumber: dayNumber(for: start, spans: daySpans, tolerance: tolerance),
@@ -238,7 +262,8 @@ struct GasListGrouping: Equatable {
                     title: only.title,
                     preview: ordered,
                     overflow: [],
-                    pastRange: only.pastRange
+                    pastRange: only.pastRange,
+                    hopStartDistance: only.hopStartDistance
                 )
             ]
         }
@@ -265,6 +290,7 @@ struct GasListGrouping: Equatable {
     private static func leg(
         number: Int,
         start: CLLocationDistance,
+        previousMarker: CLLocationDistance,
         end: CLLocationDistance,
         stations: [Station],
         dayNumber: Int,
@@ -306,10 +332,11 @@ struct GasListGrouping: Equatable {
             dayNumber: dayNumber,
             startDistance: start,
             markerDistance: marker,
-            title: legTitle(number: number, markerMeters: marker, usesMetric: usesMetric),
+            title: legTitle(number: number, startMeters: min(previousMarker, marker), markerMeters: marker, usesMetric: usesMetric),
             preview: preview,
             overflow: overflow,
-            pastRange: stations.contains(where: \.pastRange)
+            pastRange: stations.contains(where: \.pastRange),
+            hopStartDistance: min(previousMarker, marker)
         )
     }
 

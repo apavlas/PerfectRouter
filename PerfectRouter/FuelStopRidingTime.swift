@@ -254,6 +254,61 @@ enum FuelStopRidingTime {
         return "\(miles) · \(riding) riding (\(formatDuration(since)) since last)"
     }
 
+    /// "86 mi (166 mi from start)": the hop from `fromMeters` first, then
+    /// the mile mark. From the origin the two are the same number, so it is
+    /// just "80 mi". Measured whole miles or kilometers, never "~".
+    static func legDistanceText(
+        fromMeters: CLLocationDistance,
+        toMeters: CLLocationDistance,
+        usesMetric: Bool = AppSettings.usesMetricUnits
+    ) -> String {
+        let end = toMeters.isFinite ? max(0, toMeters) : 0
+        let start = fromMeters.isFinite ? min(max(0, fromMeters), end) : 0
+        let hop = formatDistance(end - start, usesMetric: usesMetric)
+        guard start > sameStopToleranceMeters else { return hop }
+        return "\(hop) (\(formatDistance(end, usesMetric: usesMetric)) from start)"
+    }
+
+    /// Fuel-list row: `caption` with the leading miles replaced by the hop
+    /// from the previous fill and the mile mark from the start:
+    /// "86 mi (166 mi from start) · 2h 30m riding (1h 15m since last)".
+    /// The riding clock is unchanged.
+    static func fuelRowCaption(
+        distanceMeters: CLLocationDistance,
+        anchors: [CLLocationDistance],
+        legs: [Leg],
+        dayStartMeters: CLLocationDistance = 0,
+        usesMetric: Bool = AppSettings.usesMetricUnits
+    ) -> String {
+        let base = caption(
+            distanceMeters: distanceMeters,
+            anchors: anchors,
+            legs: legs,
+            dayStartMeters: dayStartMeters,
+            usesMetric: usesMetric
+        )
+        let distance = distanceMeters.isFinite ? max(0, distanceMeters) : 0
+        let origin = dayStartMeters.isFinite ? max(0, dayStartMeters) : 0
+        let previous = previousFill(before: distance, anchors: anchors) ?? 0
+        let miles = legDistanceText(
+            fromMeters: max(previous, origin),
+            toMeters: distance,
+            usesMetric: usesMetric
+        )
+        guard let split = base.range(of: " · ") else { return miles }
+        return miles + base[split.lowerBound...]
+    }
+
+    /// Last fill behind `distance`, or nil from the origin.
+    static func previousFill(
+        before distance: CLLocationDistance,
+        anchors: [CLLocationDistance]
+    ) -> CLLocationDistance? {
+        anchors.filter { anchor in
+            anchor.isFinite && anchor > sameStopToleranceMeters && anchor < distance - sameStopToleranceMeters
+        }.max()
+    }
+
     private static func finite(_ value: Double) -> Double {
         guard value.isFinite else { return 0 }
         return max(0, value)

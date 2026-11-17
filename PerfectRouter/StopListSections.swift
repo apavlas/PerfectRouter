@@ -1,4 +1,5 @@
 import SwiftUI
+import CoreLocation
 
 /// Decides whether the gas section is on the sheet. The selecting flag is
 /// read only by `FuelSelectionSpinnerSlot`, so a tap does not rebuild the
@@ -125,7 +126,9 @@ struct GasStationsSection: View {
             ? RoutePlannerViewModel.pastFullTankNotice
             : (stored == nil ? viewModel.fuelListNote(for: stop) : nil)
         let title = stored?.title ?? stop.name
-        let baseCaption = stored?.caption ?? milesFromStartCaption(along)
+        let baseCaption = stored?.caption ?? (stop.category == .gas
+            ? viewModel.fuelListDistanceCaption(for: stop)
+            : milesFromStartCaption(along))
         let caption = viewModel.isAcrossDividedHighway(stop)
             ? baseCaption + " · " + GasListGrouping.acrossDividedHighwayTag
             : baseCaption
@@ -613,8 +616,9 @@ struct SuggestionsSection: View {
                         viewModel.gasListStations.map { ($0.id, $0) },
                         uniquingKeysWith: { first, _ in first }
                     )
+                    let hopStarts = grouping.hopStartByStation
                     ForEach(viewModel.gasListRows) { row in
-                        gasListRow(row, stops: stops)
+                        gasListRow(row, stops: stops, hopStarts: hopStarts)
                     }
                 } else {
                     FocusPlaceholderRow()
@@ -674,7 +678,8 @@ struct SuggestionsSection: View {
     @ViewBuilder
     private func gasListRow(
         _ row: GasListGrouping.Row,
-        stops: [UUID: SuggestedStop]
+        stops: [UUID: SuggestedStop],
+        hopStarts: [UUID: CLLocationDistance] = [:]
     ) -> some View {
         switch row {
         case .dayHeader(let day):
@@ -697,7 +702,7 @@ struct SuggestionsSection: View {
             legHeader(leg)
         case .station(let station):
             if let stop = stops[station.id] {
-                suggestionButton(stop)
+                suggestionButton(stop, hopStart: hopStarts[station.id])
             } else {
                 FocusPlaceholderRow()
             }
@@ -731,11 +736,20 @@ struct SuggestionsSection: View {
     /// The distance line is always present, so the row stack does not gain
     /// and lose a child when a replan reclassifies the stop.
     @ViewBuilder
-    private func suggestionButton(_ stop: SuggestedStop) -> some View {
+    private func suggestionButton(_ stop: SuggestedStop, hopStart: CLLocationDistance? = nil) -> some View {
         let along = viewModel.distanceFromStart(of: stop)
         let stored = viewModel.fuelRowLabel(for: stop)
         let title = stored?.title ?? stop.name
-        let baseCaption = stored?.caption ?? milesFromStartCaption(along)
+        // A leg row measures its hop from that leg's previous fill, so an
+        // alternate to Fuel stop 2 reads from Fuel stop 1, not from stop 2.
+        let legCaption: String? = hopStart.flatMap { start in
+            start < along - FuelStopRidingTime.sameStopToleranceMeters
+                ? FuelStopRidingTime.legDistanceText(fromMeters: start, toMeters: along)
+                : nil
+        }
+        let baseCaption = stored?.caption ?? legCaption ?? (stop.category == .gas
+            ? viewModel.fuelListDistanceCaption(for: stop)
+            : milesFromStartCaption(along))
         let caption = viewModel.isAcrossDividedHighway(stop)
             ? baseCaption + " · " + GasListGrouping.acrossDividedHighwayTag
             : baseCaption
