@@ -1,0 +1,7 @@
+Feedback form: https://forms.clickup.com/90141766704/f/2kydwd1g-534/8GGHGJJ649B6SOLFL6
+
+Build 10:
+1. Hotels: on a multi-day ride, the hotels option is back. Check that hotels show up along the route.
+2. Gas stops: fuel stops are grouped by leg and day, and each group collapses and expands.
+3. Food and Highlights: both sections collapse. Highlights is open by default.
+4. iPad portrait map fit: on iPad in portrait, plan a long ride. The whole route should fit on the map.
