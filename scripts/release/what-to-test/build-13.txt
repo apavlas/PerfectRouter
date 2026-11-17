@@ -1,0 +1,10 @@
+Feedback form: https://forms.clickup.com/90141766704/f/2kydwd1g-534/8GGHGJJ649B6SOLFL6
+
+Build 13 adds highlights and tunes fuel stops.
+
+1. GPX: Export a planned ride, then re-import it. You should get the same line and the same stops.
+2. Fuel: Plan a long ride starting on a full tank. The first gas stop shouldn't come in the first third of your range unless it's the only pump. Spacing should feel sensible, with no false "Past your range".
+3. Food and highlights: Food shows under the gas stops. Highlights have real descriptions (try Oklahoma City to Amarillo for Slug Bug Ranch and Cadillac Ranch). Adding one shows "Added" with a checkmark and the Undo banner, and your gas stops stay put.
+4. Navigate: Start navigation and check that it follows the planned line.
+
+Tell us go or no-go, and anything that felt wrong.

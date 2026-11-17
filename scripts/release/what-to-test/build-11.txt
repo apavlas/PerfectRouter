@@ -1,0 +1,9 @@
+Feedback form: https://forms.clickup.com/90141766704/f/2kydwd1g-534/8GGHGJJ649B6SOLFL6
+
+Build 11 fixes the crash after tapping an address or while stops calculate, the hotel issues, and a false "Past your range" warning during loading.
+
+1. Plan a long multi-day ride, 1,000+ mi. While it loads, scroll the stop list. It shouldn't freeze or stall.
+2. The total miles shown while loading should match the final total.
+3. Every overnight stop should offer hotels, and none should say "no lodging".
+4. Gas is grouped by day and leg. You shouldn't see a "Past your range" warning unless a gap really is longer than your tank.
+5. Anything that looks off, send a screenshot through the feedback form.

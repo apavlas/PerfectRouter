@@ -1,0 +1,9 @@
+Feedback form: https://forms.clickup.com/90141766704/f/2kydwd1g-534/8GGHGJJ649B6SOLFL6
+
+Build 12 fixes gas stop planning.
+
+1. Plan a long ride (500+ mi). Your first suggested gas stop should be within tank range of the start.
+2. Look at the gaps between gas stops. None should be longer than your tank.
+3. A "Past your range" warning should only appear where there's truly no station, and only on that leg's header.
+4. Each stop's alternates should be close to it, not miles back near the previous stop.
+5. Tell us if any stop feels too early or too late for how you actually ride.
