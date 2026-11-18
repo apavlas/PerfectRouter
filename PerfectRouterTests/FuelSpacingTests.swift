@@ -173,6 +173,83 @@ final class FuelSpacingTests: XCTestCase {
         XCTAssertEqual(swapped, first)
     }
 
+    // MARK: Tight leg (Ralph's condition on FUEL-9)
+
+    func testTightLegWarningOnlyBetweenReserveAndTank() {
+        let tank = 100 * mile
+        func warning(_ miles: Double) -> String? {
+            RoutePlannerViewModel.tightLegWarning(nextLegMeters: miles * mile, tankMeters: tank, usesMetric: false)
+        }
+        XCTAssertNil(warning(60))
+        XCTAssertNil(warning(85), "at the reserve is not tight")
+        XCTAssertEqual(warning(85.9), "Tight leg: 86 mi, fill up here")
+        XCTAssertEqual(warning(86.1), "Tight leg: 86 mi, fill up here")
+        XCTAssertEqual(warning(100), "Tight leg: 100 mi, fill up here")
+        XCTAssertNil(warning(100.5), "past the tank is the dry-gap warning, not a tight leg")
+        XCTAssertEqual(
+            RoutePlannerViewModel.tightLegWarning(nextLegMeters: 90_000, tankMeters: 100_000, usesMetric: true),
+            "Tight leg: 90 km, fill up here"
+        )
+    }
+
+    func testOverTankGapWarningIsUnchanged() {
+        XCTAssertEqual(
+            FuelGap.warning(fromMeters: 2_328 * mile, toMeters: 2_602 * mile, rangeMeters: 170 * mile, usesMetric: false),
+            "No fuel for 274 mi, fill up here. No gas between mile 2,328 and 2,602, beyond your 170 mi range"
+        )
+    }
+
+    func testNextLegRunsToTheNextFillOrTheDestination() {
+        let marks = [79.0, 164.9, 251.0].map { $0 * mile }
+        XCTAssertEqual(
+            RoutePlannerViewModel.nextLegMeters(from: 79 * mile, marks: marks, totalDistance: 258 * mile)! / mile,
+            85.9, accuracy: 0.001
+        )
+        XCTAssertEqual(
+            RoutePlannerViewModel.nextLegMeters(from: 251 * mile, marks: marks, totalDistance: 258 * mile)! / mile,
+            7, accuracy: 0.001
+        )
+    }
+
+    /// Build 15 OKC -> Amarillo plan: 79.0 / 85.9 / 86.1 / 7.0. Love's and
+    /// Chevron start the two legs past the 85 mi reserve; Flying J does not.
+    func testFuelRowsShowTightLegOnStopsThatStartALegPastTheReserve() {
+        let total = 258.0
+        let line = stride(from: 0.0, through: total, by: 10).map { coordinate(atMiles: $0) }
+            + [coordinate(atMiles: total)]
+        let viewModel = RoutePlannerViewModel()
+        viewModel.fuelRangeMeters = 100 * mile
+        viewModel.waypoints = [
+            Waypoint(name: "Start", coordinate: line[0]),
+            Waypoint(name: "End", coordinate: line[line.count - 1]),
+        ]
+        viewModel.plannedCorridor = [line]
+        viewModel.legs = [
+            StubMKRoute(
+                name: "Westbound",
+                coordinates: line,
+                distance: total * mile,
+                expectedTravelTime: (total / 60) * 3_600,
+                hasHighways: true
+            )
+        ]
+        let loves = station("Love's Travel Stop", 79.0)
+        let chevron = station("Chevron", 164.9)
+        let flyingJ = station("Flying J Travel Center", 251.0)
+        viewModel.gasStations = [loves, chevron, flyingJ]
+        viewModel.fuelStops = [loves, chevron, flyingJ]
+        viewModel.fuelPlanEntries = [.recommended(loves), .recommended(chevron), .recommended(flyingJ)]
+
+        XCTAssertEqual(viewModel.fuelRowLabel(for: loves)?.tightLeg, "Tight leg: 86 mi, fill up here")
+        XCTAssertEqual(viewModel.fuelRowLabel(for: chevron)?.tightLeg, "Tight leg: 86 mi, fill up here")
+        XCTAssertNil(viewModel.fuelRowLabel(for: flyingJ)?.tightLeg)
+        XCTAssertNotNil(viewModel.fuelRowLabel(for: flyingJ))
+        XCTAssertTrue(
+            viewModel.fuelRowLabel(for: loves)?.accessibilityLabel.hasSuffix(", Tight leg: 86 mi, fill up here") ?? false
+        )
+        XCTAssertEqual(AccessibilityID.fuelTightLeg("Chevron"), "fuelTightLeg.Chevron")
+    }
+
     // Select recommended end to end: the scan off the main actor uses the
     // same rules, so the inserted waypoints have no short hop.
     func testSelectRecommendedInsertsSpacedStopsForTheOKCPattern() async {

@@ -291,6 +291,9 @@ struct FuelRowLabel: Equatable, Sendable {
     var accessibilityLabel: String
     var identifier: String
     var pastFullTank: Bool
+    /// FUEL-9: "Tight leg: 86 mi, fill up here" when the leg after this
+    /// stop is past the reserve but inside the tank.
+    var tightLeg: String? = nil
 }
 
 /// Lookup by stop id and by coordinate key. One value is replaced at a time
@@ -2645,10 +2648,61 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// read it; the class is `@MainActor`.
     nonisolated static let pastFullTankNotice = "Past full tank"
 
+    /// FUEL-9: the leg that starts at a fuel stop is past the reserve
+    /// (`fuelSafetyFactor` × tank) but still inside the tank. Nil at or
+    /// under the reserve, and past the tank (that is the dry-gap warning).
+    nonisolated static func tightLegWarning(
+        nextLegMeters: CLLocationDistance,
+        tankMeters: CLLocationDistance,
+        usesMetric: Bool = AppSettings.usesMetricUnits
+    ) -> String? {
+        guard nextLegMeters.isFinite, tankMeters > 0,
+              nextLegMeters > tankMeters * fuelSafetyFactor,
+              nextLegMeters <= tankMeters else { return nil }
+        let unit: CLLocationDistance = usesMetric ? 1_000 : AppSettings.metersPerMile
+        let value = Int((nextLegMeters / unit).rounded())
+        return "Tight leg: \(value) \(usesMetric ? "km" : "mi"), fill up here"
+    }
+
+    /// Along-route length of the leg that starts at `distance`: to the next
+    /// fill (stop, rider gas fill, or overnight) or the destination.
+    nonisolated static func nextLegMeters(
+        from distance: CLLocationDistance,
+        marks: [CLLocationDistance],
+        totalDistance: CLLocationDistance
+    ) -> CLLocationDistance? {
+        guard distance.isFinite, totalDistance > distance else { return nil }
+        let tolerance = FuelStopRidingTime.sameStopToleranceMeters
+        let next = (marks + [totalDistance])
+            .filter { $0.isFinite && $0 > distance + tolerance }
+            .min() ?? totalDistance
+        return next - distance
+    }
+
     /// Captions the route list draws under the stop name, in order.
     func waypointRangeNotices(at index: Int) -> [String] {
+        if let tight = waypointTightLegWarning(at: index) { return [tight] }
         guard waypointIsBeyondRemainingRange(at: index) else { return [] }
         return ["Past your range"]
+    }
+
+    /// FUEL-9: on a gas stop already on the route, the ridden leg to the
+    /// next fill (gas, overnight, or the destination) is past the reserve
+    /// but inside the tank.
+    func waypointTightLegWarning(at index: Int) -> String? {
+        guard index > 0, index < waypoints.count - 1,
+              cachedDriveLegs.count + 1 == waypoints.count,
+              waypoints[index].isGasFill else { return nil }
+        var next = waypoints.count - 1
+        for later in (index + 1)..<waypoints.count where Self.isTankFill(
+            isGasFill: waypoints[later].isGasFill,
+            isOvernight: waypoints[later].isOvernight
+        ) {
+            next = later
+            break
+        }
+        let leg = waypointDistance(at: next) - waypointDistance(at: index)
+        return Self.tightLegWarning(nextLegMeters: leg, tankMeters: fuelRangeMeters)
     }
 
     /// Nil when `hop` still fits in the tank, including a 193 mi hop on a
@@ -4406,7 +4460,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             legs: input.driveLegs,
             checkedIDs: Set(kept),
             usesMetric: input.usesMetric,
-            overnightDistances: overnightDistances
+            overnightDistances: overnightDistances,
+            totalDistance: input.totalDistance,
+            tank: input.tank
         )
         return FuelSelectionOutput(
             didReplan: input.replan,
@@ -4439,7 +4495,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         legs: [FuelStopRidingTime.Leg],
         checkedIDs: Set<UUID>,
         usesMetric: Bool,
-        overnightDistances: [CLLocationDistance]
+        overnightDistances: [CLLocationDistance],
+        totalDistance: CLLocationDistance = 0,
+        tank: CLLocationDistance = 0
     ) -> FuelRowLabelSet {
         var byEntry: [String: FuelPlanRow] = [:]
         for row in rows {
@@ -4467,7 +4525,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             legs: legs,
             checkedIDs: checkedIDs,
             usesMetric: usesMetric,
-            overnightDistances: overnightDistances
+            overnightDistances: overnightDistances,
+            totalDistance: totalDistance,
+            tank: tank
         )
     }
 
@@ -4737,7 +4797,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             legs: cachedDriveLegs,
             checkedIDs: checked,
             usesMetric: AppSettings.usesMetricUnits,
-            overnightDistances: overnightDistancesAlongRoute()
+            overnightDistances: overnightDistancesAlongRoute(),
+            totalDistance: totalDistanceMeters,
+            tank: fuelRangeMeters
         )
     }
 
@@ -4751,9 +4813,12 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         legs: [FuelStopRidingTime.Leg],
         checkedIDs: Set<UUID>,
         usesMetric: Bool,
-        overnightDistances: [CLLocationDistance] = []
+        overnightDistances: [CLLocationDistance] = [],
+        totalDistance: CLLocationDistance = 0,
+        tank: CLLocationDistance = 0
     ) -> FuelRowLabelSet {
         var set = FuelRowLabelSet()
+        let legMarks = anchors + overnightDistances
         func store(_ label: FuelRowLabel, id: UUID, key: String) {
             set.byID[id] = label
             if !key.isEmpty {
@@ -4773,13 +4838,16 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 usesMetric: usesMetric
             )
             let checked = checkedIDs.contains(stop.id)
+            let tight = nextLegMeters(from: stop.distance, marks: legMarks, totalDistance: totalDistance)
+                .flatMap { tightLegWarning(nextLegMeters: $0, tankMeters: tank, usesMetric: usesMetric) }
             store(
                 FuelRowLabel(
                     title: title,
                     caption: caption,
-                    accessibilityLabel: "\(title), \(caption)",
+                    accessibilityLabel: tight.map { "\(title), \(caption), \($0)" } ?? "\(title), \(caption)",
                     identifier: AccessibilityID.fuelStop(stop.name, checked: checked),
-                    pastFullTank: false
+                    pastFullTank: false,
+                    tightLeg: tight
                 ),
                 id: stop.id,
                 key: stop.key

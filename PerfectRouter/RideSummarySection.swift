@@ -281,7 +281,9 @@ private struct FuelPlanRows: View {
                         rowIdentifier: AccessibilityID.fuelStop(
                             fuelStop.name,
                             checked: viewModel.isGasBuffered(fuelStop)
-                        )
+                        ),
+                        tightLeg: stored?.tightLeg,
+                        tightLegIdentifier: AccessibilityID.fuelTightLeg(fuelStop.name)
                     )
                     bufferMark(viewModel.isGasBuffered(fuelStop))
                         .accessibilityHidden(true)
