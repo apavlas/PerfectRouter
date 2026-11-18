@@ -463,9 +463,10 @@ final class FuelPlanningTests: XCTestCase {
         let gasOnly = gas(at: 80_000)
         let (stops, hasGap) = lunchPlan(from: [withFood, gasOnly], preferringFoodAt: [withFood.id])
         XCTAssertFalse(hasGap)
-        // Food wins the first window. The pump at 80 km keeps the last leg
-        // inside the reserve.
-        XCTAssertEqual(stops.map(\.id), [withFood.id, gasOnly.id])
+        // Food wins the first window. FUEL-9: the pump at 80 km is only
+        // 20 km on, under the 25 km spacing, and the 90 km to the
+        // destination fits the 100 km tank, so it is not a second stop.
+        XCTAssertEqual(stops.map(\.id), [withFood.id])
     }
 
     func testPicksFarthestFoodStopInsideTheTankWindowAtMealTime() {
