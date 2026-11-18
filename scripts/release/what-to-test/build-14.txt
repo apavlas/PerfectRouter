@@ -1,0 +1,12 @@
+Feedback form: https://forms.clickup.com/90141766704/f/2kydwd1g-534/8GGHGJJ649B6SOLFL6
+
+Build 14 fixes fuel stops and long routes.
+
+1. Fuel: Tap Select recommended. It should plan fuel for the whole route, with no leg longer than your tank.
+2. Highlights: Landmarks like the restored 1929 station show as highlights, not as fuel stops. Try Oklahoma City to Amarillo and check the highlights there.
+3. Long route: Plan a multi-day ride of 1,000+ miles. It should load without freezing, the mileage while loading should match the final mileage, there should be a hotel at each overnight stop, and gas should be grouped by leg and day, with "Past your range" only where it's true.
+4. Stability: General fixes. Tell us if anything crashes or hangs.
+
+Known issue: Two fuel stops a few miles apart on Oklahoma City to Amarillo. We know about this and it's logged, so no need to report it.
+
+Tell us go or no-go, and anything that felt wrong.
