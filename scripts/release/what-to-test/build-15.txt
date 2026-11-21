@@ -1,0 +1,9 @@
+Feedback form: https://forms.clickup.com/90141766704/f/2kydwd1g-534/8GGHGJJ649B6SOLFL6
+
+Build 15 adds Apple Weather attribution.
+
+1. Weather: Plan a ride where rain is forecast. Under the rain warning you should see " Weather" and a "Legal" link. Tapping the warning itself should do nothing. Tapping Legal should open Apple's weather legal page.
+2. Rain alert: With notifications on, plan a rainy ride, then lock your phone. The alert should end with "Source: Apple Weather".
+3. Everything else is unchanged from build 14. Tell us if anything crashes or hangs.
+
+Tell us go or no-go, and anything that felt wrong.
