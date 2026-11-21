@@ -6,11 +6,21 @@ import WeatherKit
 /// `WeatherService.attribution`. When that can't load (for example with no
 /// network), the view shows a plain-text mark and Apple's published legal
 /// page, so the row is never left without attribution.
+///
+/// The link is borderless so that inside a `List` row only the link opens
+/// the legal page. Tapping the rest of the row does nothing.
 struct WeatherAttributionView: View {
 
-    /// Apple's published legal attribution page. Used only when
+    /// Apple's published legal attribution page, used only when
     /// `WeatherService.attribution` can't be loaded.
-    static let fallbackLegalURL = URL(string: "https://weatherkit.apple.com/legal-attribution.html")!
+    static let fallbackLegalURL: URL = URL(string: "https://weatherkit.apple.com/legal-attribution.html")
+        ?? URL(fileURLWithPath: "/")
+
+    /// The legal page to open: Apple's live attribution URL, or the
+    /// published fallback when that hasn't loaded.
+    static func legalURL(from attribution: WeatherAttribution?) -> URL {
+        attribution?.legalPageURL ?? fallbackLegalURL
+    }
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var attribution: WeatherAttribution?
@@ -18,11 +28,12 @@ struct WeatherAttributionView: View {
     var body: some View {
         HStack(spacing: 6) {
             mark
-            Link("Legal", destination: attribution?.legalPageURL ?? Self.fallbackLegalURL)
+                .accessibilityLabel("Weather data from Apple Weather")
+            Link("Legal", destination: Self.legalURL(from: attribution))
                 .font(.caption2)
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Apple Weather legal attribution")
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Weather data from Apple Weather. Legal attribution.")
         .task {
             attribution = try? await WeatherService.shared.attribution
         }

@@ -77,12 +77,14 @@ struct RideSummarySection: View {
                 }
                 if let rainWarning = viewModel.rainWarning {
                     // WeatherKit terms: attribution sits with the weather data.
+                    // Only the warning takes focus; the Legal link stays its
+                    // own element for VoiceOver and keyboard users.
                     VStack(alignment: .leading, spacing: 4) {
                         Label(rainWarning, systemImage: "cloud.rain.fill")
                             .foregroundStyle(.blue)
+                            .focusable()
                         WeatherAttributionView()
                     }
-                    .focusable()
                 } else if viewModel.isCheckingWeather {
                     Label("Checking weather along your route…", systemImage: "cloud.sun.fill")
                         .foregroundStyle(.secondary)
