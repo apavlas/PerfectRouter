@@ -151,16 +151,25 @@ final class HighlightsLiveSmokeUITests: XCTestCase {
                 swipe(app, up: true, fraction: 0.4)
             }
             var titles: [Int: String] = [:]
+            var tightLegs: [String] = []
             for shot in 0..<7 {
                 for number in 1...8 {
                     let header = element("gasLeg.\(number)", app)
                     if header.exists, titles[number] == nil { titles[number] = header.label }
+                }
+                // FUEL-9: "Tight leg" lines under stops whose next leg rides into the reserve.
+                for row in app.descendants(matching: .any)
+                    .matching(NSPredicate(format: "identifier BEGINSWITH 'fuelTightLeg.'")).allElementsBoundByIndex {
+                    guard let snap = try? row.snapshot() else { continue }
+                    let item = "\(snap.identifier)=\(snap.label)"
+                    if !tightLegs.contains(item) { tightLegs.append(item) }
                 }
                 snap("00_legs_\(shot)", app)
                 swipe(app, up: true, fraction: 0.3)
                 sleep(1)
             }
             print("HLSMOKE legTitles=\(titles.keys.sorted().compactMap { titles[$0] })")
+            print("HLSMOKE tightLegs=\(tightLegs)")
         }
         let planText = probe.exists ? probe.label : ""
         func probeField(_ key: String) -> String {

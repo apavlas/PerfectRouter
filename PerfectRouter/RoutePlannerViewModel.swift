@@ -92,6 +92,10 @@ fileprivate struct FuelCandidate: Sendable {
     var id: UUID
     var distanceAlongRoute: CLLocationDistance
     var detourMeters: CLLocationDistance
+    /// FUEL-9: name + coordinate rounded to ~111 m. Stable across searches,
+    /// unlike `id`, so it dedupes repeats and breaks ties the same way on
+    /// every device and run.
+    var key: String = ""
 }
 
 fileprivate enum FuelPlanDraftEntry: Sendable {
@@ -287,6 +291,9 @@ struct FuelRowLabel: Equatable, Sendable {
     var accessibilityLabel: String
     var identifier: String
     var pastFullTank: Bool
+    /// FUEL-9: "Tight leg: 86 mi, fill up here" when the leg after this
+    /// stop is past the reserve but inside the tank.
+    var tightLeg: String? = nil
 }
 
 /// Lookup by stop id and by coordinate key. One value is replaced at a time
@@ -2641,10 +2648,61 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// read it; the class is `@MainActor`.
     nonisolated static let pastFullTankNotice = "Past full tank"
 
+    /// FUEL-9: the leg that starts at a fuel stop is past the reserve
+    /// (`fuelSafetyFactor` × tank) but still inside the tank. Nil at or
+    /// under the reserve, and past the tank (that is the dry-gap warning).
+    nonisolated static func tightLegWarning(
+        nextLegMeters: CLLocationDistance,
+        tankMeters: CLLocationDistance,
+        usesMetric: Bool = AppSettings.usesMetricUnits
+    ) -> String? {
+        guard nextLegMeters.isFinite, tankMeters > 0,
+              nextLegMeters > tankMeters * fuelSafetyFactor,
+              nextLegMeters <= tankMeters else { return nil }
+        let unit: CLLocationDistance = usesMetric ? 1_000 : AppSettings.metersPerMile
+        let value = Int((nextLegMeters / unit).rounded())
+        return "Tight leg: \(value) \(usesMetric ? "km" : "mi"), fill up here"
+    }
+
+    /// Along-route length of the leg that starts at `distance`: to the next
+    /// fill (stop, rider gas fill, or overnight) or the destination.
+    nonisolated static func nextLegMeters(
+        from distance: CLLocationDistance,
+        marks: [CLLocationDistance],
+        totalDistance: CLLocationDistance
+    ) -> CLLocationDistance? {
+        guard distance.isFinite, totalDistance > distance else { return nil }
+        let tolerance = FuelStopRidingTime.sameStopToleranceMeters
+        let next = (marks + [totalDistance])
+            .filter { $0.isFinite && $0 > distance + tolerance }
+            .min() ?? totalDistance
+        return next - distance
+    }
+
     /// Captions the route list draws under the stop name, in order.
     func waypointRangeNotices(at index: Int) -> [String] {
+        if let tight = waypointTightLegWarning(at: index) { return [tight] }
         guard waypointIsBeyondRemainingRange(at: index) else { return [] }
         return ["Past your range"]
+    }
+
+    /// FUEL-9: on a gas stop already on the route, the ridden leg to the
+    /// next fill (gas, overnight, or the destination) is past the reserve
+    /// but inside the tank.
+    func waypointTightLegWarning(at index: Int) -> String? {
+        guard index > 0, index < waypoints.count - 1,
+              cachedDriveLegs.count + 1 == waypoints.count,
+              waypoints[index].isGasFill else { return nil }
+        var next = waypoints.count - 1
+        for later in (index + 1)..<waypoints.count where Self.isTankFill(
+            isGasFill: waypoints[later].isGasFill,
+            isOvernight: waypoints[later].isOvernight
+        ) {
+            next = later
+            break
+        }
+        let leg = waypointDistance(at: next) - waypointDistance(at: index)
+        return Self.tightLegWarning(nextLegMeters: leg, tankMeters: fuelRangeMeters)
     }
 
     /// Nil when `hop` still fits in the tank, including a 193 mi hop on a
@@ -4270,7 +4328,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                     FuelCandidate(
                         id: $0.id,
                         distanceAlongRoute: $0.distance,
-                        detourMeters: $0.detour
+                        detourMeters: $0.detour,
+                        key: $0.name + "|" + $0.key
                     )
                 },
                 totalDistance: input.totalDistance,
@@ -4302,7 +4361,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                       taken.insert(station.key).inserted else { continue }
                 chosen.append(station)
             }
-            chosen.sort { cached($0) < cached($1) }
+            chosen.sort { lhs, rhs in
+                let a = cached(lhs), b = cached(rhs)
+                return a != b ? a < b : lhs.name + "|" + lhs.key < rhs.name + "|" + rhs.key
+            }
         } else {
             let selectable = input.existingFuelStops.filter { station in
                 station.isGas
@@ -4398,7 +4460,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             legs: input.driveLegs,
             checkedIDs: Set(kept),
             usesMetric: input.usesMetric,
-            overnightDistances: overnightDistances
+            overnightDistances: overnightDistances,
+            totalDistance: input.totalDistance,
+            tank: input.tank
         )
         return FuelSelectionOutput(
             didReplan: input.replan,
@@ -4431,7 +4495,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         legs: [FuelStopRidingTime.Leg],
         checkedIDs: Set<UUID>,
         usesMetric: Bool,
-        overnightDistances: [CLLocationDistance]
+        overnightDistances: [CLLocationDistance],
+        totalDistance: CLLocationDistance = 0,
+        tank: CLLocationDistance = 0
     ) -> FuelRowLabelSet {
         var byEntry: [String: FuelPlanRow] = [:]
         for row in rows {
@@ -4459,7 +4525,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             legs: legs,
             checkedIDs: checkedIDs,
             usesMetric: usesMetric,
-            overnightDistances: overnightDistances
+            overnightDistances: overnightDistances,
+            totalDistance: totalDistance,
+            tank: tank
         )
     }
 
@@ -4729,7 +4797,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             legs: cachedDriveLegs,
             checkedIDs: checked,
             usesMetric: AppSettings.usesMetricUnits,
-            overnightDistances: overnightDistancesAlongRoute()
+            overnightDistances: overnightDistancesAlongRoute(),
+            totalDistance: totalDistanceMeters,
+            tank: fuelRangeMeters
         )
     }
 
@@ -4743,9 +4813,12 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         legs: [FuelStopRidingTime.Leg],
         checkedIDs: Set<UUID>,
         usesMetric: Bool,
-        overnightDistances: [CLLocationDistance] = []
+        overnightDistances: [CLLocationDistance] = [],
+        totalDistance: CLLocationDistance = 0,
+        tank: CLLocationDistance = 0
     ) -> FuelRowLabelSet {
         var set = FuelRowLabelSet()
+        let legMarks = anchors + overnightDistances
         func store(_ label: FuelRowLabel, id: UUID, key: String) {
             set.byID[id] = label
             if !key.isEmpty {
@@ -4765,13 +4838,16 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 usesMetric: usesMetric
             )
             let checked = checkedIDs.contains(stop.id)
+            let tight = nextLegMeters(from: stop.distance, marks: legMarks, totalDistance: totalDistance)
+                .flatMap { tightLegWarning(nextLegMeters: $0, tankMeters: tank, usesMetric: usesMetric) }
             store(
                 FuelRowLabel(
                     title: title,
                     caption: caption,
-                    accessibilityLabel: "\(title), \(caption)",
+                    accessibilityLabel: tight.map { "\(title), \(caption), \($0)" } ?? "\(title), \(caption)",
                     identifier: AccessibilityID.fuelStop(stop.name, checked: checked),
-                    pastFullTank: false
+                    pastFullTank: false,
+                    tightLeg: tight
                 ),
                 id: stop.id,
                 key: stop.key
@@ -5130,10 +5206,17 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// about 25 miles on a 170-mile tank).
     nonisolated static let fuelSafetyFactor = 0.85
 
-    /// Hops shorter than this fraction of the tank are skipped when they
-    /// don't unlock a station past the current reach. 20% of 170 miles is
-    /// 34 miles, so a 29-mile bunch is not a second fuel stop.
-    nonisolated static let fuelStopMinimumSeparationFactor = 0.20
+    /// FUEL-9: a committed stop is at least this fraction of the tank past
+    /// the previous fill (25 mi on a 100 mi tank). A shorter hop is taken
+    /// only when no station at or past this spacing is inside the tank and
+    /// the short hop is the only way to reach farther fuel or the
+    /// destination.
+    nonisolated static let fuelStopMinimumSeparationFactor = 0.25
+
+    /// FUEL-9: stations whose miles differ by less than this fraction of the
+    /// tank are treated as the same pick; the stable key decides. Search
+    /// noise of a few hundred meters must not flip the stop.
+    nonisolated static let fuelStopTieBandFactor = 0.01
 
     /// FUEL-7: on a full-tank start, the first recommended fill stays at or
     /// past this fraction of the tank when a later in-window option exists.
@@ -5460,7 +5543,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 FuelCandidate(
                     id: $0.id,
                     distanceAlongRoute: $0.distanceAlongRoute,
-                    detourMeters: $0.detourMeters
+                    detourMeters: $0.detourMeters,
+                    key: $0.name + "|" + coordinateKey($0.coordinate)
                 )
             },
             totalDistance: totalDistance,
@@ -5598,6 +5682,48 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         return FuelPlan(stops: recommended, entries: entries, hasGap: draft.hasGap)
     }
 
+    /// FUEL-9: the planner's candidate pool in one canonical form. Repeats
+    /// of the same place (same key within 500 m of road) collapse to one,
+    /// then ride order with stable tie-breaks: mile, key, detour. Input order
+    /// and duplicate copies from separate searches no longer matter.
+    fileprivate nonisolated static func canonicalFuelCandidates(
+        _ candidates: [FuelCandidate]
+    ) -> [FuelCandidate] {
+        let ordered = candidates.sorted { lhs, rhs in
+            if lhs.distanceAlongRoute != rhs.distanceAlongRoute {
+                return lhs.distanceAlongRoute < rhs.distanceAlongRoute
+            }
+            return fuelCandidateKeyOrder(lhs, rhs)
+        }
+        let sameStop: CLLocationDistance = 500
+        var kept: [FuelCandidate] = []
+        var lastByKey: [String: CLLocationDistance] = [:]
+        for candidate in ordered {
+            if !candidate.key.isEmpty, let previous = lastByKey[candidate.key],
+               candidate.distanceAlongRoute - previous <= sameStop {
+                continue
+            }
+            if !candidate.key.isEmpty {
+                lastByKey[candidate.key] = candidate.distanceAlongRoute
+            }
+            kept.append(candidate)
+        }
+        return kept
+    }
+
+    /// Stable order that does not use the per-search `id`: key, detour, then
+    /// mile. `id` is only the last resort for keyless test fixtures.
+    fileprivate nonisolated static func fuelCandidateKeyOrder(
+        _ lhs: FuelCandidate, _ rhs: FuelCandidate
+    ) -> Bool {
+        if lhs.key != rhs.key { return lhs.key < rhs.key }
+        if lhs.detourMeters != rhs.detourMeters { return lhs.detourMeters < rhs.detourMeters }
+        if lhs.distanceAlongRoute != rhs.distanceAlongRoute {
+            return lhs.distanceAlongRoute < rhs.distanceAlongRoute
+        }
+        return lhs.id.uuidString < rhs.id.uuidString
+    }
+
     fileprivate nonisolated static func fuelPlanDraft(
         from candidates: [FuelCandidate],
         totalDistance: CLLocationDistance,
@@ -5618,14 +5744,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
         let comfortRange = range * safetyFactor
         let minimumSeparation = range * minimumSeparationFactor
-        // FUEL-8: stable ride order. Equal miles keep the caller's order
-        // (`mergedGasCandidates` is totally ordered), so ties never flip.
-        let sorted = candidates.enumerated().sorted { lhs, rhs in
-            if lhs.element.distanceAlongRoute != rhs.element.distanceAlongRoute {
-                return lhs.element.distanceAlongRoute < rhs.element.distanceAlongRoute
-            }
-            return lhs.offset < rhs.offset
-        }.map(\.element)
+        let sorted = canonicalFuelCandidates(candidates)
+        let tieBand = range * fuelStopTieBandFactor
         var recommendedIDs: [UUID] = []
         var entries: [FuelPlanDraftEntry] = []
         var skippedNear = Set<UUID>()
@@ -5686,19 +5806,54 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
         // Farthest station within the window. Food is a meal-time preference,
         // not a gate — off-meal we keep the tank-interval gas pick.
+        // FUEL-9: spacing is part of the choice, not a filter after it.
+        // Only stations at least `minimumSeparation` past the last fill
+        // compete for the reserve pick, the meal pick, and the
+        // nearest-in-tank fallback.
+        func spaced(_ window: [FuelCandidate]) -> [FuelCandidate] {
+            window.filter { $0.distanceAlongRoute - lastRefuel >= minimumSeparation }
+        }
+
+        /// Stations closer than the spacing, for the forced case only.
+        func short(_ window: [FuelCandidate]) -> [FuelCandidate] {
+            window.filter { $0.distanceAlongRoute - lastRefuel < minimumSeparation }
+        }
+
+        /// Farthest by mile, but anything within `tieBand` of it counts as
+        /// a tie and the stable key wins, so a few hundred meters of search
+        /// noise cannot swap the stop.
+        func farthestStable(_ pool: [FuelCandidate]) -> FuelCandidate? {
+            guard let far = pool.map(\.distanceAlongRoute).max() else { return nil }
+            return pool.filter { $0.distanceAlongRoute >= far - tieBand }
+                .min(by: fuelCandidateKeyOrder)
+        }
+
+        /// Nearest by mile, with the same tie band.
+        func nearestStable(_ pool: [FuelCandidate]) -> FuelCandidate? {
+            guard let near = pool.map(\.distanceAlongRoute).min() else { return nil }
+            return pool.filter { $0.distanceAlongRoute <= near + tieBand }
+                .min(by: fuelCandidateKeyOrder)
+        }
+
         func farthest(_ limit: CLLocationDistance, preferFood: Bool) -> FuelCandidate? {
-            let window = afterEarlyFloor(inWindow(limit))
+            let window = afterEarlyFloor(spaced(inWindow(limit)))
             let withFood = (preferFood && !preferringFoodAt.isEmpty)
                 ? window.filter { preferringFoodAt.contains($0.id) }
                 : []
             let pool = withFood.isEmpty ? window : withFood
-            return pool.max(by: { $0.distanceAlongRoute < $1.distanceAlongRoute })
+            return farthestStable(pool)
         }
 
-        /// Closest station still inside the tank. Used only when the reserve
-        /// window is empty.
+        /// Closest spaced station still inside the tank. Used only when the
+        /// reserve window is empty.
         func nearest(_ limit: CLLocationDistance) -> FuelCandidate? {
-            afterEarlyFloor(inWindow(limit)).min(by: { $0.distanceAlongRoute < $1.distanceAlongRoute })
+            nearestStable(afterEarlyFloor(spaced(inWindow(limit))))
+        }
+
+        /// Forced case: nothing spaced is inside the tank, so the farthest
+        /// short hop is the candidate. It is kept only when it extends reach.
+        func farthestShort(_ limit: CLLocationDistance) -> FuelCandidate? {
+            farthestStable(afterEarlyFloor(short(inWindow(limit))))
         }
 
         /// A short hop is worth taking when the destination, or some later
@@ -5771,7 +5926,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             // the tank, so the rider fuels as soon as possible. A station
             // past the tank is not a stop.
             if let stop = farthest(comfortRange, preferFood: preferFoodForMeal)
-                ?? nearest(range) {
+                ?? nearest(range)
+                ?? farthestShort(range) {
                 let hop = stop.distanceAlongRoute - lastRefuel
                 if hop < minimumSeparation, !extendsReach(stop) {
                     skippedNear.insert(stop.id)

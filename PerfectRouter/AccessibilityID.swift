@@ -65,6 +65,12 @@ enum AccessibilityID {
         "fuelStop.\(name).\(checked ? "checked" : "unchecked")"
     }
 
+    /// FUEL-9: "Tight leg" warning under a fuel stop whose next leg rides
+    /// into the reserve. Not under `fuelStop.` so row queries stay exact.
+    static func fuelTightLeg(_ name: String) -> String {
+        "fuelTightLeg.\(name)"
+    }
+
     /// Hotel row. The suffix flips when the rider checks the stop.
     static func hotelStop(_ name: String, checked: Bool) -> String {
         "hotelStop.\(name).\(checked ? "checked" : "unchecked")"

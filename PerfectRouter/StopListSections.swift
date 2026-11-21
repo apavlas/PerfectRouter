@@ -155,7 +155,9 @@ struct GasStationsSection: View {
                 FuelStopTextColumn(
                     title: title,
                     caption: caption,
-                    rowIdentifier: accessibility?.identifier ?? ""
+                    rowIdentifier: accessibility?.identifier ?? "",
+                    tightLeg: onRoute ? nil : stored?.tightLeg,
+                    tightLegIdentifier: AccessibilityID.fuelTightLeg(stop.name)
                 )
                 if onRoute {
                     Text("Added")
@@ -354,6 +356,12 @@ struct WaypointsSection: View {
                     dayHeadingSlot(dayTitle)
                     waypointName(waypoint)
                     ridingCaption(caption, overLimitDay: overDay)
+                    if let tight = viewModel.waypointTightLegWarning(at: index) {
+                        Text(tight)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.orange)
+                            .accessibilityIdentifier(AccessibilityID.fuelTightLeg(waypoint.name))
+                    }
                     if pastRange {
                         PastYourRangeLabel()
                     } else {
@@ -870,7 +878,9 @@ struct SuggestionsSection: View {
                 FuelStopTextColumn(
                     title: title,
                     caption: caption,
-                    rowIdentifier: accessibility?.identifier ?? viewModel.gasSuggestionIdentifier(for: stop)
+                    rowIdentifier: accessibility?.identifier ?? viewModel.gasSuggestionIdentifier(for: stop),
+                    tightLeg: onRoute ? nil : viewModel.fuelRowLabel(for: stop)?.tightLeg,
+                    tightLegIdentifier: AccessibilityID.fuelTightLeg(stop.name)
                 )
                 if onRoute {
                     Text("Added")
@@ -1018,6 +1028,9 @@ struct FuelStopTextColumn: View {
     /// Stamped on the title text. A List cell on iPhone exposes that text
     /// even when it does not forward the surrounding button's identifier.
     var rowIdentifier: String = ""
+    /// FUEL-9: orange "Tight leg" line under the caption.
+    var tightLeg: String? = nil
+    var tightLegIdentifier: String = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -1031,6 +1044,13 @@ struct FuelStopTextColumn: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.leading)
                 .lineLimit(6)
+            if let tightLeg {
+                Text(tightLeg)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.orange)
+                    .multilineTextAlignment(.leading)
+                    .accessibilityIdentifier(tightLegIdentifier)
+            }
         }
     }
 }
