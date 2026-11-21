@@ -76,9 +76,13 @@ struct RideSummarySection: View {
                     FocusPlaceholderRow()
                 }
                 if let rainWarning = viewModel.rainWarning {
-                    Label(rainWarning, systemImage: "cloud.rain.fill")
-                        .foregroundStyle(.blue)
-                        .focusable()
+                    // WeatherKit terms: attribution sits with the weather data.
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label(rainWarning, systemImage: "cloud.rain.fill")
+                            .foregroundStyle(.blue)
+                        WeatherAttributionView()
+                    }
+                    .focusable()
                 } else if viewModel.isCheckingWeather {
                     Label("Checking weather along your route…", systemImage: "cloud.sun.fill")
                         .foregroundStyle(.secondary)
