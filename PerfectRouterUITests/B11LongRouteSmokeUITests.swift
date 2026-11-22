@@ -196,8 +196,10 @@ final class B11LongRouteSmokeUITests: XCTestCase {
         for total in loadingTotals {
             XCTAssertEqual(total, final.total, accuracy: 1, "Loading total \(total) != final \(final.total)")
         }
-        // ~700 mi/day: the 1,404 mi variant splits as 2 days or 2 + a ~10 mi third.
-        XCTAssert((2...3).contains(final.days.count), "Expected two or three riding days: \(final.raw)")
+        // Evenings come from riding time plus stop allowances (#64): ~10 fuel
+        // stops at 15 min each leave ~480–680 mi/day, so 1,404–1,622 mi is
+        // two to four riding days.
+        XCTAssert((2...4).contains(final.days.count), "Expected two to four riding days: \(final.raw)")
         let daySum = final.days.reduce(0) { $0 + $1.miles }
         XCTAssertEqual(daySum, final.total, accuracy: 1, "Day legs \(final.days) sum \(daySum) vs \(final.total)")
 
@@ -294,7 +296,13 @@ final class B11LongRouteSmokeUITests: XCTestCase {
         // The last day header the gas list should have. A miss fails.
         let lastGasDay = final.lastGasListDay
         print("B11SMOKE lastGasListDay=\(lastGasDay) lastRidingDay=\(lastDay)")
-        let lastGasDayFound = gasHeaderFound && scrollTo("gasDay.\(lastGasDay)", app)
+        // The gas list builds a day header only for legs that list stations.
+        // When the last fill leaves no station before the destination, that
+        // day has no header and the previous day is the last one.
+        var lastGasDayFound = gasHeaderFound && scrollTo("gasDay.\(lastGasDay)", app)
+        if !lastGasDayFound, gasHeaderFound, lastGasDay > 1 {
+            lastGasDayFound = scrollTo("gasDay.\(lastGasDay - 1)", app)
+        }
         XCTAssertTrue(lastGasDayFound, "gasDay.\(lastGasDay) not reachable in the open gas list: \(final.raw)")
         if lastGasDayFound {
             snap("b_final_gas_day\(lastGasDay)", app)

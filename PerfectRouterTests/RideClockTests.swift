@@ -184,4 +184,47 @@ final class RideClockTests: XCTestCase {
         )
         XCTAssertEqual(Array(withAllowances.stops.map(\.id).prefix(2)), [first.id, withFood.id])
     }
+
+    // MARK: - View model stops (Codex review on #68)
+
+    /// A ride with only a start and a destination still counts its
+    /// recommended fuel stops, and food pairing marks the Meal-stop candidate.
+    @MainActor
+    func testTwoWaypointRideCountsFuelStopsAndPairedFood() {
+        let viewModel = RoutePlannerViewModel()
+        let origin = UITestFixture.origin
+        let destination = UITestFixture.coordinate(milesNorth: 280, eastMeters: 0)
+        viewModel.waypoints = [
+            Waypoint(name: "Test Origin", coordinate: origin),
+            Waypoint(name: "Test Destination", coordinate: destination),
+        ]
+        viewModel.legs = [StubRouteBuilder.routes(from: origin, to: destination, avoidsHighways: false, alternates: false)[0]]
+        let gasOnly = SuggestedStop(
+            name: "Gas Only",
+            coordinate: UITestFixture.coordinate(milesNorth: 90, eastMeters: 0),
+            category: .gas,
+            distanceAlongRoute: 90 * mile
+        )
+        let withFood = SuggestedStop(
+            name: "Gas And Diner",
+            coordinate: UITestFixture.coordinate(milesNorth: 180, eastMeters: 0),
+            category: .gas,
+            distanceAlongRoute: 180 * mile
+        )
+        let diner = SuggestedStop(
+            name: "Diner",
+            coordinate: UITestFixture.coordinate(milesNorth: 180, eastMeters: 200),
+            category: .food,
+            distanceAlongRoute: 180 * mile
+        )
+        viewModel.fuelStops = [gasOnly, withFood]
+        viewModel.fuelFoodStops = [
+            FuelFoodStop(fuelStop: gasOnly, nearbyFood: []),
+            FuelFoodStop(fuelStop: withFood, nearbyFood: [diner]),
+        ]
+
+        let stops = viewModel.rideClockStops(includingFuelStops: true)
+        XCTAssertEqual(stops.map(\.kind), [.fuel(hasFood: false), .fuel(hasFood: true)])
+        XCTAssertTrue(viewModel.rideClockStops(includingFuelStops: false).isEmpty)
+    }
 }

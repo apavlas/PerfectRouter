@@ -588,5 +588,9 @@ struct HotelEveningPlan: Identifiable {
     /// options. Every evening the ride reaches is published with either
     /// options or this message.
     var emptyMessage: String?
+    /// Every measured place from the search these options came from (near,
+    /// or far when `widened`). Lets a changed fuel plan re-pick options and
+    /// captions without searching again.
+    var pool: [SuggestedStop] = []
     var id: Int { dayNumber }
 }
