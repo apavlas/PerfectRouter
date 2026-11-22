@@ -712,14 +712,6 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         let departureMinutes = HotelAlongRoute.minutes(from: Self.departureOverride ?? effectiveDeparture)
         let clockStops = rideClockStops(includingFuelStops: true)
         hotelClockStops = clockStops
-        plannedLodgingEvenings = HotelAlongRoute.evenings(
-            legs: driveLegs,
-            overnightDistances: [],
-            departureMinutes: departureMinutes,
-            targetMinutes: target,
-            stops: clockStops
-        )
-        refreshPublishedRideDays()
         let evenings = HotelAlongRoute.evenings(
             legs: driveLegs,
             overnightDistances: overnightDistancesAlongRoute(),
@@ -727,6 +719,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             targetMinutes: target,
             stops: clockStops
         )
+        plannedLodgingEvenings = evenings
+        refreshPublishedRideDays()
         guard generation == hotelGeneration, !Task.isCancelled else { return }
         guard !evenings.isEmpty, !polylines.isEmpty else {
             hotelEvenings = []
@@ -1290,8 +1284,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// the ride ends before that clock — that is not the "none found" copy.
     var hotelEvenings: [HotelEveningPlan] = []
 
-    /// Every planned lodging evening, including nights that already have a
-    /// hotel. Day boundaries come from these, not from applied hotels alone.
+    /// Evenings that still need a hotel. Each Overnight already ended the
+    /// riding day it is reached on (#65), so day boundaries are these plus
+    /// the Overnights.
     private(set) var plannedLodgingEvenings: [HotelAlongRoute.Evening] = []
 
     /// Stops the current Evenings and hotel arrivals were computed with.
@@ -1493,15 +1488,20 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// still belongs to the previous waypoint list, the last split stays so
     /// the route list does not lose its day rows mid-replan.
     var rideDays: [HotelAlongRoute.RideDay] {
-        guard FeatureFlags.hotelsAlongRoute, !plannedLodgingEvenings.isEmpty else { return [] }
+        guard FeatureFlags.hotelsAlongRoute, hasDayBoundaries else { return [] }
         if cachedDriveLegs.count + 1 != waypoints.count {
             return publishedRideDays
         }
         return computedRideDays()
     }
 
+    /// An Evening still needing a hotel, or an Overnight, splits the ride.
+    private var hasDayBoundaries: Bool {
+        !plannedLodgingEvenings.isEmpty || waypoints.contains(where: \.isOvernight)
+    }
+
     private func computedRideDays() -> [HotelAlongRoute.RideDay] {
-        guard FeatureFlags.hotelsAlongRoute, !plannedLodgingEvenings.isEmpty else { return [] }
+        guard FeatureFlags.hotelsAlongRoute, hasDayBoundaries else { return [] }
         let legs = cachedDriveLegs
         guard legs.count + 1 == waypoints.count else { return [] }
         let total = legs.reduce(0.0) { $0 + max(0, $1.distanceMeters) }
@@ -1520,7 +1520,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     private func refreshPublishedRideDays() {
         let fresh = computedRideDays()
         let lineMatchesList = cachedDriveLegs.count + 1 == waypoints.count
-        if !fresh.isEmpty || lineMatchesList || plannedLodgingEvenings.isEmpty || !FeatureFlags.hotelsAlongRoute {
+        if !fresh.isEmpty || lineMatchesList || !hasDayBoundaries || !FeatureFlags.hotelsAlongRoute {
             publishedRideDays = fresh
         }
     }
@@ -2749,8 +2749,37 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     /// Captions the route list draws under the stop name, in order.
     func waypointRangeNotices(at index: Int) -> [String] {
-        guard waypointIsBeyondRemainingRange(at: index) else { return [] }
-        return ["Past your range"]
+        var notices: [String] = []
+        if waypointIsBeyondRemainingRange(at: index) {
+            notices.append("Past your range")
+        }
+        if let note = overnightWindowNote(at: index) {
+            notices.append(note)
+        }
+        return notices
+    }
+
+    /// "Arrives after your hotel time" (or before) on an Overnight reached
+    /// outside the hotel window (#65). The arrival is that riding day's
+    /// clock: riding time plus stop allowances from its start.
+    func overnightWindowNote(at index: Int) -> String? {
+        guard FeatureFlags.hotelsAlongRoute,
+              waypoints.indices.contains(index), index > 0,
+              waypoints[index].isOvernight,
+              cachedDriveLegs.count + 1 == waypoints.count else { return nil }
+        let distance = waypointDistance(at: index)
+        let dayStart = dayStartMeters(for: distance - FuelStopRidingTime.sameStopToleranceMeters * 2)
+        let startMinutes = dayStart <= FuelStopRidingTime.sameStopToleranceMeters
+            ? HotelAlongRoute.minutes(from: Self.departureOverride ?? effectiveDeparture)
+            : HotelAlongRoute.morningDepartureMinutes
+        let arrival = HotelAlongRoute.arrivalMinutes(
+            atDistance: distance,
+            legs: cachedDriveLegs,
+            dayStartDistance: dayStart,
+            departureMinutes: startMinutes,
+            stops: rideClockStops(includingFuelStops: true)
+        )
+        return HotelAlongRoute.outsideWindowNote(arrivalMinutes: arrival, targetMinutes: hotelTargetMinutes)
     }
 
     /// Nil when `hop` still fits in the tank, including a 193 mi hop on a
@@ -5177,7 +5206,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         let departureMinutes = HotelAlongRoute.minutes(from: Self.departureOverride ?? effectiveDeparture)
         let moved = HotelAlongRoute.evenings(
             legs: cachedDriveLegs,
-            overnightDistances: [],
+            overnightDistances: overnightDistancesAlongRoute(),
             departureMinutes: departureMinutes,
             targetMinutes: hotelTargetMinutes,
             stops: stops

@@ -53,7 +53,7 @@ A planned night on the ride: the point where the predicted clock reaches hotel t
 _Avoid_: 6 PM point, hotel evening, night
 
 **Overnight**:
-A hotel the rider applied as a waypoint. It always ends the riding day it is reached on and becomes that day's Evening, wherever it falls; riders see a note when it is reached outside the hotel window. It is a Fill only when a gas station sits within 5 miles along the route on either side of it; otherwise fuel carries over from the previous Fill and riders see "No gas near this hotel".
+A hotel the rider applied as a waypoint. It always ends the riding day it is reached on (the day whose predicted arrival is closest to hotel time) and becomes that day's Evening, wherever it falls; riders see a note when it is reached outside the hotel window. It is a Fill only when a gas station sits within 5 miles along the route on either side of it; otherwise fuel carries over from the previous Fill and riders see "No gas near this hotel".
 _Avoid_: Hotel stop, night stop
 
 **Riding day**:

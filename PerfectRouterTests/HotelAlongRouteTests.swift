@@ -346,14 +346,16 @@ final class HotelAlongRouteTests: XCTestCase {
             ),
         ]
         XCTAssertFalse(viewModel.waypointIsBeyondRemainingRange(at: 1))
-        XCTAssertEqual(viewModel.waypointRangeNotices(at: 1), [])
+        // The hotel-time note (#65) depends on the departure clock; this
+        // test is about the range notice only.
+        XCTAssertFalse(viewModel.waypointRangeNotices(at: 1).contains("Past your range"))
 
         viewModel.fuelStops = []
         XCTAssertTrue(
             viewModel.waypointIsBeyondRemainingRange(at: 1),
             "The unpicked evening is not a fuel fill, so the hop from the start still exceeds the tank"
         )
-        XCTAssertEqual(viewModel.waypointRangeNotices(at: 1), ["Past your range"])
+        XCTAssertEqual(viewModel.waypointRangeNotices(at: 1).first, "Past your range")
     }
 
     func testOverLimitDaySetsTheWarningFlag() {
