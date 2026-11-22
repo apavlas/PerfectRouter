@@ -24,17 +24,53 @@ _Avoid_: Stop (unqualified), point, location
 The part of a route between two consecutive waypoints.
 _Avoid_: Segment, stage
 
-**Riding day**:
-The part of a ride from the start or an Overnight to the next Overnight or the destination.
-_Avoid_: Day (unqualified), segment, stage
-
 **Partial route**:
 A route where at least one leg failed to calculate, so its distance and ETA are incomplete. Never presented as a complete route.
 _Avoid_: Incomplete route, broken route
 
+## Time and nights
+
+All clock times are local time at that point on the route, not the phone's time zone.
+
+**Riding time**:
+Time spent moving along the route. Excludes time stopped. Captions that say "riding" show riding time.
+_Avoid_: Drive time, travel time, duration
+
+**Stop allowance**:
+Time added for each stop on the plan when predicting a clock time (arrival, Evening, meal ETAs): 15 min per fuel stop, 45 min per Meal stop (instead of 15), 15 min per other intermediate waypoint. Checked stops add nothing. Clock predictions are riding time plus stop allowances.
+_Avoid_: Break time, dwell time, padding
+
+**Hotel time**:
+The clock time the rider wants to stop for the night. Set per ride; defaults to 6:00 PM.
+_Avoid_: Target clock, target time, evening target
+
+**Hotel window**:
+Hotel time plus or minus one hour: when a hotel must be reached to be offered for an Evening.
+_Avoid_: Lodging window, time window
+
+**Evening**:
+A planned night on the ride: the point where the predicted clock reaches hotel time. Exists whether or not a hotel has been picked; riders see "No hotel picked" until one is. There is no Evening when the destination is reached before the hotel window closes.
+_Avoid_: 6 PM point, hotel evening, night
+
 **Overnight**:
-A waypoint at lodging that ends a riding day; the next riding day starts there. It is a Fill only when a gas station sits within 5 miles along the route on either side of it; otherwise fuel carries over from the previous Fill and riders see "No gas near this hotel".
+A hotel the rider applied as a waypoint. It always ends the riding day it is reached on and becomes that day's Evening, wherever it falls; riders see a note when it is reached outside the hotel window. It is a Fill only when a gas station sits within 5 miles along the route on either side of it; otherwise fuel carries over from the previous Fill and riders see "No gas near this hotel".
 _Avoid_: Hotel stop, night stop
+
+**Riding day**:
+The part of a ride from the start or an Evening to the next Evening or the destination. Evenings divide days, whether or not they have an Overnight.
+_Avoid_: Day (unqualified), segment, stage
+
+**Morning start**:
+When every riding day after the first begins: 8:00 AM. The first riding day begins at the ride's departure time.
+_Avoid_: Morning departure, restart time
+
+**Meal window**:
+A clock range for a meal: breakfast 7:00–9:30, lunch 11:30–1:30, dinner 5:30–8:00.
+_Avoid_: Mealtime, meal slot
+
+**Meal stop**:
+A fuel stop whose predicted clock falls in a meal window and that has food close by. Preferred over a fuel stop without food when both fit the tank; never pushes a fuel stop past the comfort range. No breakfast Meal stop on a riding day that starts at or after 7:00, and no dinner Meal stop on one that ends before 8:00 PM; the rider eats at the hotel. A food waypoint the rider applied inside a meal window counts as that meal: it gets the Meal stop allowance, and no Meal stop is sought for that meal on that riding day.
+_Avoid_: Fuel-food stop, lunch stop, food stop (for this meaning)
 
 ## Fuel
 
@@ -84,8 +120,12 @@ _Avoid_: Coverage gap, missing results
 Any place found along the route in a stop category (gas, food, coffee, scenic, sights, lodging).
 _Avoid_: Search result, POI
 
+**Detour**:
+How far off the route a place sits, as riders see in "2 mi off route". Applies to gas stations, food, and hotels alike.
+_Avoid_: Offset, off-route distance, distance from route
+
 **Recommended**:
-A fuel stop (or Overnight) the planner picked for the ride, one per tank (or per evening). Not yet on the ride.
+A fuel stop or hotel the planner picked for the ride: one fuel stop per tank, up to three hotels per Evening. Not yet on the ride.
 _Avoid_: Suggested (for this meaning), auto-selected
 
 **Checked**:
