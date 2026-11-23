@@ -892,7 +892,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 legs: legs,
                 dayStartDistance: evening.dayStartDistance,
                 departureMinutes: evening.departureMinutes,
-                stops: hotelClockStops
+                stops: hotelClockStops,
+                hotelMinutes: hotelTargetMinutes
             ) else { return nil }
             var copy = stop
             copy.distanceAlongRoute = measurement.distanceAlongRoute
@@ -916,7 +917,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 legs: legs,
                 dayStartDistance: dayStartDistance,
                 departureMinutes: departureMinutes,
-                stops: hotelClockStops
+                stops: hotelClockStops,
+                hotelMinutes: hotelTargetMinutes
             )
             return HotelAlongRoute.Candidate(
                 key: HotelAlongRoute.placeKey(
@@ -943,7 +945,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             legs: cachedDriveLegs,
             dayStartDistance: evening.dayStartDistance,
             departureMinutes: evening.departureMinutes,
-            stops: hotelClockStops
+            stops: hotelClockStops,
+            hotelMinutes: hotelTargetMinutes
         )
         return HotelAlongRoute.arrivalCaption(
             arrivalMinutes: arrival,
@@ -969,10 +972,16 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         var stops: [RideClock.Stop] = []
         if waypoints.count > 2, cachedDriveLegs.count + 1 == waypoints.count {
             for index in 1..<(waypoints.count - 1) where !waypoints[index].isOvernight {
-                stops.append(RideClock.Stop(
-                    distance: waypointDistance(at: index),
-                    kind: waypoints[index].isGasFill ? .fuel(hasFood: false) : .waypoint
-                ))
+                let waypoint = waypoints[index]
+                let kind: RideClock.StopKind
+                if waypoint.isGasFill {
+                    kind = .fuel(hasFood: false)
+                } else if appliedFoodKeys.contains(Self.coordinateKey(waypoint.coordinate)) {
+                    kind = .food
+                } else {
+                    kind = .waypoint
+                }
+                stops.append(RideClock.Stop(distance: waypointDistance(at: index), kind: kind))
             }
         }
         guard includingFuelStops else { return stops }
@@ -1012,7 +1021,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         return RideClock(
             legs: cachedDriveLegs,
             dayStarts: dayStarts,
-            stops: rideClockStops(includingFuelStops: false)
+            stops: rideClockStops(includingFuelStops: false),
+            hotelMinutes: FeatureFlags.hotelsAlongRoute ? hotelTargetMinutes : nil
         )
     }
 
@@ -2785,7 +2795,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             legs: cachedDriveLegs,
             dayStartDistance: dayStart,
             departureMinutes: startMinutes,
-            stops: rideClockStops(includingFuelStops: true)
+            stops: rideClockStops(includingFuelStops: true),
+            hotelMinutes: hotelTargetMinutes
         )
         return HotelAlongRoute.outsideWindowNote(arrivalMinutes: arrival, targetMinutes: hotelTargetMinutes)
     }
@@ -5970,8 +5981,11 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                         kind: .fuel(hasFood: preferringFoodAt.contains(id))
                     )
                 }
-                let eta = clock.adding(picked).minutes(atDistance: targetDistance)
-                preferFoodForMeal = RideClock.isMealTime(minutes: eta, windows: mealWindows)
+                let planned = clock.adding(picked)
+                let eta = planned.minutes(atDistance: targetDistance)
+                // #66: skips breakfast and dinner eaten at the hotel, and a
+                // meal a food waypoint already covers that day.
+                preferFoodForMeal = planned.isMealStopTime(minutes: eta, atDistance: targetDistance)
             } else if let departure, totalTravelTime > 0 {
                 let eta = etaAlongRoute(
                     distance: targetDistance,
