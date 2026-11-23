@@ -699,7 +699,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         guard FeatureFlags.hotelsAlongRoute else { return }
         guard generation == hotelGeneration, !Task.isCancelled else { return }
         if UITestStubLaunch.isEnabled {
-            plannedLodgingEvenings = UITestFixture.stubPlannedEvenings()
+            plannedLodgingEvenings = UITestFixture.stubPlannedEvenings(overnightDistances: overnightDistancesAlongRoute())
             refreshPublishedRideDays()
             hotelEvenings = UITestFixture.stubHotelEvenings()
             hotelLoadFailed = false
@@ -1506,9 +1506,14 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         guard legs.count + 1 == waypoints.count else { return [] }
         let total = legs.reduce(0.0) { $0 + max(0, $1.distanceMeters) }
         guard total > 1 else { return [] }
+        let overnights = overnightDistancesAlongRoute()
+        // Stub evenings are fixed, so drop the nights applied stub hotels end.
+        let evenings = UITestStubLaunch.isEnabled
+            ? UITestFixture.stubPlannedEvenings(overnightDistances: overnights)
+            : plannedLodgingEvenings
         return HotelAlongRoute.rideDays(
-            evenings: plannedLodgingEvenings,
-            overnightDistances: overnightDistancesAlongRoute(),
+            evenings: evenings,
+            overnightDistances: overnights,
             totalDistance: total,
             legs: legs,
             dailyLimit: HotelAlongRoute.dailyRidingLimit(targetMinutes: hotelTargetMinutes)
