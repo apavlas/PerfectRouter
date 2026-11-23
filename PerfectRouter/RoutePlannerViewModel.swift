@@ -6605,8 +6605,22 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// Loads plan waypoints from GPX bytes. Used by file import and unit tests.
     @discardableResult
     func importGPX(data: Data) -> Bool {
+        importNotice = nil
         guard let document = try? GPXCodec.decode(data) else { return false }
-        return applyImportedRoute(waypoints: document.waypoints, suggestedStops: [], category: nil)
+        let applied = applyImportedRoute(waypoints: document.waypoints, suggestedStops: [], category: nil)
+        if applied, document.wasTrimmed {
+            importNotice = Self.gpxTrimmedNotice(kept: document.waypoints.count,
+                                                 of: document.originalWaypointCount)
+        }
+        return applied
+    }
+
+    /// Shown once after an import that kept fewer stops than the file had.
+    /// The view clears it when the rider dismisses the alert.
+    var importNotice: String?
+
+    nonisolated static func gpxTrimmedNotice(kept: Int, of total: Int) -> String {
+        "This file has \(total) stops. PerfectRouter kept \(kept), including your start and destination, spaced evenly along the ride."
     }
 
     /// Shared apply path for deep-link and GPX imports.

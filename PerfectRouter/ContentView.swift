@@ -772,6 +772,14 @@ struct ContentView: View {
             } message: {
                 Text("Name this ride so you can reload it later.")
             }
+            .alert("Some Stops Left Out", isPresented: Binding(
+                get: { viewModel.importNotice != nil },
+                set: { if !$0 { viewModel.importNotice = nil } }
+            )) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text(viewModel.importNotice ?? "")
+            }
             .sheet(isPresented: $showingSettings) {
                 SettingsView()
             }
