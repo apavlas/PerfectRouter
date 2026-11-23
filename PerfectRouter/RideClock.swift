@@ -102,24 +102,20 @@ struct RideClock: Equatable, Sendable {
 
     /// Like `minutes(atDistance:)`, measured from a given day start.
     func minutes(atDistance distance: CLLocationDistance, from start: DayStart) -> Double {
-        minutes(atDistance: distance, from: start, mealAware: true)
+        minutes(atDistance: distance, from: start, meals: meals(on: start))
     }
 
-    /// `mealAware: false` counts every stop at its plain allowance. Used for
-    /// a day's end clock, which the meal rules themselves read.
     private func minutes(
         atDistance distance: CLLocationDistance,
         from start: DayStart,
-        mealAware: Bool
+        meals: DayMeals
     ) -> Double {
         var clock = Double(start.minutes) * 60
         var cursor = max(0, start.distance)
         for stop in stopsAfter(start.distance) {
             guard stop.distance < distance - FuelStopRidingTime.sameStopToleranceMeters else { break }
             clock += ride(from: cursor, to: stop.distance)
-            clock += mealAware
-                ? allowance(for: stop, arrivingAtSeconds: clock, dayStart: start)
-                : plainAllowance(for: stop.kind)
+            clock += allowance(for: stop, arrivingAtSeconds: clock, dayStart: start, meals: meals)
             cursor = stop.distance
         }
         clock += ride(from: cursor, to: distance)
@@ -132,6 +128,7 @@ struct RideClock: Equatable, Sendable {
     func distance(reachingMinutes target: Double, from start: DayStart) -> CLLocationDistance {
         var remaining = (target - Double(start.minutes)) * 60
         guard remaining > 0 else { return max(0, start.distance) }
+        let meals = meals(on: start)
         var cursor = max(0, start.distance)
         var clock = Double(start.minutes) * 60
         for stop in stopsAfter(start.distance) {
@@ -140,7 +137,7 @@ struct RideClock: Equatable, Sendable {
             remaining -= toStop
             clock += toStop
             cursor = stop.distance
-            let pause = allowance(for: stop, arrivingAtSeconds: clock, dayStart: start)
+            let pause = allowance(for: stop, arrivingAtSeconds: clock, dayStart: start, meals: meals)
             if pause >= remaining { return cursor }
             remaining -= pause
             clock += pause
@@ -184,14 +181,15 @@ struct RideClock: Equatable, Sendable {
     /// day that ends before 8:00 PM (the rider eats at the hotel), and a
     /// meal a food waypoint already covers that day.
     func isMealStopTime(minutes: Double, atDistance distance: CLLocationDistance) -> Bool {
-        isMealStopTime(minutes: minutes, dayStart: dayStart(for: distance))
+        let start = dayStart(for: distance)
+        return isMealStopTime(minutes: minutes, dayStart: start, meals: meals(on: start))
     }
 
-    private func isMealStopTime(minutes: Double, dayStart start: DayStart) -> Bool {
+    private func isMealStopTime(minutes: Double, dayStart start: DayStart, meals: DayMeals) -> Bool {
         guard let window = mealWindow(at: minutes) else { return false }
         if window == .breakfast, start.minutes >= Self.breakfastSkipStartMinutes { return false }
-        if window == .dinner, dayEndMinutes(from: start) < Double(Self.dinnerSkipEndMinutes) { return false }
-        return !foodCovers(window, on: start)
+        if window == .dinner, !meals.dinnerStops { return false }
+        return !meals.covered.contains(window)
     }
 
     /// A riding day that starts at or after this skips breakfast stops.
@@ -211,30 +209,66 @@ struct RideClock: Equatable, Sendable {
         }
     }
 
+    /// One riding day's meal decisions: the meals applied food waypoints
+    /// cover, and whether the day runs late enough for a dinner stop.
+    private struct DayMeals: Equatable {
+        var covered: [MealWindow] = []
+        var dinnerStops = false
+    }
+
+    /// The meal decisions for the riding day that starts at `start`. They
+    /// feed the clock that decides them (an earlier Meal stop makes a
+    /// restaurant arrive later), so they are settled by re-running the day
+    /// until nothing changes. Every pass uses real allowances: the dinner
+    /// cutoff counts earlier Meal stops and only leaves dinner itself out.
+    private func meals(on start: DayStart) -> DayMeals {
+        var meals = DayMeals()
+        for _ in 0..<4 {
+            let noDinner = DayMeals(covered: meals.covered, dinnerStops: false)
+            let dinnerStops = dayEndMinutes(from: start, meals: noDinner) >= Double(Self.dinnerSkipEndMinutes)
+            let settled = DayMeals(covered: meals.covered, dinnerStops: dinnerStops)
+            let next = DayMeals(covered: foodCovered(on: start, meals: settled), dinnerStops: dinnerStops)
+            if next == meals { break }
+            meals = next
+        }
+        return meals
+    }
+
+    /// The next riding day's start after `start`, if the clock has one.
+    private func nextDayStart(after start: DayStart) -> DayStart? {
+        let tolerance = FuelStopRidingTime.sameStopToleranceMeters
+        return dayStarts.first { $0.distance > start.distance + tolerance }
+    }
+
     /// Where the riding day that starts at `start` ends: the next day start,
     /// or the destination capped at the Evening when there is a hotel time.
-    private func dayEndMinutes(from start: DayStart) -> Double {
-        let tolerance = FuelStopRidingTime.sameStopToleranceMeters
-        if let next = dayStarts.first(where: { $0.distance > start.distance + tolerance }) {
-            return minutes(atDistance: next.distance, from: start, mealAware: false)
+    private func dayEndMinutes(from start: DayStart, meals: DayMeals) -> Double {
+        if let next = nextDayStart(after: start) {
+            return minutes(atDistance: next.distance, from: start, meals: meals)
         }
-        let end = minutes(atDistance: routeLength, from: start, mealAware: false)
+        let end = minutes(atDistance: routeLength, from: start, meals: meals)
         guard let hotelMinutes else { return end }
         return min(end, Double(hotelMinutes))
     }
 
-    /// True when a food waypoint on the riding day that starts at `start`
-    /// is reached inside `window`.
-    private func foodCovers(_ window: MealWindow, on start: DayStart) -> Bool {
+    /// Meals the food waypoints on this riding day are reached in. A day
+    /// ends at the next day start or, before later days are known, at hotel
+    /// time; a clock past midnight is not today's meal.
+    private func foodCovered(on start: DayStart, meals: DayMeals) -> [MealWindow] {
         let tolerance = FuelStopRidingTime.sameStopToleranceMeters
-        let dayEnd = dayStarts.first(where: { $0.distance > start.distance + tolerance })?.distance ?? .infinity
-        return stops.contains { stop in
-            guard stop.kind == .food,
-                  stop.distance > start.distance + tolerance,
-                  stop.distance < dayEnd - tolerance else { return false }
-            let arrival = minutes(atDistance: stop.distance, from: start, mealAware: false)
-            return mealWindow(at: arrival) == window
+        let dayEnd = nextDayStart(after: start)?.distance ?? .infinity
+        let latest = nextDayStart(after: start) == nil ? Double(hotelMinutes ?? 24 * 60) : Double(24 * 60)
+        var covered: [MealWindow] = []
+        for stop in stops where stop.kind == .food {
+            guard stop.distance > start.distance + tolerance,
+                  stop.distance < dayEnd - tolerance else { continue }
+            let arrival = minutes(atDistance: stop.distance, from: start, meals: meals)
+            guard arrival <= latest, arrival < Double(24 * 60),
+                  let window = mealWindow(at: arrival),
+                  !covered.contains(window) else { continue }
+            covered.append(window)
         }
+        return mealWindows.filter { covered.contains($0) }
     }
 
     private var routeLength: CLLocationDistance {
@@ -244,14 +278,12 @@ struct RideClock: Equatable, Sendable {
         }
     }
 
-    private func plainAllowance(for kind: StopKind) -> TimeInterval {
-        switch kind {
-        case .waypoint, .food: return Self.waypointAllowance
-        case .fuel: return Self.fuelStopAllowance
-        }
-    }
-
-    private func allowance(for stop: Stop, arrivingAtSeconds seconds: Double, dayStart start: DayStart) -> TimeInterval {
+    private func allowance(
+        for stop: Stop,
+        arrivingAtSeconds seconds: Double,
+        dayStart start: DayStart,
+        meals: DayMeals
+    ) -> TimeInterval {
         let minutes = seconds / 60
         switch stop.kind {
         case .waypoint:
@@ -259,7 +291,7 @@ struct RideClock: Equatable, Sendable {
         case .food:
             return mealWindow(at: minutes) == nil ? Self.waypointAllowance : Self.mealStopAllowance
         case .fuel(let hasFood):
-            if hasFood, isMealStopTime(minutes: minutes, dayStart: start) {
+            if hasFood, isMealStopTime(minutes: minutes, dayStart: start, meals: meals) {
                 return Self.mealStopAllowance
             }
             return Self.fuelStopAllowance

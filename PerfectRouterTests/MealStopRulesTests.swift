@@ -112,4 +112,54 @@ final class MealStopRulesTests: XCTestCase {
         XCTAssertEqual(plan([]), [first.id, withFood.id])
         XCTAssertEqual(plan([RideClock.Stop(distance: 165 * mile, kind: .food)]), [first.id, gasOnly.id])
     }
+
+    // MARK: - Codex review on #71
+
+    /// Leaving 6:30, breakfast at the mile 37.5 pump is 45 min, so the
+    /// restaurant at mile 220.833 is reached 11:40, not 11:10: it is lunch,
+    /// and the pump at mile 250 (1:00 PM) is a plain fuel stop.
+    func testFoodCoverageCountsEarlierMealStops() {
+        let clock = RideClock(
+            legs: legs(miles: 600),
+            dayStarts: [start(0, 6, 30)],
+            stops: [fuelWithFood(37.5), RideClock.Stop(distance: 220.833 * mile, kind: .food), fuelWithFood(250)]
+        )
+        XCTAssertEqual(clock.minutes(atDistance: 220.833 * mile), 11 * 60 + 40, accuracy: 0.1)
+        XCTAssertFalse(clock.isMealStopTime(minutes: 13 * 60, atDistance: 250 * mile))
+        XCTAssertEqual(clock.minutes(atDistance: 300 * mile), 14 * 60 + 15, accuracy: 0.1)
+    }
+
+    /// Lunch at mile 200 is 45 min, so the mile 500 pump is 6:45 PM and the
+    /// destination is past 8:00 PM even with a plain stop there: dinner.
+    func testDinnerCutoffCountsAnEarlierLunch() {
+        let clock = RideClock(
+            legs: legs(miles: 562.5),
+            dayStarts: [start(0, 8)],
+            stops: [fuelWithFood(200), fuelWithFood(500)]
+        )
+        XCTAssertTrue(clock.isMealStopTime(minutes: 18 * 60 + 45, atDistance: 500 * mile))
+        XCTAssertEqual(clock.minutes(atDistance: 562.5 * mile), 20 * 60 + 45, accuracy: 0.1)
+    }
+
+    /// A restaurant 1,400 mi out is on a later riding day: it does not cover
+    /// today's lunch, so day 1's Evening stays at mile 462.5.
+    func testFoodOnALaterDayDoesNotCoverTodaysLunch() {
+        let ride = legs(miles: 1_500)
+        func firstEvening(_ stops: [RideClock.Stop]) -> CLLocationDistance {
+            HotelAlongRoute.evenings(
+                legs: ride,
+                overnightDistances: [],
+                departureMinutes: 8 * 60,
+                targetMinutes: 18 * 60,
+                stops: stops
+            ).first?.targetDistance ?? 0
+        }
+        let lunch = fuelWithFood(200)
+        XCTAssertEqual(firstEvening([lunch]) / mile, 462.5, accuracy: 0.1)
+        XCTAssertEqual(
+            firstEvening([lunch, RideClock.Stop(distance: 1_400 * mile, kind: .food)]) / mile,
+            462.5,
+            accuracy: 0.1
+        )
+    }
 }
