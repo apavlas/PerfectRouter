@@ -96,4 +96,39 @@ final class EveningRulesTests: XCTestCase {
         // 548 mi is 6:57.6 PM.
         XCTAssertTrue(evenings(miles: 548).isEmpty)
     }
+
+    // MARK: - Codex review on #70
+
+    /// Hotel time 8:15 AM, 8:00 departure: day 1's Evening is mile 12.5. A
+    /// hotel at mile 25 is reached at 8:30 (day 1) or 8:15 (day 2), so it is
+    /// day 2's and night 1 stays unpicked, though it is under 15 mi away.
+    func testUnpickedEveningNearAnotherDaysHotelIsKept() {
+        let ride = legs(miles: 80)
+        let target = 8 * 60 + 15
+        let overnights = [25 * mile]
+        let planned = HotelAlongRoute.evenings(
+            legs: ride,
+            overnightDistances: overnights,
+            departureMinutes: 8 * 60,
+            targetMinutes: target
+        )
+        XCTAssertEqual(planned.first?.dayNumber, 1)
+        XCTAssertEqual(planned.first?.targetDistance ?? 0, 12.5 * mile, accuracy: 1)
+        let split = HotelAlongRoute.rideDays(
+            evenings: planned,
+            overnightDistances: overnights,
+            totalDistance: 80 * mile,
+            legs: ride,
+            dailyLimit: HotelAlongRoute.dailyRidingLimit(targetMinutes: target)
+        )
+        XCTAssertEqual(split.first?.unpickedEvening, 1)
+        XCTAssertEqual((split.first?.endDistance ?? 0) / mile, 12.5, accuracy: 0.1)
+        XCTAssertEqual((split.dropFirst().first?.endDistance ?? 0) / mile, 25, accuracy: 0.1)
+    }
+
+    func testFirstDayStartMovesAnEveningDepartureToTheMorning() {
+        XCTAssertEqual(HotelAlongRoute.firstDayStartMinutes(departureMinutes: 19 * 60, targetMinutes: 18 * 60), 8 * 60)
+        XCTAssertEqual(HotelAlongRoute.firstDayStartMinutes(departureMinutes: 18 * 60, targetMinutes: 18 * 60), 8 * 60)
+        XCTAssertEqual(HotelAlongRoute.firstDayStartMinutes(departureMinutes: 9 * 60, targetMinutes: 18 * 60), 9 * 60)
+    }
 }

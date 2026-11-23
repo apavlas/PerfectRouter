@@ -2770,7 +2770,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         let distance = waypointDistance(at: index)
         let dayStart = dayStartMeters(for: distance - FuelStopRidingTime.sameStopToleranceMeters * 2)
         let startMinutes = dayStart <= FuelStopRidingTime.sameStopToleranceMeters
-            ? HotelAlongRoute.minutes(from: Self.departureOverride ?? effectiveDeparture)
+            ? HotelAlongRoute.firstDayStartMinutes(
+                departureMinutes: HotelAlongRoute.minutes(from: Self.departureOverride ?? effectiveDeparture),
+                targetMinutes: hotelTargetMinutes
+            )
             : HotelAlongRoute.morningDepartureMinutes
         let arrival = HotelAlongRoute.arrivalMinutes(
             atDistance: distance,

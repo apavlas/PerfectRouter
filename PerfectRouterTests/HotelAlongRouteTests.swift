@@ -174,14 +174,14 @@ final class HotelAlongRouteTests: XCTestCase {
             dailyLimit: limit
         )
         let middle = HotelAlongRoute.rideDays(
-            evenings: planned,
+            evenings: evenings(legs: ride, overnights: [1_000 * mile], departureHour: 8),
             overnightDistances: [1_000 * mile],
             totalDistance: total,
             legs: ride,
             dailyLimit: limit
         )
         let all = HotelAlongRoute.rideDays(
-            evenings: planned,
+            evenings: evenings(legs: ride, overnights: [500 * mile, 1_000 * mile], departureHour: 8),
             overnightDistances: [500 * mile, 1_000 * mile],
             totalDistance: total,
             legs: ride,
@@ -200,7 +200,7 @@ final class HotelAlongRouteTests: XCTestCase {
 
         // Ten miles past night 2 only moves that day's end. Night 1 stays.
         let detour = HotelAlongRoute.rideDays(
-            evenings: planned,
+            evenings: evenings(legs: ride, overnights: [1_010 * mile], departureHour: 8),
             overnightDistances: [1_010 * mile],
             totalDistance: total,
             legs: ride,
@@ -214,9 +214,8 @@ final class HotelAlongRouteTests: XCTestCase {
 
     func testUnpickedEveningProducesANoHotelBoundary() {
         let ride = longRide
-        let planned = evenings(legs: ride, departureHour: 8)
         let days = HotelAlongRoute.rideDays(
-            evenings: planned,
+            evenings: evenings(legs: ride, overnights: [1_000 * mile], departureHour: 8),
             overnightDistances: [1_000 * mile],
             totalDistance: 1_200 * mile,
             legs: ride,
