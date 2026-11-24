@@ -4,15 +4,27 @@ import SwiftUI
 /// the style re-plans the current ride immediately.
 struct RouteStyleSection: View {
     let viewModel: RoutePlannerViewModel
+    /// Twisty is Pro. Without Pro, picking it opens the paywall instead.
+    var proUnlocked = true
+    var onLockedStyle: () -> Void = {}
 
     var body: some View {
         Section {
             Picker("Route style", selection: Binding(
                 get: { viewModel.routeStyle },
-                set: { viewModel.setRouteStyle($0) }
+                set: { style in
+                    if RoutePlannerViewModel.allowedStyle(style, proUnlocked: proUnlocked) == style {
+                        viewModel.setRouteStyle(style)
+                    } else {
+                        onLockedStyle()
+                    }
+                }
             )) {
                 ForEach(RouteStyle.allCases) { style in
-                    Label(style.rawValue, systemImage: style.systemImage)
+                    Label(
+                        RouteStyle.label(style, proUnlocked: proUnlocked),
+                        systemImage: style.systemImage
+                    )
                         .tag(style)
                         .accessibilityIdentifier(AccessibilityID.routeStyleOption(style.rawValue))
                 }

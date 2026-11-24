@@ -79,6 +79,9 @@ struct ContentView: View {
     @State private var saveRouteName = ""
     @State private var showingSettings = false
     @State private var showingHistory = false
+    /// The Pro feature whose paywall is open. Nil: no paywall.
+    @State private var paywallFeature: ProFeature?
+    private var proStore = ProStore.shared
     @State private var showingShareRide = false
     @State private var showingRiderGroups = false
     /// Full place description. Held here, not on a list row: a `.sheet` inside
@@ -268,6 +271,11 @@ struct ContentView: View {
             ))
         }
         .onOpenURL { url in
+            // A shared ride opens on Free; a GPX file is Pro.
+            if SharedRoute(url: url) == nil, !proStore.isPro {
+                paywallFeature = .gpx
+                return
+            }
             if viewModel.importRoute(from: url),
                let start = viewModel.waypoints.first {
                 showSheet = true
@@ -619,6 +627,11 @@ struct ContentView: View {
                 )
                 WaypointsSection(viewModel: viewModel, onUseMapCenterAsStart: addStartFromMapCenter)
                 RideSummarySection(viewModel: viewModel)
+                if !proStore.isPro, viewModel.canShareRoute {
+                    ProUpsellRow { paywallFeature = .lodging }
+                } else {
+                    FocusPlaceholderRow()
+                }
                 if !viewModel.rideHighlights.isEmpty {
                     RideHighlightsSection(
                         viewModel: viewModel,
@@ -639,8 +652,17 @@ struct ContentView: View {
                 }
                 FuelRangeSection(viewModel: viewModel)
                 DepartureSection(viewModel: viewModel)
-                RouteStyleSection(viewModel: viewModel)
-                SavedRoutesSection(viewModel: viewModel, onLoad: loadSaved)
+                RouteStyleSection(
+                    viewModel: viewModel,
+                    proUnlocked: proStore.isPro,
+                    onLockedStyle: { paywallFeature = .twisty }
+                )
+                SavedRoutesSection(
+                    viewModel: viewModel,
+                    proUnlocked: proStore.isPro,
+                    onLoad: loadSaved,
+                    onLocked: { paywallFeature = .rideHistory }
+                )
             }
             .accessibilityIdentifier("planningList")
             .sheet(item: $openPlaceDescription) { item in
@@ -734,7 +756,11 @@ struct ContentView: View {
                             Label("Settings", systemImage: "gearshape")
                         }
                         Button {
-                            showingHistory = true
+                            if proStore.isPro {
+                                showingHistory = true
+                            } else {
+                                paywallFeature = .rideHistory
+                            }
                         } label: {
                             Label("Ride History", systemImage: "clock.arrow.circlepath")
                         }
@@ -750,6 +776,10 @@ struct ContentView: View {
                 if viewModel.canShareRoute {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button {
+                            guard proStore.isPro else {
+                                paywallFeature = .saveAndShare
+                                return
+                            }
                             saveRouteName = viewModel.defaultRouteName
                             showingSaveDialog = true
                         } label: {
@@ -758,7 +788,11 @@ struct ContentView: View {
                     }
                     ToolbarItem(placement: .topBarTrailing) {
                         Button {
-                            showingShareRide = true
+                            if proStore.isPro {
+                                showingShareRide = true
+                            } else {
+                                paywallFeature = .saveAndShare
+                            }
                         } label: {
                             Label("Share Route", systemImage: "square.and.arrow.up")
                         }
@@ -788,6 +822,13 @@ struct ContentView: View {
             }
             .sheet(isPresented: $showingShareRide) {
                 ShareRideView(viewModel: viewModel)
+            }
+            .sheet(item: $paywallFeature) { feature in
+                PaywallView(feature: feature)
+            }
+            .task { await proStore.start() }
+            .onChange(of: proStore.isPro, initial: true) { _, isPro in
+                viewModel.proUnlocked = isPro
             }
             .sheet(isPresented: $showingRiderGroups) {
                 RiderGroupsView(viewModel: viewModel)

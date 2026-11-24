@@ -4,13 +4,22 @@ import SwiftUI
 /// swipe to delete.
 struct SavedRoutesSection: View {
     let viewModel: RoutePlannerViewModel
+    /// Saved rides are Pro. Without it the section is one row that opens the
+    /// paywall; rides saved earlier are kept and come back with Pro.
+    var proUnlocked = true
     /// Called when the rider taps a saved ride, so the caller can load it and
     /// frame its start on the map.
     let onLoad: (SavedRoute) -> Void
+    var onLocked: () -> Void = {}
 
     var body: some View {
         Section("Saved Routes") {
-            if viewModel.savedRoutes.isEmpty {
+            if !proUnlocked {
+                Button(action: onLocked) {
+                    Label("Save rides and reload them later with Pro", systemImage: "lock.fill")
+                }
+                .accessibilityIdentifier("savedRoutes.locked")
+            } else if viewModel.savedRoutes.isEmpty {
                 Text("Save a ride with the bookmark button to find it here later.")
                     .foregroundStyle(.secondary)
                     .focusable()
