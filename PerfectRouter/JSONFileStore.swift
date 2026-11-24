@@ -6,9 +6,11 @@ import os
 /// history, rider groups).
 ///
 /// Every store holds personal data — location history or contacts' phone
-/// numbers — so files are written with complete file protection and excluded
-/// from unencrypted backups. Payloads are small, so reads and writes are done
-/// synchronously.
+/// numbers — so files are written with complete file protection. They are
+/// included in the phone's iCloud or computer backup, so a rider who moves to
+/// a new phone keeps their rides (audit item 7). Builds 1–15 excluded them;
+/// opening a store clears that flag on the existing file. Payloads are small,
+/// so reads and writes are done synchronously.
 ///
 /// A file this build can't fully read is never overwritten. Before `load()`
 /// returns anything less than the whole file, it copies the original bytes to
@@ -22,6 +24,9 @@ struct JSONFileStore<Element: Codable> {
     init(filename: String) {
         let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         fileURL = documents.appendingPathComponent(filename)
+        if FileManager.default.fileExists(atPath: fileURL.path) {
+            setIncludedInBackup(fileURL, true)
+        }
     }
 
     /// Loads the stored elements. Returns an empty list when nothing is
@@ -48,7 +53,7 @@ struct JSONFileStore<Element: Codable> {
     func save(_ items: [Element]) {
         guard let data = try? JSONEncoder().encode(items) else { return }
         try? data.write(to: fileURL, options: [.atomic, .completeFileProtection])
-        excludeFromBackup(fileURL)
+        setIncludedInBackup(fileURL, true)
     }
 
     /// Backups of files this store couldn't fully read, newest last.
@@ -76,7 +81,8 @@ struct JSONFileStore<Element: Codable> {
             .appendingPathComponent("\(fileURL.lastPathComponent).unreadable-\(stamp)-\(UUID().uuidString.prefix(8))")
         do {
             try FileManager.default.copyItem(at: fileURL, to: backup)
-            excludeFromBackup(backup)
+            // A diagnostic copy, not the rider's data: kept out of backups.
+            setIncludedInBackup(backup, false)
             Self.log.error("Kept unreadable \(fileURL.lastPathComponent, privacy: .public) as \(backup.lastPathComponent, privacy: .public): \(reason, privacy: .public)")
         } catch {
             Self.log.error("Could not back up unreadable \(fileURL.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
@@ -92,12 +98,16 @@ struct JSONFileStore<Element: Codable> {
     }
 }
 
-/// Marks a file so it is omitted from iCloud / iTunes backups. Used by the
-/// local stores to keep personal data (location history, contacts' phone
-/// numbers) from leaving the device in a backup.
-func excludeFromBackup(_ url: URL) {
+/// Includes a file in, or omits it from, the phone's iCloud or computer
+/// backup.
+func setIncludedInBackup(_ url: URL, _ included: Bool) {
     var url = url
     var values = URLResourceValues()
-    values.isExcludedFromBackup = true
+    values.isExcludedFromBackup = !included
     try? url.setResourceValues(values)
+}
+
+/// Whether a file is included in backups. Nil when it can't be read.
+func isIncludedInBackup(_ url: URL) -> Bool? {
+    (try? url.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup).map { $0 == false }
 }

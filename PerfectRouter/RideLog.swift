@@ -35,6 +35,7 @@ struct RideLogStore {
 
     init(filename: String = "ride_log.json") {
         store = JSONFileStore(filename: filename)
+        RouteSnapshotter.includeSavedSnapshotsInBackup()
     }
 
     /// All logged rides, most recent first.
