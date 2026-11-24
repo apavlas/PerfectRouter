@@ -286,7 +286,16 @@ enum UITestFixture {
     /// On-route 6 PM points for the stub ride. The empty lodging evening is
     /// not one of these: it stays in the hotel section so the no-lodging
     /// copy can be found, and it does not add a riding day.
-    static func stubPlannedEvenings() -> [HotelAlongRoute.Evening] {
+    /// An applied stub hotel ends its own night, as `HotelAlongRoute.evenings`
+    /// does with Overnights (#65), so that evening is no longer returned. The
+    /// hotels sit a few miles off the route, so match within the far radius.
+    static func stubPlannedEvenings(overnightDistances: [CLLocationDistance] = []) -> [HotelAlongRoute.Evening] {
+        stubEvenings.filter { evening in
+            !overnightDistances.contains { abs($0 - evening.targetDistance) <= HotelAlongRoute.farRadiusMeters }
+        }
+    }
+
+    private static var stubEvenings: [HotelAlongRoute.Evening] {
         let mile = metersPerMile
         return [
             HotelAlongRoute.Evening(

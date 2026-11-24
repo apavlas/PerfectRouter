@@ -37,10 +37,6 @@ enum HotelAlongRoute {
     /// Route-list row for a planned evening the rider has not applied.
     static let noHotelPickedCopy = "No hotel picked"
 
-    /// An applied hotel this far past the 6 PM point still ends that evening.
-    /// The next evening is a full morning-to-target ride away.
-    static let appliedHotelSlackMeters: CLLocationDistance = 80 * AppSettings.metersPerMile
-
     /// One evening whose 6 PM point lies on the route, before the destination.
     struct Evening: Equatable {
         /// 1 for the day that starts at departure, then 2, 3, …
@@ -84,22 +80,42 @@ enum HotelAlongRoute {
         return TimeInterval(delta * 60)
     }
 
+    /// The clock day 1 starts at. Leaving at or after hotel time (an evening
+    /// start) plans day 1 as a morning departure, so it rides a full day and
+    /// its hotels arrive in the evening window. Breaking there left a 19-hour
+    /// ride with no hotels whenever it was planned after 6 PM.
+    static func firstDayStartMinutes(
+        departureMinutes: Int,
+        targetMinutes: Int,
+        morningMinutes: Int = morningDepartureMinutes
+    ) -> Int {
+        ridingSeconds(fromDepartureMinutes: departureMinutes, toTargetMinutes: targetMinutes) == nil
+            ? morningMinutes
+            : departureMinutes
+    }
+
     /// Evenings that still need a hotel.
     ///
-    /// An overnight consumes only the day it falls in: from that morning
-    /// through the target clock, plus `appliedHotelSlackMeters` so a hotel
-    /// a short way past 6 PM still counts as that night. A later evening's
-    /// hotel does not swallow the nights before it. Days that are only a
-    /// projection (no hotel picked yet) start the next morning at the 6 PM
-    /// point, so a long ride suggests a hotel for each evening. A day whose
-    /// riding time ends before the target clock adds nothing, and neither
-    /// do the days after it.
+    /// An Overnight always ends the riding day it is reached on and becomes
+    /// that day's Evening, wherever it falls (#65). It is reached on the day
+    /// whose predicted arrival is closest to the hotel time: a hotel 100 mi
+    /// past the 6 PM point (about 8 PM tonight, or 10 AM tomorrow) is
+    /// tonight's. A later evening's hotel does not swallow the nights before
+    /// it. Days with no hotel picked yet start the next morning at the
+    /// Evening point, so a long ride suggests a hotel for each evening.
+    /// There is no Evening when the destination is reached before the hotel
+    /// window closes; the destination is where the rider stays.
+    ///
+    /// The clock that reaches the target is riding time plus a stop
+    /// allowance for each of `stops` passed that day (`RideClock`), so
+    /// fuel stops and other waypoints move the Evening earlier.
     static func evenings(
         legs: [FuelStopRidingTime.Leg],
         overnightDistances: [CLLocationDistance],
         departureMinutes: Int,
         targetMinutes: Int,
-        morningMinutes: Int = morningDepartureMinutes
+        morningMinutes: Int = morningDepartureMinutes,
+        stops: [RideClock.Stop] = []
     ) -> [Evening] {
         let totalDistance = legs.reduce(0.0) { partial, leg in
             guard leg.distanceMeters.isFinite else { return partial }
@@ -107,55 +123,62 @@ enum HotelAlongRoute {
         }
         guard totalDistance > 1 else { return [] }
 
-        let totalTime = FuelStopRidingTime.ridingTime(atDistance: totalDistance, legs: legs)
         var start: CLLocationDistance = 0
         var day = 1
-        var clock = departureMinutes
+        var clock = firstDayStartMinutes(
+            departureMinutes: departureMinutes,
+            targetMinutes: targetMinutes,
+            morningMinutes: morningMinutes
+        )
         var planned = overnightDistances
             .filter { $0.isFinite && $0 > FuelStopRidingTime.sameStopToleranceMeters }
             .sorted()
         var results: [Evening] = []
 
         while start < totalDistance - 1, day <= 14 {
-            // Leaving at or after the target clock (an evening start) plans
-            // the first day as a morning departure, so it rides a full day
-            // and its hotels arrive in the evening window. Breaking here left
-            // a 19-hour ride with no hotels whenever it was planned after 6 PM.
-            if day == 1, ridingSeconds(fromDepartureMinutes: clock, toTargetMinutes: targetMinutes) == nil {
-                clock = morningMinutes
-            }
-            guard let needed = ridingSeconds(fromDepartureMinutes: clock, toTargetMinutes: targetMinutes) else {
+            guard ridingSeconds(fromDepartureMinutes: clock, toTargetMinutes: targetMinutes) != nil else {
                 break
             }
-            let startTime = FuelStopRidingTime.ridingTime(atDistance: start, legs: legs)
-            let available = totalTime - startTime
-            if available + 0.5 < needed {
+            let dayStart = RideClock.DayStart(distance: start, minutes: clock)
+            let rideClock = RideClock(legs: legs, dayStarts: [dayStart], stops: stops, hotelMinutes: targetMinutes)
+            if rideClock.minutes(atDistance: totalDistance, from: dayStart) + 0.5 / 60 < Double(targetMinutes) {
                 break
             }
-            let targetDistance = FuelStopRidingTime.distance(
-                atRidingTime: startTime + needed,
-                legs: legs
+            let targetDistance = rideClock.distance(
+                reachingMinutes: Double(targetMinutes),
+                from: dayStart
             )
-            // The destination is the end of the ride, not a night on the road.
-            guard targetDistance > start + 1, targetDistance + 50 < totalDistance else {
+            guard targetDistance > start + 1, targetDistance < totalDistance else {
                 break
             }
             let tolerance = FuelStopRidingTime.sameStopToleranceMeters
-            if let overnight = planned.first(where: {
-                $0 > start + tolerance && $0 <= targetDistance + appliedHotelSlackMeters
-            }) {
+            if let overnight = planned.first(where: { $0 > start + tolerance && $0 < totalDistance }),
+               overnightEndsToday(
+                   overnight,
+                   today: dayStart,
+                   eveningDistance: targetDistance,
+                   targetMinutes: targetMinutes,
+                   morningMinutes: morningMinutes,
+                   clock: rideClock
+               ) {
                 planned.removeAll { $0 <= overnight + tolerance }
                 start = overnight
                 day += 1
                 clock = morningMinutes
                 continue
             }
+            // Reaching the destination before the window closes: no Evening.
+            let arrival = rideClock.minutes(atDistance: totalDistance, from: dayStart)
+            if arrival < Double(targetMinutes + windowHalfMinutes) {
+                break
+            }
             results.append(Evening(
                 dayNumber: day,
                 dayStartDistance: start,
                 targetDistance: targetDistance,
                 departureMinutes: clock,
-                ridingSeconds: needed
+                ridingSeconds: FuelStopRidingTime.ridingTime(atDistance: targetDistance, legs: legs)
+                    - FuelStopRidingTime.ridingTime(atDistance: start, legs: legs)
             ))
             start = targetDistance
             day += 1
@@ -222,6 +245,36 @@ enum HotelAlongRoute {
         var arrivalMinutes: Int
     }
 
+    /// True when `overnight` is reached on the riding day that starts at
+    /// `today`: at or before tonight's Evening point, or past it but with an
+    /// arrival closer to hotel time tonight than it would be tomorrow.
+    private static func overnightEndsToday(
+        _ overnight: CLLocationDistance,
+        today: RideClock.DayStart,
+        eveningDistance: CLLocationDistance,
+        targetMinutes: Int,
+        morningMinutes: Int,
+        clock: RideClock
+    ) -> Bool {
+        if overnight <= eveningDistance + FuelStopRidingTime.sameStopToleranceMeters { return true }
+        let tonight = clock.minutes(atDistance: overnight, from: today)
+        let tomorrowStart = RideClock.DayStart(distance: eveningDistance, minutes: morningMinutes)
+        let tomorrow = clock.minutes(atDistance: overnight, from: tomorrowStart)
+        let target = Double(targetMinutes)
+        return abs(tonight - target) <= abs(tomorrow - target)
+    }
+
+    /// Hotel arrival relative to the hotel window, for the note on an
+    /// Overnight. Nil inside the window.
+    static func outsideWindowNote(arrivalMinutes: Int, targetMinutes: Int) -> String? {
+        if arrivalMinutes > targetMinutes + windowHalfMinutes { return arrivesAfterHotelTimeCopy }
+        if arrivalMinutes < targetMinutes - windowHalfMinutes { return arrivesBeforeHotelTimeCopy }
+        return nil
+    }
+
+    static let arrivesAfterHotelTimeCopy = "Arrives after your hotel time"
+    static let arrivesBeforeHotelTimeCopy = "Arrives before your hotel time"
+
     /// Nil only when the route has no segment to measure against. A place
     /// that cannot be measured is not given a 6:00 PM / 0 mi stand-in.
     static func measurement(
@@ -229,7 +282,9 @@ enum HotelAlongRoute {
         alongPolylines polylines: [[CLLocationCoordinate2D]],
         legs: [FuelStopRidingTime.Leg],
         dayStartDistance: CLLocationDistance,
-        departureMinutes: Int
+        departureMinutes: Int,
+        stops: [RideClock.Stop] = [],
+        hotelMinutes: Int? = nil
     ) -> Measurement? {
         guard coordinate.isValidLocation else { return nil }
         guard polylines.contains(where: { $0.count > 1 }) else { return nil }
@@ -243,23 +298,29 @@ enum HotelAlongRoute {
                 atDistance: along,
                 legs: legs,
                 dayStartDistance: dayStartDistance,
-                departureMinutes: departureMinutes
+                departureMinutes: departureMinutes,
+                stops: stops,
+                hotelMinutes: hotelMinutes
             )
         )
     }
 
-    /// Planned departure plus riding time from that morning to `distance`.
+    /// Planned departure plus riding time from that morning to `distance`,
+    /// plus the stop allowance of each of `stops` passed on the way.
     static func arrivalMinutes(
         atDistance distance: CLLocationDistance,
         legs: [FuelStopRidingTime.Leg],
         dayStartDistance: CLLocationDistance,
-        departureMinutes: Int
+        departureMinutes: Int,
+        stops: [RideClock.Stop] = [],
+        hotelMinutes: Int? = nil
     ) -> Int {
         let origin = dayStartDistance.isFinite ? max(0, dayStartDistance) : 0
-        let startTime = FuelStopRidingTime.ridingTime(atDistance: origin, legs: legs)
-        let riding = FuelStopRidingTime.ridingTime(atDistance: max(0, distance), legs: legs) - startTime
-        let minutes = Int((max(0, riding) / 60).rounded())
-        return departureMinutes + max(0, minutes)
+        let dayStart = RideClock.DayStart(distance: origin, minutes: departureMinutes)
+        let clock = RideClock(legs: legs, dayStarts: [dayStart], stops: stops, hotelMinutes: hotelMinutes)
+        let target = distance.isFinite ? max(origin, distance) : origin
+        let minutes = clock.minutes(atDistance: target, from: dayStart)
+        return max(departureMinutes, Int(minutes.rounded()))
     }
 
     /// "arrive ~6:20 PM · 2 mi off route". Wider-radius options add
@@ -401,12 +462,13 @@ enum HotelAlongRoute {
         return TimeInterval(minutes * 60)
     }
 
-    /// Day boundaries from the planned evenings.
-    ///
-    /// Zero, one, or every hotel applied keeps the same days. A hotel near an
-    /// evening's 6 PM point ends that day; the miles change only by the
-    /// detour. An evening with no hotel stays a boundary. A day longer than
-    /// `dailyLimit` sets `exceedsDailyLimit`.
+    /// Riding days: each one ends at the next Overnight or the next Evening
+    /// that still needs a hotel (#65). `evenings` are the ones `evenings(...)`
+    /// returned for the same Overnights, so an Overnight already ended the
+    /// day it is reached on and no evening needs matching to a hotel. Only an
+    /// evening at the Overnight itself is dropped as a duplicate: an unpicked
+    /// evening a few miles before a hotel can belong to an earlier day.
+    /// A day longer than `dailyLimit` sets `exceedsDailyLimit`.
     static func rideDays(
         evenings: [Evening],
         overnightDistances: [CLLocationDistance],
@@ -416,40 +478,38 @@ enum HotelAlongRoute {
     ) -> [RideDay] {
         guard totalDistance.isFinite, totalDistance > 1 else { return [] }
         let tolerance = FuelStopRidingTime.sameStopToleranceMeters
-        let ordered = evenings
-            .filter { $0.targetDistance.isFinite && $0.targetDistance > 1 && $0.targetDistance + 50 < totalDistance }
-            .sorted { $0.targetDistance < $1.targetDistance }
-        guard !ordered.isEmpty else { return [] }
-
-        var hotels = overnightDistances
+        let hotels = overnightDistances
             .filter { $0.isFinite && $0 > tolerance && $0 + tolerance < totalDistance }
-            .sorted()
+        let unpicked = evenings
+            .filter { $0.targetDistance.isFinite && $0.targetDistance > 1 && $0.targetDistance + tolerance < totalDistance }
+            .filter { evening in
+                !hotels.contains { abs($0 - evening.targetDistance) <= tolerance }
+            }
+        enum Boundary { case hotel(CLLocationDistance), evening(Evening) }
+        func distance(_ boundary: Boundary) -> CLLocationDistance {
+            switch boundary {
+            case .hotel(let d): return d
+            case .evening(let e): return e.targetDistance
+            }
+        }
+        let boundaries = (hotels.map(Boundary.hotel) + unpicked.map(Boundary.evening))
+            .sorted { distance($0) < distance($1) }
+        guard !boundaries.isEmpty else { return [] }
+
         var start: CLLocationDistance = 0
         var days: [RideDay] = []
-
-        for (index, evening) in ordered.enumerated() {
-            let nextBoundary = index + 1 < ordered.count ? ordered[index + 1].targetDistance : totalDistance
-            let gap = max(0, nextBoundary - evening.targetDistance)
-            let slack = min(appliedHotelSlackMeters, gap * 0.5)
-            let end: CLLocationDistance
-            let unpicked: Int?
-            if let match = hotels.firstIndex(where: {
-                $0 > start + tolerance && $0 <= evening.targetDistance + slack
-            }) {
-                end = hotels.remove(at: match)
-                unpicked = nil
-            } else {
-                end = evening.targetDistance
-                unpicked = evening.dayNumber
-            }
+        for boundary in boundaries {
+            let end = distance(boundary)
             guard end > start + 1 else { continue }
+            let unpickedEvening: Int?
+            if case .evening(let evening) = boundary { unpickedEvening = evening.dayNumber } else { unpickedEvening = nil }
             days.append(makeDay(
                 number: days.count + 1,
                 start: start,
                 end: end,
                 legs: legs,
                 dailyLimit: dailyLimit,
-                unpickedEvening: unpicked
+                unpickedEvening: unpickedEvening
             ))
             start = end
         }
@@ -578,5 +638,9 @@ struct HotelEveningPlan: Identifiable {
     /// options. Every evening the ride reaches is published with either
     /// options or this message.
     var emptyMessage: String?
+    /// Every measured place from the search these options came from (near,
+    /// or far when `widened`). Lets a changed fuel plan re-pick options and
+    /// captions without searching again.
+    var pool: [SuggestedStop] = []
     var id: Int { dayNumber }
 }
