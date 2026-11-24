@@ -103,6 +103,10 @@ fileprivate struct FuelPlanDraft: Sendable {
     var recommendedIDs: [UUID]
     var entries: [FuelPlanDraftEntry]
     var hasGap: Bool
+    /// #69: for each tank picked at meal time, the pumps that competed for
+    /// it, best first (the order the planner would take them). The view
+    /// model checks a few of these for food, then plans again.
+    var mealWindowCandidateIDs: [[UUID]] = []
 }
 
 /// One station or buffered stop, already copied off `MKMapItem`.
@@ -342,6 +346,8 @@ struct FuelPlan {
     var stops: [SuggestedStop]
     var entries: [FuelPlanEntry]
     var hasGap: Bool
+    /// See `FuelPlanDraft.mealWindowCandidateIDs`.
+    var mealWindowCandidateIDs: [[UUID]] = []
 }
 
 @MainActor
@@ -1109,7 +1115,13 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         generation == gasGeneration && !Task.isCancelled
     }
 
-    override init() {
+    override convenience init() {
+        self.init(stopSearch: nil)
+    }
+
+    /// `stopSearch` replaces the gas and food lookups in unit tests. UI test
+    /// launches still get `UITestStubServices`.
+    init(stopSearch: (any StopSearching)?) {
         let stubs = UITestStubLaunch.isEnabled ? UITestStubServices() : nil
         if let stubs {
             directionsProvider = stubs
@@ -1117,7 +1129,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             placeSearchOverride = stubs
         } else {
             directionsProvider = MapKitDirectionsProvider()
-            stopSearchOverride = nil
+            stopSearchOverride = stopSearch
             placeSearchOverride = nil
         }
         if UITestStubLaunch.isEnabled {
@@ -2018,6 +2030,20 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// Fed into `planFuelStops` so a pump with food wins over a gas-only
     /// neighbor in the same tank window.
     private var gasStopsWithFood: Set<UUID> = []
+
+    /// #69: the planner's meal-time tanks from the last replan, each the
+    /// pumps that competed for it, best first.
+    @ObservationIgnored private var mealWindowCandidateIDs: [[UUID]] = []
+    /// Pumps already checked for food on this station list, with or without a hit.
+    @ObservationIgnored private var foodCheckedPumpIDs: Set<UUID> = []
+    /// Meal-window food searches spent on this station list.
+    @ObservationIgnored private var mealFoodSearchesUsed = 0
+
+    /// Pumps checked for food in each meal-time tank, best first.
+    nonisolated static let mealFoodCandidatesPerTank = 3
+    /// Meal-window food searches per station list (one ride's gas search).
+    /// Pairing food under recommended stops is separate and not counted.
+    nonisolated static let mealFoodSearchesPerRide = 12
 
     /// True when the ride is longer than one tank but the route has a stretch
     /// longer than the fuel range with no gas station found.
@@ -3976,6 +4002,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         gasStations = []
         travelSideGasStations = []
         gasStopsWithFood = []
+        resetMealFoodChecks()
         fuelFoodStops = []
         mutateFuelList {
             fuelStops = []
@@ -4089,6 +4116,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 unsearchedFuelDistances = result.failedSampleDistances
                 gasStations = []
                 gasStopsWithFood = []
+                resetMealFoodChecks()
                 applyFuelCandidatePool()
                 gasLoadState = gasStations.isEmpty ? .empty : .loaded
                 await refreshFoodNearFuelStops()
@@ -4103,6 +4131,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             unsearchedFuelDistances = result.failedSampleDistances
             gasStations = result.stops
             gasStopsWithFood = []
+            resetMealFoodChecks()
             applyFuelCandidatePool()
             gasLoadState = gasStations.isEmpty ? .empty : .loaded
             await refreshFoodNearFuelStops()
@@ -5261,6 +5290,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// tank, and the pumps that get the rider to that hotel stay on the list.
     func replanFuelStops(pairingFood: Bool = true) {
         guard totalDistanceMeters > fuelRangeMeters else {
+            mealWindowCandidateIDs = []
             fuelFoodStops = []
             pairedFuelStopIDs = []
             mutateFuelList {
@@ -5306,6 +5336,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         }
         // One snapshot after both arrays are in place. Publishing from the
         // first assignment would number old rows against the new stops.
+        mealWindowCandidateIDs = plan.mealWindowCandidateIDs
         mutateFuelList {
             fuelStops = plan.stops
             fuelPlanEntries = plan.entries
@@ -5436,9 +5467,83 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             paired.append(FuelFoodStop(fuelStop: stop, nearbyFood: food))
         }
         fuelFoodStops = paired
+        // What pairing learned counts for the planner too. Otherwise a
+        // picked pump with food would lose a meal tank to a nearer one the
+        // second pass found.
+        for pair in paired {
+            foodCheckedPumpIDs.insert(pair.fuelStop.id)
+            if !pair.nearbyFood.isEmpty {
+                gasStopsWithFood.insert(pair.fuelStop.id)
+            }
+        }
         // Food decides which fuel stops are Meal stops (45 min, #64).
         rescheduleHotelsIfEveningsMoved()
+        await checkMealWindowPumpsForFood()
     }
+
+    /// The meal-window food targets: up to `perTank` of each tank's best
+    /// pumps not yet checked, without repeats, within the remaining budget.
+    nonisolated static func mealFoodSearchTargets(
+        windows: [[UUID]],
+        checked: Set<UUID>,
+        perTank: Int = mealFoodCandidatesPerTank,
+        budget: Int
+    ) -> [UUID] {
+        guard budget > 0 else { return [] }
+        var seen = checked
+        var targets: [UUID] = []
+        for window in windows {
+            for id in window.prefix(perTank) where seen.insert(id).inserted {
+                targets.append(id)
+                if targets.count == budget { return targets }
+            }
+        }
+        return targets
+    }
+
+    /// #69, second pass. The planner can only prefer a pump with food when
+    /// it knows which pumps have food, and pairing only looks under the
+    /// stops it already picked. So check a few of the pumps that competed
+    /// for each meal-time tank, then plan again with what was found. Each
+    /// pump is checked once per station list and the searches are capped
+    /// per ride, so the passes stop on their own.
+    private func checkMealWindowPumpsForFood() async {
+        let targets = Self.mealFoodSearchTargets(
+            windows: mealWindowCandidateIDs,
+            checked: foodCheckedPumpIDs,
+            budget: Self.mealFoodSearchesPerRide - mealFoodSearchesUsed
+        )
+        guard !targets.isEmpty else { return }
+        var byID: [UUID: SuggestedStop] = [:]
+        for stop in gasStations + travelSideGasStations {
+            byID[stop.id] = stop
+        }
+        let generation = gasGeneration
+        let legPolylines = legs.map { RouteGeometry.coordinates(of: $0.polyline) }
+        var foundFood = false
+        for id in targets {
+            guard let pump = byID[id] else { continue }
+            let food = await searchFood(near: pump.coordinate, alongPolylines: legPolylines)
+            // A new gas search reset the lists while this one waited.
+            guard generation == gasGeneration, !Task.isCancelled else { return }
+            foodCheckedPumpIDs.insert(id)
+            mealFoodSearchesUsed += 1
+            if !food.isEmpty, gasStopsWithFood.insert(id).inserted {
+                foundFood = true
+            }
+        }
+        // Only a pump newly known to have food can change a pick.
+        if foundFood {
+            replanFuelStops()
+        }
+    }
+
+    private func resetMealFoodChecks() {
+        mealWindowCandidateIDs = []
+        foodCheckedPumpIDs = []
+        mealFoodSearchesUsed = 0
+    }
+
 
     /// Whether a gas station is one of the auto-recommended fuel stops.
     func isRecommendedFuelStop(_ stop: SuggestedStop) -> Bool {
@@ -5866,6 +5971,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         var stops: [SuggestedStop] = []
         var entries: [FuelPlanEntry] = []
         var hasGap = false
+        var mealCandidateLists: [[UUID]] = []
         for index in 0..<(edges.count - 1) {
             let start = edges[index]
             let end = edges[index + 1]
@@ -5896,8 +6002,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             stops.append(contentsOf: plan.stops)
             entries.append(contentsOf: plan.entries)
             hasGap = hasGap || plan.hasGap
+            mealCandidateLists.append(contentsOf: plan.mealWindowCandidateIDs)
         }
-        return FuelPlan(stops: stops, entries: entries, hasGap: hasGap)
+        return FuelPlan(stops: stops, entries: entries, hasGap: hasGap, mealWindowCandidateIDs: mealCandidateLists)
     }
 
     /// Maps a background plan back onto the stops the rider is holding.
@@ -5927,7 +6034,12 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 ))
             }
         }
-        return FuelPlan(stops: recommended, entries: entries, hasGap: draft.hasGap)
+        return FuelPlan(
+            stops: recommended,
+            entries: entries,
+            hasGap: draft.hasGap,
+            mealWindowCandidateIDs: draft.mealWindowCandidateIDs
+        )
     }
 
     /// FUEL-9: the planner's candidate pool in one canonical form. Repeats
@@ -5998,6 +6110,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         var recommendedIDs: [UUID] = []
         var entries: [FuelPlanDraftEntry] = []
         var skippedNear = Set<UUID>()
+        var mealWindowCandidateIDs: [[UUID]] = []
         // Rider-added gas stops count as fills; later pumps plan from the last one.
         var lastRefuel: CLLocationDistance = max(0, filledAt.max() ?? 0)
         // Detour of the pump we just left. The next leg starts there, off the
@@ -6185,6 +6298,19 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 preferFoodForMeal = false
             }
 
+            if preferFoodForMeal {
+                // Best first: the planner takes the farthest (stable) pump.
+                let window = afterEarlyFloor(spaced(inWindow(comfortRange)))
+                let ordered = window.sorted {
+                    $0.distanceAlongRoute != $1.distanceAlongRoute
+                        ? $0.distanceAlongRoute > $1.distanceAlongRoute
+                        : fuelCandidateKeyOrder($0, $1)
+                }
+                if !ordered.isEmpty {
+                    mealWindowCandidateIDs.append(ordered.map(\.id))
+                }
+            }
+
             // Reserve first: the farthest station inside 0.85 × tank.
             // When that window is empty, the nearest station still inside
             // the tank, so the rider fuels as soon as possible. A station
@@ -6275,7 +6401,12 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             if case .gap = entry { return true }
             return false
         }
-        return FuelPlanDraft(recommendedIDs: recommendedIDs, entries: entries, hasGap: hasGap)
+        return FuelPlanDraft(
+            recommendedIDs: recommendedIDs,
+            entries: entries,
+            hasGap: hasGap,
+            mealWindowCandidateIDs: mealWindowCandidateIDs
+        )
     }
 
     // MARK: - Ride highlights (places of interest)
