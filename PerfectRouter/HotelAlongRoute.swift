@@ -115,7 +115,8 @@ enum HotelAlongRoute {
         departureMinutes: Int,
         targetMinutes: Int,
         morningMinutes: Int = morningDepartureMinutes,
-        stops: [RideClock.Stop] = []
+        stops: [RideClock.Stop] = [],
+        zones: RideClock.Zones = .phone
     ) -> [Evening] {
         let totalDistance = legs.reduce(0.0) { partial, leg in
             guard leg.distanceMeters.isFinite else { return partial }
@@ -140,7 +141,9 @@ enum HotelAlongRoute {
                 break
             }
             let dayStart = RideClock.DayStart(distance: start, minutes: clock)
-            let rideClock = RideClock(legs: legs, dayStarts: [dayStart], stops: stops, hotelMinutes: targetMinutes)
+            let rideClock = RideClock(
+                legs: legs, dayStarts: [dayStart], stops: stops, hotelMinutes: targetMinutes, zones: zones
+            )
             if rideClock.minutes(atDistance: totalDistance, from: dayStart) + 0.5 / 60 < Double(targetMinutes) {
                 break
             }
@@ -284,7 +287,8 @@ enum HotelAlongRoute {
         dayStartDistance: CLLocationDistance,
         departureMinutes: Int,
         stops: [RideClock.Stop] = [],
-        hotelMinutes: Int? = nil
+        hotelMinutes: Int? = nil,
+        zones: RideClock.Zones = .phone
     ) -> Measurement? {
         guard coordinate.isValidLocation else { return nil }
         guard polylines.contains(where: { $0.count > 1 }) else { return nil }
@@ -300,27 +304,32 @@ enum HotelAlongRoute {
                 dayStartDistance: dayStartDistance,
                 departureMinutes: departureMinutes,
                 stops: stops,
-                hotelMinutes: hotelMinutes
+                hotelMinutes: hotelMinutes,
+                zones: zones
             )
         )
     }
 
     /// Planned departure plus riding time from that morning to `distance`,
-    /// plus the stop allowance of each of `stops` passed on the way.
+    /// plus the stop allowance of each of `stops` passed on the way, read in
+    /// local time at `distance` (#67).
     static func arrivalMinutes(
         atDistance distance: CLLocationDistance,
         legs: [FuelStopRidingTime.Leg],
         dayStartDistance: CLLocationDistance,
         departureMinutes: Int,
         stops: [RideClock.Stop] = [],
-        hotelMinutes: Int? = nil
+        hotelMinutes: Int? = nil,
+        zones: RideClock.Zones = .phone
     ) -> Int {
         let origin = dayStartDistance.isFinite ? max(0, dayStartDistance) : 0
         let dayStart = RideClock.DayStart(distance: origin, minutes: departureMinutes)
-        let clock = RideClock(legs: legs, dayStarts: [dayStart], stops: stops, hotelMinutes: hotelMinutes)
+        let clock = RideClock(
+            legs: legs, dayStarts: [dayStart], stops: stops, hotelMinutes: hotelMinutes, zones: zones
+        )
         let target = distance.isFinite ? max(origin, distance) : origin
         let minutes = clock.minutes(atDistance: target, from: dayStart)
-        return max(departureMinutes, Int(minutes.rounded()))
+        return Int(minutes.rounded())
     }
 
     /// "arrive ~6:20 PM · 2 mi off route". Wider-radius options add

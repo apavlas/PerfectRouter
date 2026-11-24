@@ -361,6 +361,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         didSet {
             rebuildDistanceCache()
             syncDisclosureRide()
+            lookUpWaypointZones()
         }
     }
 
@@ -718,12 +719,14 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         let departureMinutes = HotelAlongRoute.minutes(from: Self.departureOverride ?? effectiveDeparture)
         let clockStops = rideClockStops(includingFuelStops: true)
         hotelClockStops = clockStops
+        hotelClockZones = routeZones
         let evenings = HotelAlongRoute.evenings(
             legs: driveLegs,
             overnightDistances: overnightDistancesAlongRoute(),
             departureMinutes: departureMinutes,
             targetMinutes: target,
-            stops: clockStops
+            stops: clockStops,
+            zones: hotelClockZones
         )
         plannedLodgingEvenings = evenings
         refreshPublishedRideDays()
@@ -899,7 +902,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 dayStartDistance: evening.dayStartDistance,
                 departureMinutes: evening.departureMinutes,
                 stops: hotelClockStops,
-                hotelMinutes: hotelTargetMinutes
+                hotelMinutes: hotelTargetMinutes,
+                zones: hotelClockZones
             ) else { return nil }
             var copy = stop
             copy.distanceAlongRoute = measurement.distanceAlongRoute
@@ -924,7 +928,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 dayStartDistance: dayStartDistance,
                 departureMinutes: departureMinutes,
                 stops: hotelClockStops,
-                hotelMinutes: hotelTargetMinutes
+                hotelMinutes: hotelTargetMinutes,
+                zones: hotelClockZones
             )
             return HotelAlongRoute.Candidate(
                 key: HotelAlongRoute.placeKey(
@@ -952,7 +957,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             dayStartDistance: evening.dayStartDistance,
             departureMinutes: evening.departureMinutes,
             stops: hotelClockStops,
-            hotelMinutes: hotelTargetMinutes
+            hotelMinutes: hotelTargetMinutes,
+            zones: hotelClockZones
         )
         return HotelAlongRoute.arrivalCaption(
             arrivalMinutes: arrival,
@@ -1028,7 +1034,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             legs: cachedDriveLegs,
             dayStarts: dayStarts,
             stops: rideClockStops(includingFuelStops: false),
-            hotelMinutes: FeatureFlags.hotelsAlongRoute ? hotelTargetMinutes : nil
+            hotelMinutes: FeatureFlags.hotelsAlongRoute ? hotelTargetMinutes : nil,
+            zones: routeZones
         )
     }
 
@@ -1315,6 +1322,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// When the fuel plan moves them far enough to move an Evening, the
     /// hotel search runs again.
     private var hotelClockStops: [RideClock.Stop] = []
+    /// The time zones the hotel clocks were computed with (#67).
+    private var hotelClockZones: RideClock.Zones = .phone
 
     /// Bumped when Choose should scroll the hotel picker for one evening.
     private(set) var scrollToHotelToken = 0
@@ -2844,7 +2853,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             dayStartDistance: dayStart,
             departureMinutes: startMinutes,
             stops: rideClockStops(includingFuelStops: true),
-            hotelMinutes: hotelTargetMinutes
+            hotelMinutes: hotelTargetMinutes,
+            zones: routeZones
         )
         return HotelAlongRoute.outsideWindowNote(arrivalMinutes: arrival, targetMinutes: hotelTargetMinutes)
     }
@@ -5360,14 +5370,16 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     private func rescheduleHotelsIfEveningsMoved() {
         guard FeatureFlags.hotelsAlongRoute, !UITestStubLaunch.isEnabled, !cachedDriveLegs.isEmpty else { return }
         let stops = rideClockStops(includingFuelStops: true)
-        guard stops != hotelClockStops else { return }
+        let zones = routeZones
+        guard stops != hotelClockStops || zones != hotelClockZones else { return }
         let departureMinutes = HotelAlongRoute.minutes(from: Self.departureOverride ?? effectiveDeparture)
         let moved = HotelAlongRoute.evenings(
             legs: cachedDriveLegs,
             overnightDistances: overnightDistancesAlongRoute(),
             departureMinutes: departureMinutes,
             targetMinutes: hotelTargetMinutes,
-            stops: stops
+            stops: stops,
+            zones: zones
         )
         let threshold = AppSettings.metersPerMile
         let same = moved.count == plannedLodgingEvenings.count
@@ -5379,6 +5391,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             return
         }
         hotelClockStops = stops
+        hotelClockZones = zones
         // Arrivals moved even though the Evenings did not: recompute
         // captions and which options are inside the window from the places
         // already measured. Search again only if an evening lost them all.
@@ -7352,6 +7365,81 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         request.region = region
         let response = try? await MKLocalSearch(request: request).start()
         return response?.mapItems ?? []
+    }
+
+    // MARK: - Time zones along the route (#67)
+
+    /// Looks up a coordinate's time zone. Reverse geocoding by default; unit
+    /// tests replace it. Nil: unknown, so that point uses the phone's zone.
+    @ObservationIgnored var timeZoneLookup: @MainActor (CLLocationCoordinate2D) async -> TimeZone? = { coordinate in
+        let location = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
+        return try? await CLGeocoder().reverseGeocodeLocation(location).first?.timeZone
+    }
+
+    /// Waypoint zones by coordinate key. A stored nil means the lookup ran
+    /// and found nothing, so it is not repeated.
+    @ObservationIgnored private var waypointZoneCache: [String: TimeZone?] = [:]
+    @ObservationIgnored private var waypointZoneLookupTask: Task<Void, Never>?
+
+    /// The zone found for a waypoint's coordinate, if any.
+    func cachedTimeZone(for coordinate: CLLocationCoordinate2D) -> TimeZone? {
+        waypointZoneCache[Self.coordinateKey(coordinate)] ?? nil
+    }
+
+    /// Time zones along the planned line: each waypoint whose zone is
+    /// known, plus every gas station Apple Maps returned with one. Offsets
+    /// are taken on the departure date, so daylight saving matches the ride.
+    var routeZones: RideClock.Zones {
+        let date = Self.departureOverride ?? effectiveDeparture
+        var marks: [RideClock.Zones.Mark] = []
+        if cachedDriveLegs.count + 1 == waypoints.count {
+            for (index, waypoint) in waypoints.enumerated() {
+                guard let zone = cachedTimeZone(for: waypoint.coordinate) else { continue }
+                marks.append(.init(distance: waypointDistance(at: index), secondsFromGMT: zone.secondsFromGMT(for: date)))
+            }
+        }
+        for station in gasStations {
+            guard let zone = station.mapItem.timeZone, station.distanceAlongRoute.isFinite else { continue }
+            marks.append(.init(distance: station.distanceAlongRoute, secondsFromGMT: zone.secondsFromGMT(for: date)))
+        }
+        return RideClock.Zones(marks: marks, phoneSecondsFromGMT: TimeZone.current.secondsFromGMT(for: date))
+    }
+
+    /// Reverse-geocodes waypoints whose zone is not cached yet, one at a
+    /// time (the geocoder is rate-limited). When a zone turns up, the fuel
+    /// plan and hotel clocks are recomputed.
+    private func lookUpWaypointZones() {
+        guard !UITestStubLaunch.isEnabled else { return }
+        let missing = waypoints.map(\.coordinate).filter {
+            $0.isValidLocation && waypointZoneCache[Self.coordinateKey($0)] == nil
+        }
+        guard !missing.isEmpty, waypointZoneLookupTask == nil else { return }
+        waypointZoneLookupTask = Task { @MainActor in
+            var found = false
+            for coordinate in missing {
+                let key = Self.coordinateKey(coordinate)
+                guard self.waypointZoneCache[key] == nil else { continue }
+                let zone = await self.timeZoneLookup(coordinate)
+                self.waypointZoneCache[key] = .some(zone)
+                if zone != nil { found = true }
+            }
+            self.waypointZoneLookupTask = nil
+            // Waypoints added while this ran.
+            self.lookUpWaypointZones()
+            if found { self.timeZonesDidChange() }
+        }
+    }
+
+    /// Clocks read the new zones: replan fuel (meal stops), which also
+    /// moves Evenings and hotel captions when they shift.
+    private func timeZonesDidChange() {
+        guard !cachedDriveLegs.isEmpty else { return }
+        replanFuelStops()
+    }
+
+    /// Waits for pending waypoint zone lookups. Unit tests only.
+    func waitForTimeZoneLookups() async {
+        while let task = waypointZoneLookupTask { await task.value }
     }
 
     // MARK: - Contacts
