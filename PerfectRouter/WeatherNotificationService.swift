@@ -34,7 +34,7 @@ struct WeatherNotificationService {
 
         let content = UNMutableNotificationContent()
         content.title = "Rain expected on your ride"
-        content.body = message
+        content.body = Self.body(for: message)
         content.sound = .default
 
         // A nil trigger delivers immediately (suppressed by the system while the
@@ -45,6 +45,14 @@ struct WeatherNotificationService {
             trigger: nil
         )
         try? await center.add(request)
+    }
+
+    /// Notifications can't show the Apple Weather mark, so the body names the
+    /// data source in text instead (WeatherKit attribution).
+    static let sourceLine = "Source: Apple Weather"
+
+    static func body(for message: String) -> String {
+        "\(message)\n\(sourceLine)"
     }
 
     /// Returns whether we may post notifications, requesting permission in

@@ -13,12 +13,37 @@ enum GPXCodec {
         var waypoints: [Waypoint]
         /// Flattened track points when the file contained a `<trk>`, else empty.
         var trackCoordinates: [CLLocationCoordinate2D]
+        /// Usable waypoints in the file before the `maxWaypoints` cap.
+        var originalWaypointCount: Int = 0
+
+        /// True when the file had more stops than the planner keeps.
+        var wasTrimmed: Bool { originalWaypointCount > waypoints.count }
     }
 
     enum DecodeError: Error, Equatable {
         case empty
         case notGPX
         case noCoordinates
+        case tooLarge
+    }
+
+    /// Most stops an import keeps, matching shared links. Every stop is a
+    /// MapKit directions request, and a few hundred get throttled.
+    static let maxWaypoints = SharedRoute.maxElementCount
+
+    /// Largest file accepted. A multi-day GPX with a full track is a few
+    /// megabytes, and anything far larger isn't a ride plan.
+    static let maxFileBytes = 20 * 1024 * 1024
+
+    /// Keeps `limit` stops in ride order: always the start and the
+    /// destination, plus evenly spaced stops between them.
+    static func trimmed(_ waypoints: [Waypoint], to limit: Int = maxWaypoints) -> [Waypoint] {
+        guard limit >= 2, waypoints.count > limit else { return waypoints }
+        let step = Double(waypoints.count - 1) / Double(limit - 1)
+        return (0..<limit).map { slot -> Waypoint in
+            let index = (Double(slot) * step).rounded()
+            return waypoints[Int(index)]
+        }
     }
 
     // MARK: - Filename
@@ -101,6 +126,7 @@ enum GPXCodec {
     /// a track exists, uses the first and last track points as start/end.
     static func decode(_ data: Data) throws -> Document {
         guard !data.isEmpty else { throw DecodeError.empty }
+        guard data.count <= maxFileBytes else { throw DecodeError.tooLarge }
         let parser = Parser()
         let xmlParser = XMLParser(data: data)
         xmlParser.delegate = parser
@@ -123,8 +149,9 @@ enum GPXCodec {
 
         return Document(
             name: parser.metadataName,
-            waypoints: waypoints,
-            trackCoordinates: track
+            waypoints: trimmed(waypoints),
+            trackCoordinates: track,
+            originalWaypointCount: waypoints.count
         )
     }
 
