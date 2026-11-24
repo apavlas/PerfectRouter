@@ -140,7 +140,7 @@ enum HotelAlongRoute {
                 break
             }
             let dayStart = RideClock.DayStart(distance: start, minutes: clock)
-            let rideClock = RideClock(legs: legs, dayStarts: [dayStart], stops: stops)
+            let rideClock = RideClock(legs: legs, dayStarts: [dayStart], stops: stops, hotelMinutes: targetMinutes)
             if rideClock.minutes(atDistance: totalDistance, from: dayStart) + 0.5 / 60 < Double(targetMinutes) {
                 break
             }
@@ -283,7 +283,8 @@ enum HotelAlongRoute {
         legs: [FuelStopRidingTime.Leg],
         dayStartDistance: CLLocationDistance,
         departureMinutes: Int,
-        stops: [RideClock.Stop] = []
+        stops: [RideClock.Stop] = [],
+        hotelMinutes: Int? = nil
     ) -> Measurement? {
         guard coordinate.isValidLocation else { return nil }
         guard polylines.contains(where: { $0.count > 1 }) else { return nil }
@@ -298,7 +299,8 @@ enum HotelAlongRoute {
                 legs: legs,
                 dayStartDistance: dayStartDistance,
                 departureMinutes: departureMinutes,
-                stops: stops
+                stops: stops,
+                hotelMinutes: hotelMinutes
             )
         )
     }
@@ -310,11 +312,12 @@ enum HotelAlongRoute {
         legs: [FuelStopRidingTime.Leg],
         dayStartDistance: CLLocationDistance,
         departureMinutes: Int,
-        stops: [RideClock.Stop] = []
+        stops: [RideClock.Stop] = [],
+        hotelMinutes: Int? = nil
     ) -> Int {
         let origin = dayStartDistance.isFinite ? max(0, dayStartDistance) : 0
         let dayStart = RideClock.DayStart(distance: origin, minutes: departureMinutes)
-        let clock = RideClock(legs: legs, dayStarts: [dayStart], stops: stops)
+        let clock = RideClock(legs: legs, dayStarts: [dayStart], stops: stops, hotelMinutes: hotelMinutes)
         let target = distance.isFinite ? max(origin, distance) : origin
         let minutes = clock.minutes(atDistance: target, from: dayStart)
         return max(departureMinutes, Int(minutes.rounded()))
