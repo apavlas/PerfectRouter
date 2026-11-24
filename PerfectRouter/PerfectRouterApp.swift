@@ -8,10 +8,24 @@ struct PerfectRouterApp: App {
     /// One-time post-splash intro. Returning riders skip it.
     @AppStorage(AppSettings.Keys.hasCompletedFirstRun)
     private var hasCompletedFirstRun = false
+    /// One-time safety notice, shown before first-run (and once to riders
+    /// who finished first-run on an earlier build).
+    @AppStorage(AppSettings.Keys.acknowledgedSafetyNoticeVersion)
+    private var acknowledgedSafetyNoticeVersion = 0
+
+    private var showsSafetyNotice: Bool {
+        acknowledgedSafetyNoticeVersion < AppSettings.safetyNoticeVersion && !UITestStubLaunch.skipsOnboarding
+    }
+
+    /// Splash, safety notice, and first-run are all out of the way.
+    private var introDone: Bool {
+        UITestStubLaunch.skipsOnboarding || (hasCompletedFirstRun && !showsSafetyNotice)
+    }
 
     init() {
         AppSettings.registerDefaults()
         if UITestStubLaunch.skipsOnboarding {
+            AppSettings.acknowledgeSafetyNotice()
             AppSettings.completeFirstRun()
             UITestStubLaunch.installFocusPlaceSearchBridge()
         }
@@ -26,8 +40,8 @@ struct PerfectRouterApp: App {
                 // underneath so a shared-route deep link can import while the
                 // intro is up and land after dismiss.
                 ContentView(
-                    readyForPermissions: !showSplash && (hasCompletedFirstRun || UITestStubLaunch.skipsOnboarding),
-                    planningSheetEnabled: hasCompletedFirstRun || UITestStubLaunch.skipsOnboarding
+                    readyForPermissions: !showSplash && introDone,
+                    planningSheetEnabled: introDone
                 )
 
                 if showSplash {
@@ -35,12 +49,16 @@ struct PerfectRouterApp: App {
                         .transition(.opacity)
                         .task {
                             // Hold the scenic ride for about a second, then
-                            // fade through to first-run or the map.
+                            // fade through to the safety notice, first-run,
+                            // or the map.
                             try? await Task.sleep(for: .seconds(1))
                             withAnimation(.easeInOut(duration: 0.4)) {
                                 showSplash = false
                             }
                         }
+                } else if showsSafetyNotice {
+                    SafetyNoticeView()
+                        .transition(.opacity)
                 } else if !hasCompletedFirstRun && !UITestStubLaunch.skipsOnboarding {
                     FirstRunView()
                         .transition(.opacity)
