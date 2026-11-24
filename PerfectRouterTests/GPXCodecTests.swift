@@ -132,5 +132,52 @@ final class GPXCodecTests: XCTestCase {
         XCTAssertEqual(viewModel.waypoints.count, 2)
         XCTAssertEqual(viewModel.waypoints[0].name, "Start")
         XCTAssertEqual(viewModel.waypoints[1].name, "End")
+        XCTAssertNil(viewModel.importNotice)
+    }
+
+    // MARK: - Size cap
+
+    private func manyStops(_ count: Int) -> [Waypoint] {
+        (0..<count).map { i in
+            waypoint("Stop \(i)", lat: 33.0 + Double(i) * 0.001, lon: -82.0)
+        }
+    }
+
+    func testDecodeKeepsAtMostMaxWaypointsWithStartAndDestination() throws {
+        let data = GPXCodec.encode(waypoints: manyStops(400))
+        let decoded = try GPXCodec.decode(data)
+        XCTAssertEqual(decoded.waypoints.count, GPXCodec.maxWaypoints)
+        XCTAssertEqual(decoded.originalWaypointCount, 400)
+        XCTAssertTrue(decoded.wasTrimmed)
+        XCTAssertEqual(decoded.waypoints.first?.name, "Stop 0")
+        XCTAssertEqual(decoded.waypoints.last?.name, "Stop 399")
+        // Ride order kept, no duplicates.
+        let indices = decoded.waypoints.compactMap { Int($0.name.dropFirst(5)) }
+        XCTAssertEqual(indices, indices.sorted())
+        XCTAssertEqual(Set(indices).count, indices.count)
+    }
+
+    func testDecodeAtTheCapIsUntouched() throws {
+        let decoded = try GPXCodec.decode(GPXCodec.encode(waypoints: manyStops(GPXCodec.maxWaypoints)))
+        XCTAssertEqual(decoded.waypoints.count, GPXCodec.maxWaypoints)
+        XCTAssertFalse(decoded.wasTrimmed)
+    }
+
+    func testDecodeRejectsOversizedFile() {
+        let huge = Data(count: GPXCodec.maxFileBytes + 1)
+        XCTAssertThrowsError(try GPXCodec.decode(huge)) { error in
+            XCTAssertEqual(error as? GPXCodec.DecodeError, .tooLarge)
+        }
+    }
+
+    func testViewModelImportTellsRiderWhenStopsWereLeftOut() {
+        let viewModel = RoutePlannerViewModel()
+        XCTAssertTrue(viewModel.importGPX(data: GPXCodec.encode(waypoints: manyStops(250))))
+        XCTAssertEqual(viewModel.waypoints.count, GPXCodec.maxWaypoints)
+        XCTAssertEqual(viewModel.importNotice,
+                       RoutePlannerViewModel.gpxTrimmedNotice(kept: GPXCodec.maxWaypoints, of: 250))
+        // A later normal import clears the old notice.
+        XCTAssertTrue(viewModel.importGPX(data: GPXCodec.encode(waypoints: manyStops(3))))
+        XCTAssertNil(viewModel.importNotice)
     }
 }
