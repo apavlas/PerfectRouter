@@ -38,13 +38,6 @@ private struct AlongRouteQuery: Sendable {
 /// sights corridor. File-level so the nonisolated highlight pick can read it.
 private let cadillacRanchApproachMeters: CLLocationDistance = 20_000
 
-/// One leg's vertices and drive time, copied on the main actor so the
-/// length scan can run off it. `MKRoute` itself is not sendable.
-private struct DriveLegSnapshot: Sendable {
-    var polyline: [CLLocationCoordinate2D]
-    var expectedTravelTime: TimeInterval
-}
-
 private enum FuelPlanRowKind: Sendable {
     case recommended
     case pastRange
@@ -1751,29 +1744,18 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         cachedDriveLegs
     }
 
-    /// Copies each leg on the caller, then measures its length off the main
-    /// thread. View updates only read `cachedDriveLegs`.
+    /// Measures each leg's polyline length on the caller. This stays
+    /// synchronous on purpose: fuel planning, hotels, and the ride clock read
+    /// `cachedDriveLegs` right after `legs` changes. The walk is linear and
+    /// took about 19 ms on an 80,000-point route. The old
+    /// `DispatchQueue.global().sync` hop made it look off-main while the main
+    /// thread still waited for it.
     private func rebuildDriveLegCache() {
-        let snapshots = legs.map { route in
-            DriveLegSnapshot(
+        cachedDriveLegs = legs.map { route in
+            FuelStopRidingTime.leg(
                 polyline: RouteGeometry.coordinates(of: route.polyline),
                 expectedTravelTime: route.expectedTravelTime
             )
-        }
-        cachedDriveLegs = Self.driveLegsOffMain(snapshots)
-    }
-
-    private nonisolated static func driveLegsOffMain(
-        _ snapshots: [DriveLegSnapshot]
-    ) -> [FuelStopRidingTime.Leg] {
-        guard !snapshots.isEmpty else { return [] }
-        return DispatchQueue.global(qos: .userInitiated).sync { @Sendable in
-            snapshots.map { snapshot in
-                FuelStopRidingTime.leg(
-                    polyline: snapshot.polyline,
-                    expectedTravelTime: snapshot.expectedTravelTime
-                )
-            }
         }
     }
 
@@ -2021,7 +2003,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// Gas stations on the rider's side of travel (no crossing oncoming
     /// traffic). Candidate pool for `fuelStops`; recomputed when the route
     /// or tank-interval search changes.
-    private var travelSideGasStations: [SuggestedStop] = [] {
+    private(set) var travelSideGasStations: [SuggestedStop] = [] {
         didSet { rebuildDistanceCache() }
     }
 
@@ -4823,12 +4805,33 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         }
     }
 
-    /// Stations on the rider's side of the current line. The polyline is
-    /// copied on the caller, then the scan runs off the main thread.
+    /// Travel-side result for one line and one ordered station list. The
+    /// indices point into that list, so a different list or line is a miss.
+    private struct TravelSideCache {
+        var generation: Int
+        var stationIDs: [UUID]
+        var keep: Set<Int>
+    }
+
+    @ObservationIgnored private var travelSideCache: TravelSideCache?
+    @ObservationIgnored private var travelSideToken = 0
+
+    /// Stations on the rider's side of the current line.
+    /// A short line is scanned on the caller, so a unit test can read the
+    /// pool immediately. A long line is scanned off the main actor: on an
+    /// 80,000-point route the scan takes over a second, and the old
+    /// `DispatchQueue.sync` held the main thread for all of it. Until that
+    /// scan lands, the full list stands in (the same fallback the pool uses
+    /// when the filter empties it), then the pool is rebuilt from the result.
     private func travelSideStations(from stations: [SuggestedStop]) -> [SuggestedStop] {
         guard !stations.isEmpty else { return [] }
         let polylines = legs.map { RouteGeometry.coordinates(of: $0.polyline) }
         guard polylines.contains(where: { $0.count > 1 }) else { return stations }
+        let generation = routeGeometryGeneration
+        let ids = stations.map(\.id)
+        if let cache = travelSideCache, cache.generation == generation, cache.stationIDs == ids {
+            return Self.keeping(cache.keep, of: stations)
+        }
         let queries = stations.enumerated().map { index, stop in
             RouteGeometry.StationProjectionQuery(
                 index: index,
@@ -4836,20 +4839,48 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 longitude: stop.coordinate.longitude
             )
         }
-        let indices = Self.travelSideIndicesOffMain(queries: queries, polylines: polylines)
-        let keep = Set(indices)
-        return stations.enumerated().compactMap { keep.contains($0.offset) ? $0.element : nil }
+        let points = polylines.reduce(0) { $0 + $1.count }
+        if points <= Self.inlineMeasureMaxPoints {
+            travelSideToken &+= 1
+            let keep = Set(RouteGeometry.travelSideIndices(queries: queries, polylines: polylines))
+            travelSideCache = TravelSideCache(generation: generation, stationIDs: ids, keep: keep)
+            return Self.keeping(keep, of: stations)
+        }
+        travelSideToken &+= 1
+        let token = travelSideToken
+        Task { @MainActor in
+            let indices = await Self.travelSideIndicesOffMain(queries: queries, polylines: polylines)
+            guard token == self.travelSideToken,
+                  generation == self.routeGeometryGeneration else { return }
+            self.travelSideCache = TravelSideCache(
+                generation: generation,
+                stationIDs: ids,
+                keep: Set(indices)
+            )
+            // Rebuild only if the pool still holds the stations scanned.
+            guard self.gasStations.map(\.id) == ids else { return }
+            self.applyFuelCandidatePool()
+        }
+        return stations
     }
 
-    /// The scan is nonisolated and only receives sendable values, so it can
-    /// run off the main actor without capturing the view model or map items.
+    private nonisolated static func keeping(
+        _ keep: Set<Int>,
+        of stations: [SuggestedStop]
+    ) -> [SuggestedStop] {
+        stations.enumerated().compactMap { keep.contains($0.offset) ? $0.element : nil }
+    }
+
+    /// The scan is nonisolated and only receives sendable values, so it
+    /// runs off the main actor without capturing the view model or map items.
+    /// The main actor suspends while it runs instead of waiting on it.
     private nonisolated static func travelSideIndicesOffMain(
         queries: [RouteGeometry.StationProjectionQuery],
         polylines: [[CLLocationCoordinate2D]]
-    ) -> [Int] {
-        DispatchQueue.global(qos: .userInitiated).sync { @Sendable in
+    ) async -> [Int] {
+        await Task.detached(priority: .userInitiated) {
             RouteGeometry.travelSideIndices(queries: queries, polylines: polylines)
-        }
+        }.value
     }
 
     /// Recommended stops the button may insert. Each hop is measured from
