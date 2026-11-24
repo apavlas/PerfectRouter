@@ -10,9 +10,54 @@ import Foundation
 /// rider spends stopped on the way there.
 ///
 /// Clocks are minutes from midnight on the morning a riding day starts, so a
-/// day that runs past midnight reads above 1,440. They use the phone's time
-/// zone; local time along the route is a separate change.
+/// day that runs past midnight reads above 1,440. Every clock in or out is
+/// local time at that point on the route (#67): a day start's clock is local
+/// where it starts, and `minutes(atDistance:)` answers in the zone at
+/// `distance`. Meal windows and hotel time are checked against that local
+/// clock. A point with no known zone uses the phone's.
 struct RideClock: Equatable, Sendable {
+
+    /// Time zone offsets along the route, as a step function: each mark's
+    /// offset holds from its distance up to the next mark. Before the first
+    /// mark, and with no marks at all, the phone's offset applies.
+    struct Zones: Equatable, Sendable {
+        struct Mark: Equatable, Sendable {
+            var distance: CLLocationDistance
+            var secondsFromGMT: Int
+        }
+
+        var marks: [Mark]
+        var phoneSecondsFromGMT: Int
+
+        init(marks: [Mark] = [], phoneSecondsFromGMT: Int = TimeZone.current.secondsFromGMT()) {
+            self.marks = marks
+                .filter { $0.distance.isFinite }
+                .sorted { $0.distance < $1.distance }
+            self.phoneSecondsFromGMT = phoneSecondsFromGMT
+        }
+
+        /// No zone data: every point reads the phone's time zone.
+        static let phone = Zones()
+
+        func secondsFromGMT(at distance: CLLocationDistance) -> Int {
+            let tolerance = FuelStopRidingTime.sameStopToleranceMeters
+            return marks.last { $0.distance <= distance + tolerance }?.secondsFromGMT
+                ?? phoneSecondsFromGMT
+        }
+
+        /// Distances after `distance` where the offset changes.
+        func changes(after distance: CLLocationDistance) -> [CLLocationDistance] {
+            var result: [CLLocationDistance] = []
+            var current = secondsFromGMT(at: distance)
+            for mark in marks where mark.distance > distance + FuelStopRidingTime.sameStopToleranceMeters {
+                if mark.secondsFromGMT != current {
+                    result.append(mark.distance)
+                    current = mark.secondsFromGMT
+                }
+            }
+            return result
+        }
+    }
 
     /// What a stop on the plan is, which sets its allowance.
     enum StopKind: Equatable, Sendable {
@@ -53,13 +98,16 @@ struct RideClock: Equatable, Sendable {
     /// the destination or at its Evening, whichever comes first; this is
     /// the Evening's clock. Nil: the day ends at the destination.
     var hotelMinutes: Int?
+    /// Time zones along the route. Defaults to the phone's everywhere.
+    var zones: Zones
 
     init(
         legs: [FuelStopRidingTime.Leg],
         dayStarts: [DayStart],
         stops: [Stop] = [],
         mealWindows: [MealWindow] = MealWindow.typical,
-        hotelMinutes: Int? = nil
+        hotelMinutes: Int? = nil,
+        zones: Zones = .phone
     ) {
         self.legs = legs
         self.dayStarts = dayStarts
@@ -70,6 +118,7 @@ struct RideClock: Equatable, Sendable {
             .sorted { $0.distance < $1.distance }
         self.mealWindows = mealWindows
         self.hotelMinutes = hotelMinutes
+        self.zones = zones
     }
 
     /// The same clock with more stops on the plan.
@@ -79,8 +128,15 @@ struct RideClock: Equatable, Sendable {
             dayStarts: dayStarts,
             stops: stops + more,
             mealWindows: mealWindows,
-            hotelMinutes: hotelMinutes
+            hotelMinutes: hotelMinutes,
+            zones: zones
         )
+    }
+
+    /// Minutes to add to a clock kept in the day start's zone to read it in
+    /// the zone at `distance`: +60 riding from Mountain into Central.
+    func shiftMinutes(at distance: CLLocationDistance, from start: DayStart) -> Double {
+        Double(zones.secondsFromGMT(at: distance) - zones.secondsFromGMT(at: start.distance)) / 60
     }
 
     /// The riding day `distance` falls in: the last start at or before it.
@@ -100,12 +156,23 @@ struct RideClock: Equatable, Sendable {
         return minutes(atDistance: distance, from: start)
     }
 
-    /// Like `minutes(atDistance:)`, measured from a given day start.
+    /// Like `minutes(atDistance:)`, measured from a given day start. Local
+    /// time at `distance`.
     func minutes(atDistance distance: CLLocationDistance, from start: DayStart) -> Double {
-        minutes(atDistance: distance, from: start, meals: meals(on: start))
+        localMinutes(atDistance: distance, from: start, meals: meals(on: start))
     }
 
-    private func minutes(
+    private func localMinutes(
+        atDistance distance: CLLocationDistance,
+        from start: DayStart,
+        meals: DayMeals
+    ) -> Double {
+        elapsedMinutes(atDistance: distance, from: start, meals: meals) + shiftMinutes(at: distance, from: start)
+    }
+
+    /// The clock at `distance` kept in the day start's zone, so it only
+    /// counts riding and stopped time. Allowances read local time.
+    private func elapsedMinutes(
         atDistance distance: CLLocationDistance,
         from start: DayStart,
         meals: DayMeals
@@ -122,10 +189,25 @@ struct RideClock: Equatable, Sendable {
         return clock / 60
     }
 
-    /// Where the clock reaches `target` minutes on the riding day that
-    /// starts at `start`. Clamps to the end of the route. When the target
-    /// passes while the rider is stopped, the answer is that stop.
+    /// Where the local clock first reaches `target` minutes on the riding
+    /// day that starts at `start`. Clamps to the end of the route. When the
+    /// target passes while the rider is stopped, the answer is that stop;
+    /// when it is skipped by a zone line (riding east into a later zone),
+    /// the answer is the line.
     func distance(reachingMinutes target: Double, from start: DayStart) -> CLLocationDistance {
+        var segmentStart = max(0, start.distance)
+        for change in zones.changes(after: start.distance) {
+            let reached = distance(reachingElapsedMinutes: target - shiftMinutes(at: segmentStart, from: start), from: start)
+            if reached <= segmentStart { return segmentStart }
+            if reached < change { return reached }
+            segmentStart = change
+        }
+        let reached = distance(reachingElapsedMinutes: target - shiftMinutes(at: segmentStart, from: start), from: start)
+        return max(segmentStart, reached)
+    }
+
+    /// Where the clock kept in the day start's zone reaches `target`.
+    private func distance(reachingElapsedMinutes target: Double, from start: DayStart) -> CLLocationDistance {
         var remaining = (target - Double(start.minutes)) * 60
         guard remaining > 0 else { return max(0, start.distance) }
         let meals = meals(on: start)
@@ -244,9 +326,9 @@ struct RideClock: Equatable, Sendable {
     /// or the destination capped at the Evening when there is a hotel time.
     private func dayEndMinutes(from start: DayStart, meals: DayMeals) -> Double {
         if let next = nextDayStart(after: start) {
-            return minutes(atDistance: next.distance, from: start, meals: meals)
+            return localMinutes(atDistance: next.distance, from: start, meals: meals)
         }
-        let end = minutes(atDistance: routeLength, from: start, meals: meals)
+        let end = localMinutes(atDistance: routeLength, from: start, meals: meals)
         guard let hotelMinutes else { return end }
         return min(end, Double(hotelMinutes))
     }
@@ -262,7 +344,7 @@ struct RideClock: Equatable, Sendable {
         for stop in stops where stop.kind == .food {
             guard stop.distance > start.distance + tolerance,
                   stop.distance < dayEnd - tolerance else { continue }
-            let arrival = minutes(atDistance: stop.distance, from: start, meals: meals)
+            let arrival = localMinutes(atDistance: stop.distance, from: start, meals: meals)
             guard arrival <= latest, arrival < Double(24 * 60),
                   let window = mealWindow(at: arrival),
                   !covered.contains(window) else { continue }
@@ -284,7 +366,8 @@ struct RideClock: Equatable, Sendable {
         dayStart start: DayStart,
         meals: DayMeals
     ) -> TimeInterval {
-        let minutes = seconds / 60
+        // Meal windows are local time where the stop is.
+        let minutes = seconds / 60 + shiftMinutes(at: stop.distance, from: start)
         switch stop.kind {
         case .waypoint:
             return Self.waypointAllowance
