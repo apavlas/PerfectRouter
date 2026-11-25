@@ -1,0 +1,13 @@
+Feedback form: https://forms.clickup.com/90141766704/f/2kydwd1g-534/8GGHGJJ649B6SOLFL6
+
+Build 16 adds Pro, a safety screen, and local times along the route.
+
+1. Safety screen: After the splash you should see "Ride safe" once. Tap "I understand". It shouldn't come back.
+2. Pro: You start on Free. Tap a Pro feature (Save, Share, Ride History, hotels, or Twisty) and the Pro screen should open with Yearly selected. Purchases in TestFlight are free and never charge you. Derek: start the 7-day trial; Pro features should unlock right away. Chris: stay on Free. Look at the Pro screen, tap "Not now", and keep planning rides with gas stops. If the Pro screen says it couldn't reach the App Store, tell us. That's expected for a day or two while we finish setup.
+3. Restore: After starting the trial, Settings > Restore Purchases should keep Pro on.
+4. Time zones: Plan a ride that crosses into another time zone (for example Nashville to Knoxville, or Amarillo to Albuquerque). Arrival times, lunch, and the evening stop should show the local time where you'll be.
+5. Meals: On a ride through lunch or dinner time, the gas stop at that time should be one with food nearby.
+6. Long rides: Planning a long route should no longer stutter.
+7. Backups: Saved rides and ride history now go into your iPhone's iCloud backup.
+
+Tell us go or no-go, and anything that felt wrong.
