@@ -17,6 +17,23 @@ enum RouteSnapshotter {
         return directory
     }
 
+    /// Builds 1–15 kept snapshots out of backups. Clears that flag on every
+    /// snapshot already saved, so they move to a new phone with the ride log.
+    /// Runs once per launch, however often a ride log store is made.
+    static func includeSavedSnapshotsInBackup() {
+        _ = includedSavedSnapshotsOnce
+    }
+
+    private static let includedSavedSnapshotsOnce: Void = includeAllSnapshotsInBackup()
+
+    static func includeAllSnapshotsInBackup() {
+        let directory = snapshotsDirectory()
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        for name in names where name.hasSuffix(".png") {
+            setIncludedInBackup(directory.appendingPathComponent(name), true)
+        }
+    }
+
     /// Loads a previously saved snapshot image by filename.
     static func image(named filename: String) -> UIImage? {
         guard let url = snapshotURL(for: filename) else { return nil }
@@ -77,9 +94,10 @@ enum RouteSnapshotter {
         let url = snapshotsDirectory().appendingPathComponent(filename)
         do {
             // A snapshot is a visual map of exactly where the rider has been,
-            // so it gets the same protection as the ride log that references it.
+            // so it gets the same protection as the ride log that references
+            // it, and is backed up with it.
             try data.write(to: url, options: [.atomic, .completeFileProtection])
-            excludeFromBackup(url)
+            setIncludedInBackup(url, true)
             return filename
         } catch {
             return nil
