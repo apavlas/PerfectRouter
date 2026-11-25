@@ -692,7 +692,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// newer target time bumps `hotelGeneration` and this run publishes nothing.
     /// Build 9 leaves the feature off, so a finished route does not search.
     private func scheduleHotelSearch() {
-        guard FeatureFlags.hotelsAlongRoute else { return }
+        guard FeatureFlags.hotelsAlongRoute, proUnlocked else { return }
         hotelGeneration += 1
         let generation = hotelGeneration
         hotelTask?.cancel()
@@ -1152,7 +1152,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         // Seed session defaults from the rider's saved preferences.
         fuelRangeMeters = Self.tankMetersOverride(arguments: ProcessInfo.processInfo.arguments)
             ?? AppSettings.defaultFuelRangeMeters
-        routeStyle = AppSettings.defaultRouteStyle
+        routeStyle = Self.allowedStyle(AppSettings.defaultRouteStyle, proUnlocked: proUnlocked)
         suggestionService.sampleIntervalMeters = AppSettings.searchIntervalMeters
         // If already authorized from a previous launch, begin tracking now.
         // UI tests keep location nil so the two fixed search points are the
@@ -1193,7 +1193,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 ?? AppSettings.defaultFuelRangeMeters
         }
         // Pick up a route style changed in Settings and re-plan if it differs.
-        let newStyle = AppSettings.defaultRouteStyle
+        let newStyle = Self.allowedStyle(AppSettings.defaultRouteStyle, proUnlocked: proUnlocked)
         if newStyle != routeStyle {
             routeStyle = newStyle
             scheduleRecalculation()
@@ -1348,7 +1348,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// The hotels section is on the sheet when the feature is on and there
     /// is something to show: a search, a result, a checked hotel, or a failed lookup.
     var showsHotelSection: Bool {
-        guard FeatureFlags.hotelsAlongRoute else { return false }
+        guard FeatureFlags.hotelsAlongRoute, proUnlocked else { return false }
         return isSearchingHotels || hotelLoadFailed || !hotelEvenings.isEmpty || !bufferedHotelStops.isEmpty
     }
 
@@ -3558,6 +3558,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// and starts another. The leg cache is keyed by style, so the new
     /// pass cannot reuse the previous style's geometry.
     func setRouteStyle(_ style: RouteStyle) {
+        guard Self.allowedStyle(style, proUnlocked: proUnlocked) == style else { return }
         guard let restart = Self.styleChangeRestart(from: routeStyle, to: style) else { return }
         routeStyle = style
         UserDefaults.standard.set(style.rawValue, forKey: AppSettings.Keys.routeStyle)
@@ -3566,6 +3567,48 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             scheduleRecalculation()
         case .gas:
             scheduleGasSearch()
+        }
+    }
+
+    // MARK: - Pro
+
+    /// Whether the plan runs Pro features: hotel search, weather along the
+    /// route, and Twisty. `ContentView` keeps it in step with `ProStore`.
+    /// Unit tests leave it on.
+    var proUnlocked = true {
+        didSet {
+            guard oldValue != proUnlocked else { return }
+            proAccessChanged()
+        }
+    }
+
+    /// Twisty is Pro. Free plans the same ride Fastest; the rider's saved
+    /// preference is kept for when Pro is on again.
+    nonisolated static func allowedStyle(_ style: RouteStyle, proUnlocked: Bool) -> RouteStyle {
+        style == .twisty && !proUnlocked ? .fastest : style
+    }
+
+    /// Pro turned on (purchase, trial, restore) or off (expired, refunded):
+    /// drop or start the Pro work for the current ride.
+    private func proAccessChanged() {
+        if !proUnlocked {
+            hotelTask?.cancel()
+            hotelEvenings = []
+            isSearchingHotels = false
+            hotelLoadFailed = false
+            weatherTask?.cancel()
+            rainForecast = nil
+            isCheckingWeather = false
+            let notifier = weatherNotifier
+            Task { await notifier.updateRainWarning(nil) }
+        }
+        let style = Self.allowedStyle(AppSettings.defaultRouteStyle, proUnlocked: proUnlocked)
+        if style != routeStyle {
+            routeStyle = style
+            if !waypoints.isEmpty { scheduleRecalculation() }
+        } else if proUnlocked, !legs.isEmpty {
+            scheduleHotelSearch()
+            scheduleWeatherRefresh()
         }
     }
 
@@ -3984,7 +4027,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             await weatherNotifier.updateRainWarning(nil)
             return
         }
-        guard RouteWeatherService.isEnabled else {
+        guard RouteWeatherService.isEnabled, proUnlocked else {
             guard generation == weatherGeneration else { return }
             rainForecast = nil
             await weatherNotifier.updateRainWarning(nil)
