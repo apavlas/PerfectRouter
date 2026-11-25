@@ -3877,10 +3877,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     ) async throws -> [MKRoute]? {
         let targets = vias + [destination]
         guard !targets.isEmpty else { return nil }
-        var anchors = [origin]
-        anchors.append(contentsOf: targets)
+        let anchors = [origin] + targets
 
-        func piece(_ index: Int) async throws -> MKRoute? {
+        // Runs concurrently under `async let`, so it must be @Sendable.
+        @Sendable func piece(_ index: Int) async throws -> MKRoute? {
             guard !Task.isCancelled else { throw CancellationError() }
             let routes = try await calculateRoutes(
                 from: anchors[index],

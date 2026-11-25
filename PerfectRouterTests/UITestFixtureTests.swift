@@ -62,6 +62,7 @@ final class UITestFixtureTests: XCTestCase {
         XCTAssertFalse(viewModel.recommendedFuelPlanAccessibilityID.contains("Quick Stop"))
     }
 
+    @MainActor
     func testLaunchArgumentIsStable() {
         XCTAssertEqual(UITestStubLaunch.argument, "-UITestStubServices")
         XCTAssertFalse(UITestStubLaunch.isEnabled)
