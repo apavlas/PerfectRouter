@@ -412,7 +412,7 @@ final class FuelPlanningTests: XCTestCase {
     /// 200 mi tank, so the reserve is 170. Each stretch with nothing inside
     /// the reserve takes the nearest station still inside the tank. A 193 mi
     /// hop is a normal stop and has no note. The station more than 200 mi
-    /// from the previous stop is not a fuel stop and carries "Past full tank".
+    /// from the previous stop is not a fuel stop and carries "Past your range".
     func testNearestStationFillsEachReserveGapAndNotesOnlyAFullTankGap() {
         let mile = AppSettings.metersPerMile
         func station(_ name: String, miles: Double) -> SuggestedStop {
@@ -444,14 +444,14 @@ final class FuelPlanningTests: XCTestCase {
         XCTAssertEqual(pastNames, ["Past Tank"])
         XCTAssertTrue(plan.hasGap)
 
-        XCTAssertNil(RoutePlannerViewModel.pastFullTankNote(hopMeters: 193 * mile, tankMeters: 200 * mile))
-        XCTAssertNil(RoutePlannerViewModel.pastFullTankNote(hopMeters: 180 * mile, tankMeters: 200 * mile))
-        XCTAssertNil(RoutePlannerViewModel.pastFullTankNote(hopMeters: 175 * mile, tankMeters: 200 * mile))
+        XCTAssertNil(RoutePlannerViewModel.pastRangeNote(hopMeters: 193 * mile, tankMeters: 200 * mile))
+        XCTAssertNil(RoutePlannerViewModel.pastRangeNote(hopMeters: 180 * mile, tankMeters: 200 * mile))
+        XCTAssertNil(RoutePlannerViewModel.pastRangeNote(hopMeters: 175 * mile, tankMeters: 200 * mile))
         XCTAssertEqual(
-            RoutePlannerViewModel.pastFullTankNote(hopMeters: 230 * mile, tankMeters: 200 * mile),
-            "Past full tank"
+            RoutePlannerViewModel.pastRangeNote(hopMeters: 230 * mile, tankMeters: 200 * mile),
+            "Past your range"
         )
-        XCTAssertEqual(RoutePlannerViewModel.pastFullTankNotice, "Past full tank")
+        XCTAssertEqual(RoutePlannerViewModel.pastRangeNotice, "Past your range")
         XCTAssertFalse(plan.stops.map(\.name).joined(separator: " ").contains("No fuel within range"))
     }
 
