@@ -34,6 +34,21 @@ enum AppSettings {
         static let routeStyle = "settings.routeStyle"
         /// One-time post-splash first-run. Once true, the intro is never shown again.
         static let hasCompletedFirstRun = "settings.hasCompletedFirstRun"
+        /// The `safetyNoticeVersion` the rider last acknowledged. 0: never.
+        static let acknowledgedSafetyNoticeVersion = "settings.acknowledgedSafetyNoticeVersion"
+    }
+
+    /// The safety notice's current wording. Raise it when the wording changes
+    /// so every rider sees it once more.
+    static let safetyNoticeVersion = 1
+
+    /// Whether the safety notice still has to be shown on this launch.
+    static var needsSafetyNotice: Bool {
+        UserDefaults.standard.integer(forKey: Keys.acknowledgedSafetyNoticeVersion) < safetyNoticeVersion
+    }
+
+    static func acknowledgeSafetyNotice() {
+        UserDefaults.standard.set(safetyNoticeVersion, forKey: Keys.acknowledgedSafetyNoticeVersion)
     }
 
     static let defaultFuelRangeMilesDefault = 100.0
