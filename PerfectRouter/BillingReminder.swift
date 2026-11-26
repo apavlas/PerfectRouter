@@ -7,6 +7,7 @@ import UserNotifications
 enum BillingReminder {
     /// What the current Pro plan does next.
     struct Renewal: Equatable, Sendable {
+        /// The plan the next charge is for, which sets the price and period.
         var productID: String
         /// When the trial ends or the period renews.
         var expirationDate: Date

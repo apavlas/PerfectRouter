@@ -133,6 +133,7 @@ final class ProStore {
 
     @ObservationIgnored private let override: Bool?
     @ObservationIgnored private var updatesTask: Task<Void, Never>?
+    @ObservationIgnored private var statusTask: Task<Void, Never>?
     @ObservationIgnored private var started = false
 
     /// The last entitlement StoreKit reported, so a Pro rider's plan
@@ -160,6 +161,13 @@ final class ProStore {
                     if case .verified(let transaction) = result {
                         await transaction.finish()
                     }
+                    await self?.refreshEntitlements()
+                }
+            }
+            // Cancelling or switching plans changes renewal preferences
+            // without a new transaction, so the reminders listen here too.
+            statusTask = Task { [weak self] in
+                for await _ in Product.SubscriptionInfo.Status.updates {
                     await self?.refreshEntitlements()
                 }
             }
@@ -208,10 +216,16 @@ final class ProStore {
         guard let transaction, let expiration = transaction.expirationDate,
               let groupID = transaction.subscriptionGroupID else { return nil }
         var willAutoRenew = true
+        // The plan the next charge is for. A yearly rider who switched to
+        // monthly is still on yearly until it ends, but is charged monthly.
+        var nextProductID = transaction.productID
         if let statuses = try? await Product.SubscriptionInfo.status(for: groupID),
            let status = statuses.first(where: { $0.state == .subscribed || $0.state == .inGracePeriod || $0.state == .inBillingRetryPeriod }),
            case .verified(let info) = status.renewalInfo {
             willAutoRenew = info.willAutoRenew
+            if let preference = info.autoRenewPreference, ProAccess.productIDs.contains(preference) {
+                nextProductID = preference
+            }
         }
         let isTrial: Bool
         if #available(iOS 17.2, *) {
@@ -220,7 +234,7 @@ final class ProStore {
             isTrial = transaction.offerType == .introductory
         }
         return BillingReminder.Renewal(
-            productID: transaction.productID,
+            productID: nextProductID,
             expirationDate: expiration,
             isTrial: isTrial,
             willAutoRenew: willAutoRenew

@@ -830,6 +830,10 @@ struct ContentView: View {
                 PaywallView(feature: feature)
             }
             .manageSubscriptionsSheet(isPresented: $showingManageSubscription)
+            .onChange(of: showingManageSubscription) { _, isShowing in
+                // The rider may have cancelled or changed plan there.
+                if !isShowing { Task { await proStore.refreshEntitlements() } }
+            }
             .task { await proStore.start() }
             .onChange(of: proStore.isPro, initial: true) { _, isPro in
                 viewModel.proUnlocked = isPro

@@ -97,6 +97,9 @@ struct SettingsView: View {
                 PaywallView(feature: nil)
             }
             .manageSubscriptionsSheet(isPresented: $showingManageSubscription)
+            .onChange(of: showingManageSubscription) { _, isShowing in
+                if !isShowing { Task { await proStore.refreshEntitlements() } }
+            }
             .alert("Restore Purchases", isPresented: Binding(
                 get: { restoreMessage != nil },
                 set: { if !$0 { restoreMessage = nil } }
