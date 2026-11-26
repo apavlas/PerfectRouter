@@ -8,6 +8,9 @@ struct TwistyRouteCandidate {
     var id: Int
     var coordinates: [CLLocationCoordinate2D]
     var distance: CLLocationDistance
+    /// Apple's route or step notices mention an unpaved surface. MapKit has
+    /// no surface preference, so this is the only signal it gives.
+    var mentionsUnpavedRoad = false
 }
 
 /// A candidate that beat Fastest on curves and left its corridor.
@@ -69,11 +72,41 @@ enum TwistyRouting {
     /// count as a split of that corridor (fuel stops along the ride).
     static let plannedCorridorSlackMeters: CLLocationDistance = 8_000
 
+    /// An out-and-back this long (one way) means the line rode into a dead
+    /// end and turned around. Offset vias are dropped at arbitrary points, so
+    /// MapKit can snap one to the end of a spur road; the U-turn also scores
+    /// as a big heading change, which made such a line look "curvier".
+    static let maximumDeadEndSpurMeters: CLLocationDistance = 250
+
+    /// How close the way back must run to the way in to count as the same
+    /// road. Both directions of an undivided road share one MapKit line; the
+    /// two legs of a real hairpin are farther apart than this.
+    static let spurRetraceToleranceMeters: CLLocationDistance = 20
+
+    /// Words in Apple's notices that mean the line leaves paved road.
+    static let unpavedNoticeTerms = [
+        "unpaved", "not paved", "gravel", "dirt road", "dirt track",
+        "unsealed", "unimproved", "rough road", "4wd", "four-wheel",
+    ]
+
+    /// True when any Apple route or step notice mentions an unpaved surface.
+    static func mentionsUnpavedRoad(_ notices: [String]) -> Bool {
+        notices.contains { notice in
+            let text = notice.lowercased()
+            return unpavedNoticeTerms.contains { text.contains($0) }
+        }
+    }
+
     /// Returns the curviest candidate that meaningfully beats `fastestID`.
     /// Nil means nothing qualified — callers must not relabel Fastest.
+    ///
+    /// A candidate that rides into a dead end and back never qualifies. With
+    /// `pavedOnly` (the default), a candidate Apple flags as unpaved doesn't
+    /// either. Fastest itself is never filtered: it is the fallback.
     static func select(
         candidates: [TwistyRouteCandidate],
-        fastestID: Int
+        fastestID: Int,
+        pavedOnly: Bool = true
     ) -> TwistySelection? {
         guard let fastest = candidates.first(where: { $0.id == fastestID }),
               fastest.distance > 100,
@@ -87,6 +120,10 @@ enum TwistyRouting {
             guard candidate.coordinates.count >= 2,
                   candidate.distance.isFinite,
                   candidate.distance <= distanceLimit else { continue }
+            if pavedOnly && candidate.mentionsUnpavedRoad { continue }
+            if longestDeadEndSpurMeters(candidate.coordinates) > maximumDeadEndSpurMeters {
+                continue
+            }
 
             let curvature = curvatureRadiansPerKilometer(candidate.coordinates)
             let separation = corridorSeparationMeters(
@@ -149,6 +186,66 @@ enum TwistyRouting {
         let kilometers = length / 1_000
         guard kilometers >= 0.5 else { return 0 }
         return turn / kilometers
+    }
+
+    /// Longest stretch, one way, where the line turns around and comes back
+    /// along itself. 0 when the line never doubles back.
+    ///
+    /// The line is walked every 25 m. At each point it checks whether the
+    /// road 50 m behind and 50 m ahead are the same place (a fold), then
+    /// widens the window until the two sides part. A hairpin's legs are
+    /// already apart at 50 m, so switchbacks are not counted.
+    static func longestDeadEndSpurMeters(_ coordinates: [CLLocationCoordinate2D]) -> CLLocationDistance {
+        guard coordinates.count >= 3 else { return 0 }
+        var cumulative: [CLLocationDistance] = [0]
+        cumulative.reserveCapacity(coordinates.count)
+        for index in 1..<coordinates.count {
+            cumulative.append(cumulative[index - 1] + meters(from: coordinates[index - 1], to: coordinates[index]))
+        }
+        let total = cumulative[cumulative.count - 1]
+        let firstWindow: CLLocationDistance = 50
+        let step: CLLocationDistance = 25
+        guard total > firstWindow * 2 else { return 0 }
+
+        var longest: CLLocationDistance = 0
+        var apex = firstWindow
+        while apex <= total - firstWindow {
+            var reach = firstWindow
+            while apex - reach >= 0, apex + reach <= total,
+                  meters(
+                    from: point(at: apex - reach, coordinates, cumulative),
+                    to: point(at: apex + reach, coordinates, cumulative)
+                  ) <= spurRetraceToleranceMeters {
+                reach += step
+            }
+            let retraced = reach - step
+            if retraced >= firstWindow {
+                longest = max(longest, retraced)
+                // Skip past this spur so its neighbours aren't re-measured.
+                apex += retraced
+            }
+            apex += step
+        }
+        return longest
+    }
+
+    /// Point `distance` meters along the line, using precomputed running
+    /// distances so a long leg is a binary search, not a walk.
+    private static func point(
+        at distance: CLLocationDistance,
+        _ coordinates: [CLLocationCoordinate2D],
+        _ cumulative: [CLLocationDistance]
+    ) -> CLLocationCoordinate2D {
+        var low = 0
+        var high = cumulative.count - 1
+        while high - low > 1 {
+            let middle = (low + high) / 2
+            if cumulative[middle] < distance { low = middle } else { high = middle }
+        }
+        let span = cumulative[high] - cumulative[low]
+        guard span > 0 else { return coordinates[low] }
+        let t = min(max((distance - cumulative[low]) / span, 0), 1)
+        return interpolate(from: coordinates[low], to: coordinates[high], fraction: t)
     }
 
     /// Median sample distance from `candidate` to `baseline`. Endpoints are
@@ -240,14 +337,17 @@ enum TwistyRouting {
         from start: CLLocationCoordinate2D,
         to end: CLLocationCoordinate2D,
         style: RouteStyle,
-        departure: Date
+        departure: Date,
+        pavedOnly: Bool = true
     ) -> TwistyLegCacheKey {
         TwistyLegCacheKey(
             startLatitudeE4: roundedE4(start.latitude),
             startLongitudeE4: roundedE4(start.longitude),
             endLatitudeE4: roundedE4(end.latitude),
             endLongitudeE4: roundedE4(end.longitude),
-            style: style.rawValue,
+            // Flipping "Paved roads only" must not reuse a Twisty leg picked
+            // under the other rule. Other styles ignore the setting.
+            style: style == .twisty && !pavedOnly ? style.rawValue + ".anySurface" : style.rawValue,
             departureSlot: Int(departure.timeIntervalSince1970 / 300)
         )
     }
