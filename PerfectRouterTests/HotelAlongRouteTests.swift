@@ -553,9 +553,10 @@ final class HotelAlongRouteTests: XCTestCase {
     // MARK: - Apply, day split, tank
 
     func testOvernightHotelIsAFullTankForTheNextMorning() {
-        XCTAssertTrue(RoutePlannerViewModel.isTankFill(isGasFill: false, isOvernight: true))
-        XCTAssertTrue(RoutePlannerViewModel.isTankFill(isGasFill: true, isOvernight: false))
-        XCTAssertFalse(RoutePlannerViewModel.isTankFill(isGasFill: false, isOvernight: false))
+        XCTAssertTrue(RoutePlannerViewModel.isTankFill(isGasFill: false, isOvernight: true, overnightHasGas: true))
+        XCTAssertFalse(RoutePlannerViewModel.isTankFill(isGasFill: false, isOvernight: true, overnightHasGas: false))
+        XCTAssertTrue(RoutePlannerViewModel.isTankFill(isGasFill: true, isOvernight: false, overnightHasGas: false))
+        XCTAssertFalse(RoutePlannerViewModel.isTankFill(isGasFill: false, isOvernight: false, overnightHasGas: true))
 
         let stations = stride(from: 20_000.0, through: 240_000.0, by: 20_000.0).map { meters in
             SuggestedStop(

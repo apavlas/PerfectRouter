@@ -123,7 +123,7 @@ struct GasStationsSection: View {
             || viewModel.isPastRangeFuelStop(stop)
             || viewModel.isBeyondRemainingRange(distanceAlongRoute: along)
         let pastFullTank = stored?.pastFullTank == true
-            ? RoutePlannerViewModel.pastFullTankNotice
+            ? RoutePlannerViewModel.pastRangeNotice
             : (stored == nil ? viewModel.fuelListNote(for: stop) : nil)
         let title = stored?.title ?? stop.name
         let baseCaption = stored?.caption ?? (stop.category == .gas
@@ -504,7 +504,7 @@ struct WaypointsSection: View {
 /// Orange caption on a stop the remaining tank cannot reach.
 struct PastYourRangeLabel: View {
     var body: some View {
-        Text("Past your range")
+        Text(RoutePlannerViewModel.pastRangeNotice)
             .font(.caption2.weight(.semibold))
             .foregroundStyle(.orange)
     }
@@ -513,7 +513,7 @@ struct PastYourRangeLabel: View {
 /// Short note when the nearest station is farther than the full tank.
 struct PastFullTankLabel: View {
     var body: some View {
-        Text(RoutePlannerViewModel.pastFullTankNotice)
+        Text(RoutePlannerViewModel.pastRangeNotice)
             .font(.caption2.weight(.semibold))
             .foregroundStyle(.orange)
     }

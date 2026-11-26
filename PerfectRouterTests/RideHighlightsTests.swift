@@ -113,7 +113,6 @@ final class RideHighlightsTests: XCTestCase {
     /// with its description already set. A Charlotte–Los Angeles chord
     /// misses it by tens of miles and does not invent the stop.
     func testCadillacRanchIsAHighlightBesideAmarillo() {
-        let ranch = PlaceDescriptionReader.cadillacRanchCoordinate
         let interstate = [
             CLLocationCoordinate2D(latitude: 35.192, longitude: -101.70),
             CLLocationCoordinate2D(latitude: 35.192, longitude: -102.20),

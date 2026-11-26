@@ -16,11 +16,15 @@ A road-trip planner for motorcyclists who ride in groups. It suggests gas stops 
 
 | Free | Pro (each rider pays for their own) |
 |---|---|
-| Open and ride any shared plan | Create and share rides |
-| Basic planning with gas stops | Lodging, Twisty routing, weather along the route |
-| Navigate by handoff | GPX import and export, saved-ride history |
+| Open and ride any shared plan | Share rides, and save any number of them |
+| Basic planning with gas stops | Lodging, Twisty routing |
+| Navigate by handoff | GPX import and export, Ride History |
+| The on-screen rain warning (added 2026-11-26) | The rain alert notification |
+| Up to 3 saved rides (added 2026-11-26) | |
 
-Pro is $4.99 a month or $29.99 a year, with a 7-day free trial. The paywall shows the annual plan as the default. Payments go through StoreKit subscriptions.
+Pro is $4.99 a month or $29.99 a year, with a 7-day free trial. The paywall shows the annual plan as the default. Payments go through StoreKit subscriptions. No lifetime option for launch (decided 2026-11-26).
+
+Honest billing (added 2026-11-26): the paywall only opens from a Pro feature, never at first launch. A trial gets a notification 2 days before it ends, and an in-app row in the last 2 days. A yearly plan gets an in-app row 7 days before it renews. Both link to Apple's cancel screen.
 
 ## Version 1 scope (frozen)
 
@@ -98,7 +102,7 @@ Time budget: 15 hours a week, in three 5-hour blocks on the calendar. G0 (Perfec
 
 ## App Store listing
 
-**PerfectRouter**, subtitled "Motorcycle Trip & Group Rides." Before submitting, check that nobody else already has the name.
+**PerfectRouter**, subtitled "Motorcycle Ride & Fuel Planner" (changed 2026-11-26, from "Motorcycle Trip & Group Rides"). The listing leads with the four standouts: fuel stops from your tank range, fuel paired with meals, stops along the route, and rain at the time you pass. It says "no account needed". It doesn't claim "light on battery" until a measured ride backs it. Draft copy: [pricing and listing doc](https://claude.ai/artifact/X4JGpww5tuP78ME6DcVoPF). Before submitting, check that nobody else already has the name.
 
 ## Process
 

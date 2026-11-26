@@ -14,6 +14,9 @@ struct SettingsView: View {
     @AppStorage(AppSettings.Keys.routeStyle)
     private var routeStyle = AppSettings.routeStyleDefault
 
+    @AppStorage(AppSettings.Keys.twistyPavedOnly)
+    private var twistyPavedOnly = AppSettings.twistyPavedOnlyDefault
+
     @Environment(\.dismiss) private var dismiss
     private var proStore = ProStore.shared
     @State private var showingPaywall = false
@@ -26,7 +29,13 @@ struct SettingsView: View {
                 Section {
                     if proStore.isPro {
                         Label("Pro is on", systemImage: "checkmark.seal.fill")
-                        Button("Manage Subscription") { showingManageSubscription = true }
+                        if let reminder = proStore.billingReminderText {
+                            Text(reminder)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                        Button("Cancel or Change Plan") { showingManageSubscription = true }
+                            .accessibilityIdentifier("settings.manageSubscription")
                     } else {
                         Button {
                             showingPaywall = true
@@ -56,6 +65,17 @@ struct SettingsView: View {
                     Text("Route Style")
                 } footer: {
                     Text(routeStyle.detail)
+                }
+
+                Section {
+                    Toggle(isOn: $twistyPavedOnly) {
+                        Label("Paved roads only", systemImage: "road.lanes")
+                    }
+                    .accessibilityIdentifier("settings.twistyPavedOnly")
+                } header: {
+                    Text("Twisty")
+                } footer: {
+                    Text("Twisty skips roads Apple Maps marks as unpaved, and never routes you into a dead end and back. Apple doesn't mark every gravel road, so check the map before you ride.")
                 }
 
                 Section {
@@ -91,6 +111,9 @@ struct SettingsView: View {
                 PaywallView(feature: nil)
             }
             .manageSubscriptionsSheet(isPresented: $showingManageSubscription)
+            .onChange(of: showingManageSubscription) { _, isShowing in
+                if !isShowing { Task { await proStore.refreshEntitlements() } }
+            }
             .alert("Restore Purchases", isPresented: Binding(
                 get: { restoreMessage != nil },
                 set: { if !$0 { restoreMessage = nil } }

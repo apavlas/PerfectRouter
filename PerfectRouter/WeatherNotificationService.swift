@@ -28,7 +28,12 @@ struct WeatherNotificationService {
         center.removePendingNotificationRequests(withIdentifiers: [rainNotificationID])
         center.removeDeliveredNotifications(withIdentifiers: [rainNotificationID])
 
-        guard let message else { return }
+        // No rain on the current plan (or no plan): the timed alert for an
+        // earlier plan must not fire either.
+        guard let message else {
+            center.removePendingNotificationRequests(withIdentifiers: [rainAheadNotificationID])
+            return
+        }
 
         guard await isAuthorized() else { return }
 

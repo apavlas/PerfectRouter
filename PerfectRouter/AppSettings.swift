@@ -32,6 +32,8 @@ enum AppSettings {
         static let defaultFuelRangeMiles = "settings.defaultFuelRangeMiles"
         static let searchIntervalMiles = "settings.searchIntervalMiles"
         static let routeStyle = "settings.routeStyle"
+        /// Twisty keeps to roads Apple doesn't flag as unpaved. On by default.
+        static let twistyPavedOnly = "settings.twistyPavedOnly"
         /// One-time post-splash first-run. Once true, the intro is never shown again.
         static let hasCompletedFirstRun = "settings.hasCompletedFirstRun"
         /// The `safetyNoticeVersion` the rider last acknowledged. 0: never.
@@ -54,6 +56,7 @@ enum AppSettings {
     static let defaultFuelRangeMilesDefault = 100.0
     static let searchIntervalMilesDefault = 25.0
     static let routeStyleDefault = RouteStyle.fastest
+    static let twistyPavedOnlyDefault = true
 
     /// Registers default values so first-launch reads are sensible.
     static func registerDefaults() {
@@ -61,6 +64,7 @@ enum AppSettings {
             Keys.defaultFuelRangeMiles: defaultFuelRangeMilesDefault,
             Keys.searchIntervalMiles: searchIntervalMilesDefault,
             Keys.routeStyle: routeStyleDefault.rawValue,
+            Keys.twistyPavedOnly: twistyPavedOnlyDefault,
         ])
     }
 
@@ -68,6 +72,11 @@ enum AppSettings {
     static var defaultRouteStyle: RouteStyle {
         let raw = UserDefaults.standard.string(forKey: Keys.routeStyle)
         return raw.flatMap(RouteStyle.init(rawValue:)) ?? routeStyleDefault
+    }
+
+    /// Whether Twisty may only pick lines Apple doesn't flag as unpaved.
+    static var twistyPavedOnly: Bool {
+        UserDefaults.standard.object(forKey: Keys.twistyPavedOnly) as? Bool ?? twistyPavedOnlyDefault
     }
 
     static var defaultFuelRangeMeters: CLLocationDistance {

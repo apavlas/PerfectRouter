@@ -66,20 +66,22 @@ struct RouteWeatherService {
             guard !Task.isCancelled else { return nil }
             let location = CLLocation(latitude: sample.coordinate.latitude,
                                       longitude: sample.coordinate.longitude)
-            // Missing entitlement, network, or WeatherKit outage: skip the
-            // sample rather than failing the ride plan.
-            guard let hourly = try? await service.weather(for: location, including: .hourly(startDate: start, endDate: end)) else { continue }
+            // Missing entitlement, network, or WeatherKit outage must not
+            // fail the ride plan.
+            // A failed point is kept with no hours (unknown) so the map and
+            // the departure suggestion don't treat it as dry.
+            let hourly = try? await service.weather(for: location, including: .hourly(startDate: start, endDate: end))
             profileSamples.append(RouteRainSample(
                 coordinate: sample.coordinate,
                 distanceAlongRoute: sample.distanceAlongRoute,
                 offsetFromDeparture: sample.eta.timeIntervalSince(departure),
-                hourly: hourly.forecast.map {
+                hourly: hourly?.forecast.map {
                     HourlyRainChance(date: $0.date, chance: $0.precipitationChance)
-                }
+                } ?? []
             ))
         }
-        guard !profileSamples.isEmpty else { return nil }
-        return RouteRainProfile(samples: profileSamples)
+        let profile = RouteRainProfile(samples: profileSamples)
+        return profile.hasAnyForecast ? profile : nil
     }
 
     /// Every leg's polyline as one path with running distance, for drawing
