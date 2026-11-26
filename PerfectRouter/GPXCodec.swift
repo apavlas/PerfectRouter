@@ -73,12 +73,27 @@ enum GPXCodec {
         let origin = coordinates[0]
         let metersPerDegreeLat = 111_132.0
         let metersPerDegreeLon = 111_320.0 * cos(origin.latitude * .pi / 180)
-        let points = coordinates.map {
-            (x: ($0.longitude - origin.longitude) * metersPerDegreeLon,
-             y: ($0.latitude - origin.latitude) * metersPerDegreeLat)
+        // Unwrap longitude so a ride across the 180° meridian doesn't
+        // project neighbouring points nearly 360° apart.
+        var points: [(x: Double, y: Double)] = []
+        points.reserveCapacity(coordinates.count)
+        var previousLongitude = origin.longitude
+        var unwrappedLongitude = origin.longitude
+        for coordinate in coordinates {
+            var step = coordinate.longitude - previousLongitude
+            if step > 180 { step -= 360 } else if step < -180 { step += 360 }
+            unwrappedLongitude += step
+            previousLongitude = coordinate.longitude
+            points.append((
+                x: (unwrappedLongitude - origin.longitude) * metersPerDegreeLon,
+                y: (coordinate.latitude - origin.latitude) * metersPerDegreeLat
+            ))
         }
 
-        let chunkSize = 2_000
+        // Every chunk keeps its two ends, so chunks must be few enough for
+        // the cap to be reachable at all.
+        let cap = max(maxPoints, 2)
+        let chunkSize = max(2_000, Int((Double(points.count) / Double(max(cap / 2, 1))).rounded(.up)))
         func simplify(tolerance: Double) -> [CLLocationCoordinate2D] {
             var keep = [Bool](repeating: false, count: points.count)
             // Simplify in chunks of `chunkSize` points, keeping each chunk's
@@ -129,7 +144,8 @@ enum GPXCodec {
 
         var tolerance = max(toleranceMeters, 0.1)
         var result = simplify(tolerance: tolerance)
-        while result.count > max(maxPoints, 2) {
+        // Bounded: past ~1,000 km every point between chunk ends is dropped.
+        while result.count > cap, tolerance < 1_000_000 {
             tolerance *= 2
             result = simplify(tolerance: tolerance)
         }
