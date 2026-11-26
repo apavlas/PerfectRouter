@@ -2784,7 +2784,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// reserve, keeps its mileage and has no note.
     /// Nonisolated so the note helper and the nonisolated planner tests can
     /// read it; the class is `@MainActor`.
-    nonisolated static let pastFullTankNotice = "Past full tank"
+    nonisolated static let pastRangeNotice = "Past your range"
 
     /// FUEL-9: the leg that starts at a fuel stop is past the reserve
     /// (`fuelSafetyFactor` × tank) but still inside the tank. Nil at or
@@ -2823,7 +2823,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         if let tight = waypointTightLegWarning(at: index) {
             notices.append(tight)
         } else if waypointIsBeyondRemainingRange(at: index) {
-            notices.append("Past your range")
+            notices.append(Self.pastRangeNotice)
         }
         if let note = overnightWindowNote(at: index) {
             notices.append(note)
@@ -2879,14 +2879,14 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     }
 
     /// Nil when `hop` still fits in the tank, including a 193 mi hop on a
-    /// 200 mi tank. "Past full tank" only when the nearest station is farther
+    /// 200 mi tank. "Past your range" only when the nearest station is farther
     /// than the tank.
-    nonisolated static func pastFullTankNote(
+    nonisolated static func pastRangeNote(
         hopMeters: CLLocationDistance,
         tankMeters: CLLocationDistance
     ) -> String? {
         guard hopMeters.isFinite, tankMeters > 0, hopMeters > tankMeters else { return nil }
-        return pastFullTankNotice
+        return pastRangeNotice
     }
 
     /// Miles from the previous fill (or the start) to this station, using
@@ -2909,8 +2909,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             guard case .pastRange(let past) = entry else { return false }
             return Self.sameFuelPlace(past, stop)
         }
-        if pastEntry { return Self.pastFullTankNotice }
-        return Self.pastFullTankNote(hopMeters: fuelHopMeters(for: stop), tankMeters: fuelRangeMeters)
+        if pastEntry { return Self.pastRangeNotice }
+        return Self.pastRangeNote(hopMeters: fuelHopMeters(for: stop), tankMeters: fuelRangeMeters)
     }
 
     private var remainingRangeAnchors: [CLLocationDistance] {
@@ -5134,7 +5134,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 usesMetric: usesMetric
             )
             let checked = checkedIDs.contains(stop.id)
-            let note = pastFullTankNotice
+            let note = pastRangeNotice
             store(
                 FuelRowLabel(
                     title: stop.name,

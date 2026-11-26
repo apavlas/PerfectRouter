@@ -823,10 +823,10 @@ final class StopSelectionTests: XCTestCase {
         XCTAssertFalse(
             chosen.waypointRangeNotices(at: 1).joined(separator: " ").contains("No fuel within range")
         )
-        XCTAssertNil(RoutePlannerViewModel.pastFullTankNote(hopMeters: 193 * mile, tankMeters: 200 * mile))
+        XCTAssertNil(RoutePlannerViewModel.pastRangeNote(hopMeters: 193 * mile, tankMeters: 200 * mile))
         XCTAssertEqual(
-            RoutePlannerViewModel.pastFullTankNote(hopMeters: 230 * mile, tankMeters: 200 * mile),
-            "Past full tank"
+            RoutePlannerViewModel.pastRangeNote(hopMeters: 230 * mile, tankMeters: 200 * mile),
+            "Past your range"
         )
         let nearA = station("Near A", miles: 193)
         let past = station("Past", miles: 603)
@@ -835,8 +835,8 @@ final class StopSelectionTests: XCTestCase {
             .pastRange(past),
         ]
         XCTAssertNil(chosen.fuelListNote(for: nearA))
-        XCTAssertEqual(chosen.fuelListNote(for: past), "Past full tank")
-        XCTAssertFalse(chosen.fuelStopRidingCaption(for: nearA).contains("Past full tank"))
+        XCTAssertEqual(chosen.fuelListNote(for: past), "Past your range")
+        XCTAssertFalse(chosen.fuelStopRidingCaption(for: nearA).contains("Past your range"))
         XCTAssertFalse(chosen.fuelStopRidingCaption(for: nearA).contains("No fuel within range"))
     }
 
