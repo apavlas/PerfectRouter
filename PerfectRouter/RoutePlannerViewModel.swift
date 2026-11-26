@@ -3472,7 +3472,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 from: origin.coordinate,
                 to: destination.coordinate,
                 style: routeStyle,
-                departure: effectiveDeparture
+                departure: effectiveDeparture,
+                pavedOnly: AppSettings.twistyPavedOnly
             )
             do {
                 let outcome: (routes: [MKRoute], usedFastestFallback: Bool)
@@ -4053,12 +4054,25 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     private static func chosenTwisty(in pool: [TwistyPoolEntry], fastestID: Int) -> [MKRoute]? {
         let selection = TwistyRouting.select(
             candidates: pool.map {
-                TwistyRouteCandidate(id: $0.id, coordinates: $0.coordinates, distance: $0.distance)
+                TwistyRouteCandidate(
+                    id: $0.id,
+                    coordinates: $0.coordinates,
+                    distance: $0.distance,
+                    mentionsUnpavedRoad: TwistyRouting.mentionsUnpavedRoad(routeNotices($0.routes))
+                )
             },
-            fastestID: fastestID
+            fastestID: fastestID,
+            pavedOnly: AppSettings.twistyPavedOnly
         )
         guard let selection else { return nil }
         return pool.first { $0.id == selection.candidateID }?.routes
+    }
+
+    /// Every advisory and step notice Apple attached to these routes.
+    private static func routeNotices(_ routes: [MKRoute]) -> [String] {
+        routes.flatMap { route in
+            route.advisoryNotices + route.steps.compactMap(\.notice)
+        }
     }
 
     private static func joinedCoordinates(_ routes: [MKRoute]) -> [CLLocationCoordinate2D] {

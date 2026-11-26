@@ -14,6 +14,9 @@ struct SettingsView: View {
     @AppStorage(AppSettings.Keys.routeStyle)
     private var routeStyle = AppSettings.routeStyleDefault
 
+    @AppStorage(AppSettings.Keys.twistyPavedOnly)
+    private var twistyPavedOnly = AppSettings.twistyPavedOnlyDefault
+
     @Environment(\.dismiss) private var dismiss
     private var proStore = ProStore.shared
     @State private var showingPaywall = false
@@ -56,6 +59,17 @@ struct SettingsView: View {
                     Text("Route Style")
                 } footer: {
                     Text(routeStyle.detail)
+                }
+
+                Section {
+                    Toggle(isOn: $twistyPavedOnly) {
+                        Label("Paved roads only", systemImage: "road.lanes")
+                    }
+                    .accessibilityIdentifier("settings.twistyPavedOnly")
+                } header: {
+                    Text("Twisty")
+                } footer: {
+                    Text("Twisty skips roads Apple Maps marks as unpaved, and never routes you into a dead end and back. Apple doesn't mark every gravel road, so check the map before you ride.")
                 }
 
                 Section {
