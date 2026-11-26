@@ -2361,7 +2361,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         )
         // Surface the same warning shown on screen as a local notification so
         // the rider is alerted even if they've stopped looking at the app.
-        await weatherNotifier.updateRainWarning(rainWarning)
+        // The alerts are Pro; free riders see the warning and colours on screen.
+        await weatherNotifier.updateRainWarning(proUnlocked ? rainWarning : nil)
         await scheduleRainAheadAlert(departure: departure)
     }
 
@@ -2369,7 +2370,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// first wet stretch. iOS delivers it on time even when the app is
     /// suspended or closed mid-ride, because the system holds the trigger.
     private func scheduleRainAheadAlert(departure: Date) async {
-        guard let profile = rainProfile,
+        guard proUnlocked,
+              let profile = rainProfile,
               let first = profile.firstRain(departure: departure, threshold: Self.rainChanceThreshold) else {
             await weatherNotifier.scheduleRainAhead(nil)
             return
@@ -3748,7 +3750,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             hotelEvenings = []
             isSearchingHotels = false
             hotelLoadFailed = false
-            // Keep the on-screen rain warning; only the alert is Pro.
+            // Keep the on-screen rain warning and map colours; only the
+            // alerts are Pro.
             let notifier = weatherNotifier
             Task {
                 await notifier.updateRainWarning(nil)
@@ -4213,11 +4216,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         let departure = effectiveDeparture
         let profile = await weatherService.rainProfile(alongLegs: legs, departure: departure)
         guard !Task.isCancelled, generation == weatherGeneration else { return }
-        rainForecast = forecast
-        // Surface the same warning shown on screen as a local notification so
-        // the rider is alerted even if they've stopped looking at the app.
-        // The alert is Pro; free riders see the warning on screen.
-        await weatherNotifier.updateRainWarning(proUnlocked ? rainWarning : nil)
+        await applyRainProfile(profile, departure: departure)
     }
 
     // MARK: - Gas stations & automatic fuel planning

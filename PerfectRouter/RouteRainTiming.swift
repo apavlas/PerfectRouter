@@ -26,11 +26,17 @@ struct RouteRainSample: Equatable {
     }
 }
 
-/// Every forecast point on the route, fetched once. Because each point keeps
+/// Every forecast point on the route, fetched once. A point whose forecast
+/// couldn't be fetched stays in the list with no hours, so it reads as
+/// unknown: it draws as the plain line, and no departure is suggested as
+/// dry while any point is unknown. Because each point keeps
 /// its whole hourly forecast, rain for a different departure is worked out
 /// here without asking WeatherKit again.
 struct RouteRainProfile: Equatable {
     var samples: [RouteRainSample]
+
+    /// True when at least one point has forecast hours.
+    var hasAnyForecast: Bool { samples.contains { !$0.hourly.isEmpty } }
 
     /// Chance at `sample` for a ride leaving at `departure`: the hourly entry
     /// closest to when the rider passes. Nil when that time is more than 90
@@ -139,10 +145,12 @@ enum RouteRainTiming {
             }
             let chance = chances[sampleIndex]
             let band = RainBand(chance: chance)
-            if var last = segments.last, last.band == band {
-                last.coordinates.append(point.coordinate)
-                last.chance = max(last.chance ?? 0, chance ?? 0)
-                segments[segments.count - 1] = last
+            if let last = segments.last, last.band == band {
+                // Append in place: copying the last segment out would copy its
+                // whole coordinate array on every point of a long ride.
+                let index = segments.count - 1
+                segments[index].coordinates.append(point.coordinate)
+                segments[index].chance = max(last.chance ?? 0, chance ?? 0)
             } else {
                 // Start the new stretch at the previous point so the line
                 // has no gap where the colour changes.

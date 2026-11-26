@@ -1,3 +1,4 @@
+import MessageUI
 import SwiftUI
 import MapKit
 import UIKit
@@ -88,6 +89,8 @@ struct ContentView: View {
     /// Full place description. Held here, not on a list row: a `.sheet` inside
     /// a `List` section does not present when the row handles the tap.
     @State private var openPlaceDescription: OpenPlaceDescription?
+    /// Safety check-in texts. Presented from the List for the same reason.
+    @State private var checkIns = RideCheckInController.shared
     @State private var placeSearchText = ""
     @State private var placeSearchResults: [MKMapItem] = []
 
@@ -682,6 +685,21 @@ struct ContentView: View {
                 )
             }
             .accessibilityIdentifier("planningList")
+            .sheet(item: Binding(
+                get: { checkIns.composing },
+                set: { checkIns.composing = $0 }
+            )) { text in
+                MessageComposer(
+                    recipients: text.recipients,
+                    body: text.body,
+                    onFinish: {
+                        checkIns.composing = nil
+                        handOff(after: text)
+                    },
+                    onResult: { checkIns.composerFinished(text, result: $0) }
+                )
+                .ignoresSafeArea()
+            }
             .sheet(item: $openPlaceDescription) { item in
                 PlaceDescriptionSheet(
                     name: item.name,
@@ -1082,6 +1100,17 @@ struct ContentView: View {
     }
 
     /// Loads a saved ride and frames its start on the map.
+    /// After the check-in start text closes, sent or not, hand the ride off
+    /// as the rider asked.
+    private func handOff(after text: CheckInText) {
+        guard let target = text.then else { return }
+        viewModel.logCurrentRide()
+        switch target {
+        case .apple: NavigationLauncher.openInAppleMaps(viewModel.waypoints)
+        case .google: NavigationLauncher.openInGoogleMaps(viewModel.waypoints)
+        }
+    }
+
     private func loadSaved(_ saved: SavedRoute) {
         viewModel.loadSavedRoute(saved)
         if let start = viewModel.waypoints.first {

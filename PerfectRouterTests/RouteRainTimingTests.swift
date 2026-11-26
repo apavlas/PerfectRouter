@@ -75,6 +75,14 @@ final class RouteRainTimingTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(suggestion!.departure, time(10, 30))
     }
 
+    func testNoDrySuggestionWhileAPointHasNoForecast() {
+        var partial = profile()
+        // The second point's WeatherKit request failed.
+        partial.samples[1].hourly = []
+        XCTAssertNil(RouteRainTiming.betterDeparture(profile: partial, departure: time(9), now: time(8)))
+        XCTAssertTrue(partial.hasAnyForecast)
+    }
+
     func testSegmentsSplitWhereTheBandChanges() {
         let dryThenWet = RouteRainProfile(samples: [
             RouteRainSample(
