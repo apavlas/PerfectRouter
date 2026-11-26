@@ -253,4 +253,20 @@ final class GPXCodecTests: XCTestCase {
         XCTAssertLessThanOrEqual(thinned.count, 1_000)
         XCTAssertGreaterThanOrEqual(thinned.count, 2)
     }
+
+    func testThinningReachesASmallCapOnALongLine() {
+        let line = (0..<5_000).map { CLLocationCoordinate2D(latitude: 35, longitude: -100 + Double($0) * 0.0001) }
+        XCTAssertLessThanOrEqual(GPXCodec.thinned(line, maxPoints: 2).count, 2)
+    }
+
+    func testThinningKeepsADetourAcrossTheDateline() {
+        // ~107 m west of the start, then across 180°: the middle point is a
+        // real corner and must stay.
+        let track = [
+            CLLocationCoordinate2D(latitude: -16.8, longitude: 179.999),
+            CLLocationCoordinate2D(latitude: -16.8, longitude: 179.998),
+            CLLocationCoordinate2D(latitude: -16.8, longitude: -179.999),
+        ]
+        XCTAssertEqual(GPXCodec.thinned(track).count, 3)
+    }
 }
