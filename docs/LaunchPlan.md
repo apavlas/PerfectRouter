@@ -57,6 +57,17 @@ Time budget: 15 hours a week, in three 5-hour blocks on the calendar. G0 (Perfec
 - #67 (time zone) and #69 (meal preference never fires) are bugs in shipped features, so they're in.
 - Every other new issue is labeled `post-launch`. From 2026-11-24 on, only bugs enter version 1.
 
+## Competitor-scan additions (added 2026-11-26)
+
+Anton chose to keep these in version 1, as exceptions to the freeze rule. They are merged on `main`:
+
+- **Twisty stays on paved roads** (#86): no dead-end out-and-backs, and a "Paved roads only" setting, on by default. A bug fix in a shipped feature.
+- **Rain on the route map** (#88, fixed in #91): the line is coloured by rain chance when you pass, with a "leave at …" suggestion. Includes a timed mid-ride rain alert, which fixes the rain notification never firing during a ride.
+- **Ride safety check-in** (#89, fixed in #91): texts a Rider Group at the start with an ETA and a time to call, with reminders at the ETA and "I've arrived" and "Running late" texts. Runs on the phone only, with no server.
+- **GPX export for Garmin and TomTom** (#90): stops as an ordered route, and the track thinned to at most 10,000 points. A bug fix in a shipped feature. Derek will test the import on his unit.
+
+The PRs carrying the `post-launch` label (#88, #89) are in version 1 anyway. Nothing else from the competitor scan enters version 1 without the same decision.
+
 ## Build order, Dec 2026 – mid-Jan 2027
 
 1. Merge the audit must-fix PRs #72 (no silent data wipe), #73 (GPX cap), and #74 (directions backoff).
