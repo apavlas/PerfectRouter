@@ -66,7 +66,7 @@ Anton chose to keep these in version 1, as exceptions to the freeze rule. They a
 - **Ride safety check-in** (#89, fixed in #91): texts a Rider Group at the start with an ETA and a time to call, with reminders at the ETA and "I've arrived" and "Running late" texts. Runs on the phone only, with no server.
 - **GPX export for Garmin and TomTom** (#90): stops as an ordered route, and the track thinned to at most 10,000 points. A bug fix in a shipped feature. Derek will test the import on his unit.
 
-The PRs carrying the `post-launch` label (#88, #89) are in version 1 anyway. Nothing else from the competitor scan enters version 1 without the same decision.
+#88 and #89 were first labeled `post-launch`; that label is now removed. Nothing else from the competitor scan enters version 1 without the same decision.
 
 ## Build order, Dec 2026 – mid-Jan 2027
 
