@@ -128,6 +128,8 @@ private struct FuelSelectionWaypoint: Sendable {
     var longitude: Double
     var isGasFill: Bool
     var isOvernight: Bool
+    /// An Overnight with gas close by on the route, so a Fill (#61).
+    var overnightHasGas: Bool
     var key: String
 }
 
@@ -2680,7 +2682,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             buffered: bufferedGasStops.map(station),
             pastRangeIDs: pastRangeIDs,
             pastRangeKeys: pastRangeKeys,
-            waypoints: waypoints.map { waypoint in
+            waypoints: waypoints.enumerated().map { index, waypoint in
                 FuelSelectionWaypoint(
                     id: waypoint.id,
                     name: waypoint.name,
@@ -2688,6 +2690,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                     longitude: waypoint.coordinate.longitude,
                     isGasFill: waypoint.isGasFill,
                     isOvernight: waypoint.isOvernight,
+                    overnightHasGas: overnightHasGas(at: index),
                     key: Self.coordinateKey(waypoint.coordinate)
                 )
             },
@@ -2873,7 +2876,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// reserve, keeps its mileage and has no note.
     /// Nonisolated so the note helper and the nonisolated planner tests can
     /// read it; the class is `@MainActor`.
-    nonisolated static let pastFullTankNotice = "Past full tank"
+    nonisolated static let pastRangeNotice = "Past your range"
 
     /// FUEL-9: the leg that starts at a fuel stop is past the reserve
     /// (`fuelSafetyFactor` × tank) but still inside the tank. Nil at or
@@ -2912,7 +2915,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         if let tight = waypointTightLegWarning(at: index) {
             notices.append(tight)
         } else if waypointIsBeyondRemainingRange(at: index) {
-            notices.append("Past your range")
+            notices.append(Self.pastRangeNotice)
+        }
+        if let note = overnightNoGasNote(at: index) {
+            notices.append(note)
         }
         if let note = overnightWindowNote(at: index) {
             notices.append(note)
@@ -2958,7 +2964,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         var next = waypoints.count - 1
         for later in (index + 1)..<waypoints.count where Self.isTankFill(
             isGasFill: waypoints[later].isGasFill,
-            isOvernight: waypoints[later].isOvernight
+            isOvernight: waypoints[later].isOvernight,
+            overnightHasGas: overnightHasGas(at: later)
         ) {
             next = later
             break
@@ -2968,14 +2975,14 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     }
 
     /// Nil when `hop` still fits in the tank, including a 193 mi hop on a
-    /// 200 mi tank. "Past full tank" only when the nearest station is farther
+    /// 200 mi tank. "Past your range" only when the nearest station is farther
     /// than the tank.
-    nonisolated static func pastFullTankNote(
+    nonisolated static func pastRangeNote(
         hopMeters: CLLocationDistance,
         tankMeters: CLLocationDistance
     ) -> String? {
         guard hopMeters.isFinite, tankMeters > 0, hopMeters > tankMeters else { return nil }
-        return pastFullTankNotice
+        return pastRangeNotice
     }
 
     /// Miles from the previous fill (or the start) to this station, using
@@ -2998,8 +3005,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             guard case .pastRange(let past) = entry else { return false }
             return Self.sameFuelPlace(past, stop)
         }
-        if pastEntry { return Self.pastFullTankNotice }
-        return Self.pastFullTankNote(hopMeters: fuelHopMeters(for: stop), tankMeters: fuelRangeMeters)
+        if pastEntry { return Self.pastRangeNotice }
+        return Self.pastRangeNote(hopMeters: fuelHopMeters(for: stop), tankMeters: fuelRangeMeters)
     }
 
     private var remainingRangeAnchors: [CLLocationDistance] {
@@ -3396,10 +3403,64 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         )
     }
 
-    /// A gas stop or an overnight hotel. The hotel is not a pump; the tank
-    /// is full because the next morning starts there.
-    nonisolated static func isTankFill(isGasFill: Bool, isOvernight: Bool) -> Bool {
-        isGasFill || isOvernight
+    /// A gas stop, or an overnight hotel with gas close by on the route
+    /// (GLOSSARY.md: Fill, #61). Without gas near the hotel, fuel carries
+    /// over from the previous Fill.
+    nonisolated static func isTankFill(isGasFill: Bool, isOvernight: Bool, overnightHasGas: Bool) -> Bool {
+        isGasFill || (isOvernight && overnightHasGas)
+    }
+
+    /// An Overnight is a Fill only when a gas station is within this far
+    /// along the route, either side of it (#61).
+    nonisolated static let overnightGasMeters: CLLocationDistance = 5 * AppSettings.metersPerMile
+    /// A station farther than this off the route doesn't count for the
+    /// Overnight, even when it's close to the hotel.
+    nonisolated static let overnightGasMaxDetourMeters: CLLocationDistance = AppSettings.metersPerMile
+    nonisolated static let noGasNearHotelNotice = "No gas near this hotel"
+
+    /// Whether a pump on the route sits within 5 mi along it of the
+    /// Overnight at `overnightMeters`. `pumps` are (distance along the
+    /// route, distance off it).
+    nonisolated static func overnightHasGas(
+        overnightMeters: CLLocationDistance,
+        pumps: [(distance: CLLocationDistance, detour: CLLocationDistance)]
+    ) -> Bool {
+        guard overnightMeters.isFinite else { return false }
+        return pumps.contains { pump in
+            pump.distance.isFinite && pump.detour.isFinite
+                && pump.detour <= overnightGasMaxDetourMeters
+                && abs(pump.distance - overnightMeters) <= overnightGasMeters
+        }
+    }
+
+    /// Real pumps found along the route, for the Overnight check.
+    private var overnightCheckPumps: [(distance: CLLocationDistance, detour: CLLocationDistance)] {
+        let highlights = rideHighlights
+        return gasStations
+            .filter { FuelPumpCheck.isFuelPump($0, highlights: highlights) }
+            .map { (distance: $0.distanceAlongRoute, detour: $0.detourMeters) }
+    }
+
+    /// Whether the waypoint at `index` is an Overnight with gas close by.
+    /// False for every other waypoint.
+    func overnightHasGas(at index: Int) -> Bool {
+        guard waypoints.indices.contains(index), waypoints[index].isOvernight else { return false }
+        return Self.overnightHasGas(overnightMeters: waypointDistance(at: index), pumps: overnightCheckPumps)
+    }
+
+    /// "No gas near this hotel" on an Overnight once the gas search near it
+    /// is done and found no pump on the route within 5 mi (#61).
+    func overnightNoGasNote(at index: Int) -> String? {
+        guard waypoints.indices.contains(index), index > 0, index < waypoints.count - 1,
+              waypoints[index].isOvernight,
+              cachedDriveLegs.count + 1 == waypoints.count,
+              !isSearchingGas else { return nil }
+        let distance = waypointDistance(at: index)
+        // A failed search sample near the hotel: unknown, so say nothing.
+        if unsearchedFuelDistances.contains(where: { abs($0 - distance) <= Self.fuelSearchCoverStepMeters }) {
+            return nil
+        }
+        return overnightHasGas(at: index) ? nil : Self.noGasNearHotelNotice
     }
 
     nonisolated static func samePlace(_ lhs: SuggestedStop, _ rhs: SuggestedStop) -> Bool {
@@ -3501,7 +3562,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 from: origin.coordinate,
                 to: destination.coordinate,
                 style: routeStyle,
-                departure: effectiveDeparture
+                departure: effectiveDeparture,
+                pavedOnly: AppSettings.twistyPavedOnly
             )
             do {
                 let outcome: (routes: [MKRoute], usedFastestFallback: Bool)
@@ -3662,8 +3724,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     // MARK: - Pro
 
-    /// Whether the plan runs Pro features: hotel search, weather along the
-    /// route, and Twisty. `ContentView` keeps it in step with `ProStore`.
+    /// Whether the plan runs Pro features: hotel search, the rain alert
+    /// notification, and Twisty. The on-screen rain warning is free. `ContentView` keeps it in step with `ProStore`.
     /// Unit tests leave it on.
     var proUnlocked = true {
         didSet {
@@ -3686,10 +3748,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             hotelEvenings = []
             isSearchingHotels = false
             hotelLoadFailed = false
-            weatherTask?.cancel()
-            rainForecast = nil
-            clearRainOverlay()
-            isCheckingWeather = false
+            // Keep the on-screen rain warning; only the alert is Pro.
             let notifier = weatherNotifier
             Task {
                 await notifier.updateRainWarning(nil)
@@ -3971,10 +4030,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     ) async throws -> [MKRoute]? {
         let targets = vias + [destination]
         guard !targets.isEmpty else { return nil }
-        var anchors = [origin]
-        anchors.append(contentsOf: targets)
+        let anchors = [origin] + targets
 
-        func piece(_ index: Int) async throws -> MKRoute? {
+        // Runs concurrently under `async let`, so it must be @Sendable.
+        @Sendable func piece(_ index: Int) async throws -> MKRoute? {
             guard !Task.isCancelled else { throw CancellationError() }
             let routes = try await calculateRoutes(
                 from: anchors[index],
@@ -4086,12 +4145,25 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     private static func chosenTwisty(in pool: [TwistyPoolEntry], fastestID: Int) -> [MKRoute]? {
         let selection = TwistyRouting.select(
             candidates: pool.map {
-                TwistyRouteCandidate(id: $0.id, coordinates: $0.coordinates, distance: $0.distance)
+                TwistyRouteCandidate(
+                    id: $0.id,
+                    coordinates: $0.coordinates,
+                    distance: $0.distance,
+                    mentionsUnpavedRoad: TwistyRouting.mentionsUnpavedRoad(routeNotices($0.routes))
+                )
             },
-            fastestID: fastestID
+            fastestID: fastestID,
+            pavedOnly: AppSettings.twistyPavedOnly
         )
         guard let selection else { return nil }
         return pool.first { $0.id == selection.candidateID }?.routes
+    }
+
+    /// Every advisory and step notice Apple attached to these routes.
+    private static func routeNotices(_ routes: [MKRoute]) -> [String] {
+        routes.flatMap { route in
+            route.advisoryNotices + route.steps.compactMap(\.notice)
+        }
     }
 
     private static func joinedCoordinates(_ routes: [MKRoute]) -> [CLLocationCoordinate2D] {
@@ -4123,7 +4195,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             await weatherNotifier.scheduleRainAhead(nil)
             return
         }
-        guard RouteWeatherService.isEnabled, proUnlocked else {
+        // The on-screen warning is free. The notification is Pro.
+        guard RouteWeatherService.isEnabled else {
             guard generation == weatherGeneration else { return }
             rainForecast = nil
             clearRainOverlay()
@@ -4140,7 +4213,11 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         let departure = effectiveDeparture
         let profile = await weatherService.rainProfile(alongLegs: legs, departure: departure)
         guard !Task.isCancelled, generation == weatherGeneration else { return }
-        await applyRainProfile(profile, departure: departure)
+        rainForecast = forecast
+        // Surface the same warning shown on screen as a local notification so
+        // the rider is alerted even if they've stopped looking at the app.
+        // The alert is Pro; free riders see the warning on screen.
+        await weatherNotifier.updateRainWarning(proUnlocked ? rainWarning : nil)
     }
 
     // MARK: - Gas stations & automatic fuel planning
@@ -4869,7 +4946,11 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     ) -> [CLLocationDistance] {
         guard input.countsGasFills else { return [] }
         return input.waypoints.compactMap { waypoint in
-            guard Self.isTankFill(isGasFill: waypoint.isGasFill, isOvernight: waypoint.isOvernight) else {
+            guard Self.isTankFill(
+                isGasFill: waypoint.isGasFill,
+                isOvernight: waypoint.isOvernight,
+                overnightHasGas: waypoint.overnightHasGas
+            ) else {
                 return nil
             }
             return distances[waypoint.id] ?? 0
@@ -5230,7 +5311,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 usesMetric: usesMetric
             )
             let checked = checkedIDs.contains(stop.id)
-            let note = pastFullTankNotice
+            let note = pastRangeNotice
             store(
                 FuelRowLabel(
                     title: stop.name,
@@ -5920,15 +6001,23 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         guard !legs.isEmpty || plannedCorridor.contains(where: { $0.count > 1 }) else { return [] }
         let cache = distanceAlongRouteCache
         guard cache.generation == routeGeometryGeneration else {
-            return waypoints.compactMap { waypoint in
-                guard Self.isTankFill(isGasFill: waypoint.isGasFill, isOvernight: waypoint.isOvernight) else {
+            return waypoints.enumerated().compactMap { index, waypoint in
+                guard Self.isTankFill(
+                    isGasFill: waypoint.isGasFill,
+                    isOvernight: waypoint.isOvernight,
+                    overnightHasGas: overnightHasGas(at: index)
+                ) else {
                     return nil
                 }
                 return 0
             }
         }
-        return waypoints.compactMap { waypoint in
-            guard Self.isTankFill(isGasFill: waypoint.isGasFill, isOvernight: waypoint.isOvernight) else {
+        return waypoints.enumerated().compactMap { index, waypoint in
+            guard Self.isTankFill(
+                isGasFill: waypoint.isGasFill,
+                isOvernight: waypoint.isOvernight,
+                overnightHasGas: overnightHasGas(at: index)
+            ) else {
                 return nil
             }
             return cache.distances[waypoint.id] ?? 0

@@ -367,7 +367,7 @@ private struct FuelPlanRows: View {
             let title = stored?.title ?? stop.name
             let caption = stored?.caption ?? viewModel.fuelStopRidingCaption(for: stop)
             let note = stored?.pastFullTank == true
-                ? RoutePlannerViewModel.pastFullTankNotice
+                ? RoutePlannerViewModel.pastRangeNotice
                 : viewModel.fuelListNote(for: stop)
             Button {
                 focusFromSidebar(stop)

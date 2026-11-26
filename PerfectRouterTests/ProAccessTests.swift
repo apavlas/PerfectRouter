@@ -63,15 +63,79 @@ final class ProAccessTests: XCTestCase {
         XCTAssertEqual(model.routeStyle, .avoidHighways)
     }
 
-    /// Losing Pro clears the Pro parts of the current plan.
-    func testLosingProClearsWeatherAndHotels() {
+    /// Losing Pro clears hotels but keeps the on-screen rain warning, which
+    /// is free.
+    func testLosingProClearsHotelsButKeepsRainWarning() {
         let model = RoutePlannerViewModel()
         model.rainForecast = RouteRainForecast(maxChance: 0.8, distanceOfMaxChance: 1_000)
         model.proUnlocked = false
-        XCTAssertNil(model.rainForecast)
-        XCTAssertNil(model.rainWarning)
+        XCTAssertNotNil(model.rainForecast)
+        XCTAssertNotNil(model.rainWarning)
         XCTAssertFalse(model.showsHotelSection)
         XCTAssertTrue(model.hotelEvenings.isEmpty)
+    }
+
+    func testFreeKeepsThreeSavedRoutesAndProKeepsAny() {
+        XCTAssertEqual(ProAccess.freeSavedRouteLimit, 3)
+        XCTAssertTrue(ProAccess.canSaveRoute(savedCount: 0, isPro: false))
+        XCTAssertTrue(ProAccess.canSaveRoute(savedCount: 2, isPro: false))
+        XCTAssertFalse(ProAccess.canSaveRoute(savedCount: 3, isPro: false))
+        XCTAssertFalse(ProAccess.canSaveRoute(savedCount: 8, isPro: false))
+        XCTAssertTrue(ProAccess.canSaveRoute(savedCount: 8, isPro: true))
+    }
+
+    // MARK: Billing reminders
+
+    private func renewal(_ productID: String, inDays days: Double, trial: Bool = false, renews: Bool = true) -> BillingReminder.Renewal {
+        BillingReminder.Renewal(
+            productID: productID,
+            expirationDate: now.addingTimeInterval(days * 86_400),
+            isTrial: trial,
+            willAutoRenew: renews
+        )
+    }
+
+    func testTrialReminderShowsInTheLastTwoDays() {
+        XCTAssertFalse(BillingReminder.isDue(renewal(ProAccess.yearlyProductID, inDays: 3, trial: true), now: now))
+        XCTAssertTrue(BillingReminder.isDue(renewal(ProAccess.yearlyProductID, inDays: 2, trial: true), now: now))
+        XCTAssertTrue(BillingReminder.isDue(renewal(ProAccess.monthlyProductID, inDays: 0.5, trial: true), now: now))
+        XCTAssertFalse(BillingReminder.isDue(renewal(ProAccess.yearlyProductID, inDays: -1, trial: true), now: now))
+    }
+
+    func testYearlyRenewalReminderShowsInTheLastWeekAndMonthlyNever() {
+        XCTAssertFalse(BillingReminder.isDue(renewal(ProAccess.yearlyProductID, inDays: 8), now: now))
+        XCTAssertTrue(BillingReminder.isDue(renewal(ProAccess.yearlyProductID, inDays: 7), now: now))
+        XCTAssertFalse(BillingReminder.isDue(renewal(ProAccess.monthlyProductID, inDays: 1), now: now))
+    }
+
+    /// A rider who already cancelled won't be charged, so there's nothing to remind.
+    func testCancelledPlanGetsNoReminder() {
+        let cancelled = renewal(ProAccess.yearlyProductID, inDays: 1, trial: true, renews: false)
+        XCTAssertFalse(BillingReminder.isDue(cancelled, now: now))
+        XCTAssertNil(BillingReminder.trialNotificationDate(for: cancelled, now: now))
+    }
+
+    func testTrialNotificationFiresTwoDaysBeforeTheEnd() {
+        let trial = renewal(ProAccess.yearlyProductID, inDays: 7, trial: true)
+        XCTAssertEqual(BillingReminder.trialNotificationDate(for: trial, now: now), now.addingTimeInterval(5 * 86_400))
+        XCTAssertNil(BillingReminder.trialNotificationDate(for: renewal(ProAccess.yearlyProductID, inDays: 1, trial: true), now: now))
+        XCTAssertNil(BillingReminder.trialNotificationDate(for: renewal(ProAccess.yearlyProductID, inDays: 7), now: now))
+        XCTAssertNil(BillingReminder.trialNotificationDate(for: nil, now: now))
+    }
+
+    func testReminderTextNamesDateAndPrice() {
+        XCTAssertEqual(
+            BillingReminder.text(for: renewal(ProAccess.yearlyProductID, inDays: 2, trial: true), dateText: "Friday, Dec 4", price: "$29.99"),
+            "Your Pro trial ends Friday, Dec 4. After that it's $29.99 a year unless you cancel."
+        )
+        XCTAssertEqual(
+            BillingReminder.text(for: renewal(ProAccess.yearlyProductID, inDays: 5), dateText: "Friday, Dec 4", price: "$29.99"),
+            "Pro renews Friday, Dec 4 for $29.99 a year."
+        )
+        XCTAssertEqual(
+            BillingReminder.text(for: renewal(ProAccess.yearlyProductID, inDays: 5), dateText: "Friday, Dec 4", price: nil),
+            "Pro renews Friday, Dec 4."
+        )
     }
 
     // MARK: Paywall wording
