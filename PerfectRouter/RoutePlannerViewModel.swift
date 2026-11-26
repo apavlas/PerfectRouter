@@ -128,6 +128,8 @@ private struct FuelSelectionWaypoint: Sendable {
     var longitude: Double
     var isGasFill: Bool
     var isOvernight: Bool
+    /// An Overnight with gas close by on the route, so a Fill (#61).
+    var overnightHasGas: Bool
     var key: String
 }
 
@@ -2591,7 +2593,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             buffered: bufferedGasStops.map(station),
             pastRangeIDs: pastRangeIDs,
             pastRangeKeys: pastRangeKeys,
-            waypoints: waypoints.map { waypoint in
+            waypoints: waypoints.enumerated().map { index, waypoint in
                 FuelSelectionWaypoint(
                     id: waypoint.id,
                     name: waypoint.name,
@@ -2599,6 +2601,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                     longitude: waypoint.coordinate.longitude,
                     isGasFill: waypoint.isGasFill,
                     isOvernight: waypoint.isOvernight,
+                    overnightHasGas: overnightHasGas(at: index),
                     key: Self.coordinateKey(waypoint.coordinate)
                 )
             },
@@ -2825,6 +2828,9 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         } else if waypointIsBeyondRemainingRange(at: index) {
             notices.append(Self.pastRangeNotice)
         }
+        if let note = overnightNoGasNote(at: index) {
+            notices.append(note)
+        }
         if let note = overnightWindowNote(at: index) {
             notices.append(note)
         }
@@ -2869,7 +2875,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         var next = waypoints.count - 1
         for later in (index + 1)..<waypoints.count where Self.isTankFill(
             isGasFill: waypoints[later].isGasFill,
-            isOvernight: waypoints[later].isOvernight
+            isOvernight: waypoints[later].isOvernight,
+            overnightHasGas: overnightHasGas(at: later)
         ) {
             next = later
             break
@@ -3307,10 +3314,64 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         )
     }
 
-    /// A gas stop or an overnight hotel. The hotel is not a pump; the tank
-    /// is full because the next morning starts there.
-    nonisolated static func isTankFill(isGasFill: Bool, isOvernight: Bool) -> Bool {
-        isGasFill || isOvernight
+    /// A gas stop, or an overnight hotel with gas close by on the route
+    /// (GLOSSARY.md: Fill, #61). Without gas near the hotel, fuel carries
+    /// over from the previous Fill.
+    nonisolated static func isTankFill(isGasFill: Bool, isOvernight: Bool, overnightHasGas: Bool) -> Bool {
+        isGasFill || (isOvernight && overnightHasGas)
+    }
+
+    /// An Overnight is a Fill only when a gas station is within this far
+    /// along the route, either side of it (#61).
+    nonisolated static let overnightGasMeters: CLLocationDistance = 5 * AppSettings.metersPerMile
+    /// A station farther than this off the route doesn't count for the
+    /// Overnight, even when it's close to the hotel.
+    nonisolated static let overnightGasMaxDetourMeters: CLLocationDistance = AppSettings.metersPerMile
+    nonisolated static let noGasNearHotelNotice = "No gas near this hotel"
+
+    /// Whether a pump on the route sits within 5 mi along it of the
+    /// Overnight at `overnightMeters`. `pumps` are (distance along the
+    /// route, distance off it).
+    nonisolated static func overnightHasGas(
+        overnightMeters: CLLocationDistance,
+        pumps: [(distance: CLLocationDistance, detour: CLLocationDistance)]
+    ) -> Bool {
+        guard overnightMeters.isFinite else { return false }
+        return pumps.contains { pump in
+            pump.distance.isFinite && pump.detour.isFinite
+                && pump.detour <= overnightGasMaxDetourMeters
+                && abs(pump.distance - overnightMeters) <= overnightGasMeters
+        }
+    }
+
+    /// Real pumps found along the route, for the Overnight check.
+    private var overnightCheckPumps: [(distance: CLLocationDistance, detour: CLLocationDistance)] {
+        let highlights = rideHighlights
+        return gasStations
+            .filter { FuelPumpCheck.isFuelPump($0, highlights: highlights) }
+            .map { (distance: $0.distanceAlongRoute, detour: $0.detourMeters) }
+    }
+
+    /// Whether the waypoint at `index` is an Overnight with gas close by.
+    /// False for every other waypoint.
+    func overnightHasGas(at index: Int) -> Bool {
+        guard waypoints.indices.contains(index), waypoints[index].isOvernight else { return false }
+        return Self.overnightHasGas(overnightMeters: waypointDistance(at: index), pumps: overnightCheckPumps)
+    }
+
+    /// "No gas near this hotel" on an Overnight once the gas search near it
+    /// is done and found no pump on the route within 5 mi (#61).
+    func overnightNoGasNote(at index: Int) -> String? {
+        guard waypoints.indices.contains(index), index > 0, index < waypoints.count - 1,
+              waypoints[index].isOvernight,
+              cachedDriveLegs.count + 1 == waypoints.count,
+              !isSearchingGas else { return nil }
+        let distance = waypointDistance(at: index)
+        // A failed search sample near the hotel: unknown, so say nothing.
+        if unsearchedFuelDistances.contains(where: { abs($0 - distance) <= Self.fuelSearchCoverStepMeters }) {
+            return nil
+        }
+        return overnightHasGas(at: index) ? nil : Self.noGasNearHotelNotice
     }
 
     nonisolated static func samePlace(_ lhs: SuggestedStop, _ rhs: SuggestedStop) -> Bool {
@@ -4773,7 +4834,11 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     ) -> [CLLocationDistance] {
         guard input.countsGasFills else { return [] }
         return input.waypoints.compactMap { waypoint in
-            guard Self.isTankFill(isGasFill: waypoint.isGasFill, isOvernight: waypoint.isOvernight) else {
+            guard Self.isTankFill(
+                isGasFill: waypoint.isGasFill,
+                isOvernight: waypoint.isOvernight,
+                overnightHasGas: waypoint.overnightHasGas
+            ) else {
                 return nil
             }
             return distances[waypoint.id] ?? 0
@@ -5824,15 +5889,23 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         guard !legs.isEmpty || plannedCorridor.contains(where: { $0.count > 1 }) else { return [] }
         let cache = distanceAlongRouteCache
         guard cache.generation == routeGeometryGeneration else {
-            return waypoints.compactMap { waypoint in
-                guard Self.isTankFill(isGasFill: waypoint.isGasFill, isOvernight: waypoint.isOvernight) else {
+            return waypoints.enumerated().compactMap { index, waypoint in
+                guard Self.isTankFill(
+                    isGasFill: waypoint.isGasFill,
+                    isOvernight: waypoint.isOvernight,
+                    overnightHasGas: overnightHasGas(at: index)
+                ) else {
                     return nil
                 }
                 return 0
             }
         }
-        return waypoints.compactMap { waypoint in
-            guard Self.isTankFill(isGasFill: waypoint.isGasFill, isOvernight: waypoint.isOvernight) else {
+        return waypoints.enumerated().compactMap { index, waypoint in
+            guard Self.isTankFill(
+                isGasFill: waypoint.isGasFill,
+                isOvernight: waypoint.isOvernight,
+                overnightHasGas: overnightHasGas(at: index)
+            ) else {
                 return nil
             }
             return cache.distances[waypoint.id] ?? 0
