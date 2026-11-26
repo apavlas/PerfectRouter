@@ -2293,6 +2293,95 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// True while the route's weather is being fetched.
     var isCheckingWeather = false
 
+    /// Every forecast point on the current route with its hourly forecast.
+    /// Kept so the map colours and the departure suggestion can be worked
+    /// out for any departure without asking WeatherKit again.
+    private(set) var rainProfile: RouteRainProfile?
+
+    /// The route line split into stretches by rain chance at the time the
+    /// rider passes. Built for `rainOverlayLegs`; read `visibleRainSegments`.
+    private(set) var rainLineSegments: [RainLineSegment] = []
+
+    /// The legs `rainLineSegments` was drawn from.
+    private var rainOverlayLegs: [MKRoute] = []
+
+    /// A departure that rides through less rain, or nil.
+    private(set) var rainDepartureSuggestion: RainDepartureSuggestion?
+
+    /// Rain stretches to draw, only while they still match the line on the
+    /// map. A replan swaps `legs` before weather is checked again, and old
+    /// colours must not sit on new geometry.
+    var visibleRainSegments: [RainLineSegment] {
+        guard !rainLineSegments.isEmpty,
+              rainOverlayLegs.count == legs.count,
+              zip(rainOverlayLegs, legs).allSatisfy({ $0 === $1 }) else { return [] }
+        return rainLineSegments
+    }
+
+    /// "Leave at 10:30 AM to stay dry", or nil.
+    var rainDepartureSuggestionText: String? {
+        rainDepartureSuggestion.map { RouteRainTiming.suggestionText($0) }
+    }
+
+    /// Applies the suggested departure. The departure commit refreshes the
+    /// fuel plan and weather as for any picked time.
+    func acceptRainDepartureSuggestion() {
+        guard let suggestion = rainDepartureSuggestion else { return }
+        setDeparture(suggestion.departure)
+    }
+
+    private func clearRainOverlay() {
+        rainProfile = nil
+        rainLineSegments = []
+        rainOverlayLegs = []
+        rainDepartureSuggestion = nil
+    }
+
+    /// Publishes the profile for `departure` and arms the mid-ride alert.
+    private func applyRainProfile(_ profile: RouteRainProfile?, departure: Date) async {
+        rainProfile = profile
+        guard let profile else {
+            rainForecast = nil
+            clearRainOverlay()
+            await weatherNotifier.updateRainWarning(nil)
+            await weatherNotifier.scheduleRainAhead(nil)
+            return
+        }
+        rainForecast = profile.forecast(departure: departure)
+        rainLineSegments = RouteRainTiming.segments(
+            path: RouteWeatherService.routePath(alongLegs: legs),
+            profile: profile,
+            departure: departure
+        )
+        rainOverlayLegs = legs
+        rainDepartureSuggestion = RouteRainTiming.betterDeparture(
+            profile: profile,
+            departure: departure,
+            now: Date()
+        )
+        // Surface the same warning shown on screen as a local notification so
+        // the rider is alerted even if they've stopped looking at the app.
+        await weatherNotifier.updateRainWarning(rainWarning)
+        await scheduleRainAheadAlert(departure: departure)
+    }
+
+    /// Schedules a notification for shortly before the rider reaches the
+    /// first wet stretch. iOS delivers it on time even when the app is
+    /// suspended or closed mid-ride, because the system holds the trigger.
+    private func scheduleRainAheadAlert(departure: Date) async {
+        guard let profile = rainProfile,
+              let first = profile.firstRain(departure: departure, threshold: Self.rainChanceThreshold) else {
+            await weatherNotifier.scheduleRainAhead(nil)
+            return
+        }
+        let passing = departure.addingTimeInterval(first.sample.offsetFromDeparture)
+        let percent = Int((first.chance * 100).rounded())
+        await weatherNotifier.scheduleRainAhead(WeatherNotificationService.RainAhead(
+            fireDate: passing.addingTimeInterval(-WeatherNotificationService.rainAheadLeadTime),
+            message: "\(percent)% chance of rain about \(formattedRideDistance(first.sample.distanceAlongRoute)) into your ride, in roughly 20 minutes."
+        ))
+    }
+
     /// Precipitation chance (0...1) at or above which a rain warning is shown.
     static let rainChanceThreshold = 0.3
 
@@ -3428,6 +3517,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         suppressDistanceRebuild = false
         errorMessage = nil
         rainForecast = nil
+        clearRainOverlay()
 
         guard waypoints.count >= 2 else {
             legs = []
@@ -3660,7 +3750,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             hotelLoadFailed = false
             // Keep the on-screen rain warning; only the alert is Pro.
             let notifier = weatherNotifier
-            Task { await notifier.updateRainWarning(nil) }
+            Task {
+                await notifier.updateRainWarning(nil)
+                await notifier.scheduleRainAhead(nil)
+            }
         }
         let style = Self.allowedStyle(AppSettings.defaultRouteStyle, proUnlocked: proUnlocked)
         if style != routeStyle {
@@ -4097,14 +4190,18 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         guard !legs.isEmpty else {
             guard generation == weatherGeneration else { return }
             rainForecast = nil
+            clearRainOverlay()
             await weatherNotifier.updateRainWarning(nil)
+            await weatherNotifier.scheduleRainAhead(nil)
             return
         }
         // The on-screen warning is free. The notification is Pro.
         guard RouteWeatherService.isEnabled else {
             guard generation == weatherGeneration else { return }
             rainForecast = nil
+            clearRainOverlay()
             await weatherNotifier.updateRainWarning(nil)
+            await weatherNotifier.scheduleRainAhead(nil)
             return
         }
         isCheckingWeather = true
@@ -4113,7 +4210,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 isCheckingWeather = false
             }
         }
-        let forecast = await weatherService.rainForecast(alongLegs: legs, departure: effectiveDeparture)
+        let departure = effectiveDeparture
+        let profile = await weatherService.rainProfile(alongLegs: legs, departure: departure)
         guard !Task.isCancelled, generation == weatherGeneration else { return }
         rainForecast = forecast
         // Surface the same warning shown on screen as a local notification so
@@ -7385,6 +7483,12 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             stopCount: waypoints.count
         )
         rideLogStore.append(entry)
+
+        // The rider is leaving now, which may not be the planned departure.
+        // Re-time the rain alert from the forecast already in hand.
+        if rainProfile != nil {
+            Task { await scheduleRainAheadAlert(departure: Date()) }
+        }
 
         let legsToCapture = legs
         let entryID = entry.id

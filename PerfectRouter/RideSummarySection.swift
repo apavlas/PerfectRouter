@@ -83,6 +83,20 @@ struct RideSummarySection: View {
                         Label(rainWarning, systemImage: "cloud.rain.fill")
                             .foregroundStyle(.blue)
                             .focusable()
+                        if !viewModel.visibleRainSegments.isEmpty {
+                            Text("On the map, orange is 30% or more rain when you pass, red is 60% or more.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                        if let suggestion = viewModel.rainDepartureSuggestionText {
+                            Button {
+                                viewModel.acceptRainDepartureSuggestion()
+                            } label: {
+                                Label(suggestion, systemImage: "clock.arrow.circlepath")
+                            }
+                            .buttonStyle(.borderless)
+                            .accessibilityIdentifier("rain.betterDeparture")
+                        }
                         WeatherAttributionView()
                     }
                 } else if viewModel.isCheckingWeather {
