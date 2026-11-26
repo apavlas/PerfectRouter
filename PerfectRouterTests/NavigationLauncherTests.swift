@@ -146,4 +146,49 @@ final class NavigationLauncherTests: XCTestCase {
         let handed = NavigationLauncher.handoffWaypoints(stops, line: elbow(), style: .twisty, maxTotal: 11)
         XCTAssertEqual(handed.map(\.name), stops.map(\.name))
     }
+
+    /// Out to a turnaround and back on the other lane, then east to B.
+    private func outAndBack() -> [CLLocationCoordinate2D] {
+        let out = (0...50).map { CLLocationCoordinate2D(latitude: Double($0) * 0.01, longitude: 0) }
+        let back = (0...50).map { CLLocationCoordinate2D(latitude: 0.5 - Double($0) * 0.01, longitude: 0.0005) }
+        let east = (1...50).map { CLLocationCoordinate2D(latitude: 0, longitude: Double($0) * 0.01) }
+        return out + back + east
+    }
+
+    func testAStopPassedTwiceMatchesTheFirstPass() {
+        // S1 is a little closer to the way home, but the rider reaches it on
+        // the way out, before the turnaround.
+        let stops = [
+            waypoint("A", lat: 0, lon: 0),
+            waypoint("S1", lat: 0.25, lon: 0.0004),
+            waypoint("S2", lat: 0.5, lon: 0),
+            waypoint("B", lat: 0, lon: 0.5),
+        ]
+        let line = outAndBack()
+        XCTAssertEqual(NavigationLauncher.firstVisit(of: stops[1].coordinate, on: line, from: 0), 25)
+        let handed = NavigationLauncher.handoffWaypoints(stops, line: line, style: .twisty, maxTotal: 14)
+        XCTAssertEqual(handed.filter { $0.name != "Via" }.map(\.name), ["A", "S1", "S2", "B"])
+        let s1 = handed.firstIndex { $0.name == "S1" }!
+        let s2 = handed.firstIndex { $0.name == "S2" }!
+        XCTAssertGreaterThan(s2 - s1, 1, "the S1 to S2 leg gets a shaping point")
+        for via in handed[(s1 + 1)..<s2] {
+            XCTAssertGreaterThan(via.coordinate.latitude, 0.25)
+            XCTAssertEqual(via.coordinate.longitude, 0, "on the way out, not the way home")
+        }
+    }
+
+    func testALineFromAnOlderPlanIsNotUsed() {
+        // The destination moved and the replan hasn't finished.
+        let moved = [waypoint("A", lat: 0, lon: 0), waypoint("B", lat: 1, lon: 1)]
+        XCTAssertEqual(
+            NavigationLauncher.handoffWaypoints(moved, line: elbow(), style: .twisty, maxTotal: 14).map(\.name),
+            ["A", "B"]
+        )
+        // A stop was added well off the old line.
+        let added = [waypoint("A", lat: 0, lon: 0), waypoint("New", lat: 0.2, lon: 0.3), waypoint("B", lat: 0.5, lon: 0.5)]
+        XCTAssertEqual(
+            NavigationLauncher.handoffWaypoints(added, line: elbow(), style: .twisty, maxTotal: 14).map(\.name),
+            ["A", "New", "B"]
+        )
+    }
 }

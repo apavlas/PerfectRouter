@@ -142,6 +142,13 @@ enum NavigationLauncher {
               line.count >= 2,
               maxTotal > waypoints.count else { return waypoints }
 
+        // A line that doesn't start and end at the ride's ends belongs to an
+        // older plan (stops edited, replan not finished). Hand off the stops
+        // alone rather than steer the rider along the old roads.
+        guard meters(line[0], waypoints[0].coordinate) <= stopSnapMeters,
+              meters(line[line.count - 1], waypoints[waypoints.count - 1].coordinate) <= stopSnapMeters
+        else { return waypoints }
+
         // Running distance along the line, and where each rider stop sits on
         // it. Stops are matched in order so a loop's start and end don't
         // swap places.
@@ -150,29 +157,16 @@ enum NavigationLauncher {
         for index in 1..<line.count {
             cumulative.append(cumulative[index - 1] + meters(line[index - 1], line[index]))
         }
-        var stopIndices: [Int] = []
+        var stopIndices: [Int] = [0]
         var searchFrom = 0
-        for (position, waypoint) in waypoints.enumerated() {
-            if position == waypoints.count - 1 {
-                stopIndices.append(line.count - 1)
-                break
+        for waypoint in waypoints.dropFirst().dropLast() {
+            guard let index = firstVisit(of: waypoint.coordinate, on: line, from: searchFrom) else {
+                return waypoints
             }
-            if position == 0 {
-                stopIndices.append(0)
-                continue
-            }
-            var best = searchFrom
-            var bestDistance = CLLocationDistance.greatestFiniteMagnitude
-            for index in searchFrom..<line.count {
-                let distance = meters(line[index], waypoint.coordinate)
-                if distance < bestDistance {
-                    bestDistance = distance
-                    best = index
-                }
-            }
-            stopIndices.append(best)
-            searchFrom = best
+            stopIndices.append(index)
+            searchFrom = index
         }
+        stopIndices.append(line.count - 1)
 
         let legLengths = zip(stopIndices, stopIndices.dropFirst()).map { cumulative[$1] - cumulative[$0] }
         let shapedTotal = legLengths.filter { $0 >= minimumShapedLegMeters }.reduce(0, +)
@@ -211,6 +205,34 @@ enum NavigationLauncher {
         }
         result.append(waypoints[waypoints.count - 1])
         return result
+    }
+
+    /// How far a stop may sit from the planned line and still count as on
+    /// it. Farther means the line is from an older plan.
+    static let stopSnapMeters: CLLocationDistance = 1_000
+
+    /// Where the line first passes `coordinate`, at or after `start`. A route
+    /// that passes the same place twice (an out-and-back, a figure eight)
+    /// takes the earliest pass that is about as close as the closest one, so
+    /// a stop isn't matched to the way home. Nil when the line never comes
+    /// within `stopSnapMeters`.
+    static func firstVisit(
+        of coordinate: CLLocationCoordinate2D,
+        on line: [CLLocationCoordinate2D],
+        from start: Int
+    ) -> Int? {
+        guard start < line.count else { return nil }
+        let distances = line[start...].map { meters($0, coordinate) }
+        guard let closest = distances.min(), closest <= stopSnapMeters else { return nil }
+        let accepted = closest + 150
+        guard let runStart = distances.firstIndex(where: { $0 <= accepted }) else { return nil }
+        var best = runStart
+        var offset = runStart
+        while offset < distances.count, distances[offset] <= accepted {
+            if distances[offset] < distances[best] { best = offset }
+            offset += 1
+        }
+        return start + best
     }
 
     /// Opens the ride in Apple Maps so it follows the planned line.

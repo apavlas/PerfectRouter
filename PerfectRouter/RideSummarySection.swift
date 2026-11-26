@@ -250,12 +250,12 @@ struct RideSummarySection: View {
 
     private func openAppleMaps() {
         viewModel.logCurrentRide()
-        NavigationLauncher.openInAppleMaps(viewModel.waypoints, legs: viewModel.legs, style: viewModel.routeStyle)
+        NavigationLauncher.openInAppleMaps(viewModel.waypoints, legs: viewModel.handoffLegs, style: viewModel.routeStyle)
     }
 
     private func openGoogleMaps() {
         viewModel.logCurrentRide()
-        NavigationLauncher.openInGoogleMaps(viewModel.waypoints, legs: viewModel.legs, style: viewModel.routeStyle)
+        NavigationLauncher.openInGoogleMaps(viewModel.waypoints, legs: viewModel.handoffLegs, style: viewModel.routeStyle)
     }
 
     private var checkInGroupBinding: Binding<UUID?> {

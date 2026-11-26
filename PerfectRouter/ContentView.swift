@@ -1106,8 +1106,8 @@ struct ContentView: View {
         guard let target = text.then else { return }
         viewModel.logCurrentRide()
         switch target {
-        case .apple: NavigationLauncher.openInAppleMaps(viewModel.waypoints, legs: viewModel.legs, style: viewModel.routeStyle)
-        case .google: NavigationLauncher.openInGoogleMaps(viewModel.waypoints, legs: viewModel.legs, style: viewModel.routeStyle)
+        case .apple: NavigationLauncher.openInAppleMaps(viewModel.waypoints, legs: viewModel.handoffLegs, style: viewModel.routeStyle)
+        case .google: NavigationLauncher.openInGoogleMaps(viewModel.waypoints, legs: viewModel.handoffLegs, style: viewModel.routeStyle)
         }
     }
 
