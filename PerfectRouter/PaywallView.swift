@@ -39,7 +39,7 @@ struct PaywallView: View {
                             }
                         }
 
-                        Text("Opening a ride someone shared with you, planning with gas stops, and handing off to Apple Maps or Google Maps stay free.")
+                        Text("Planning with gas stops, the rain warning, up to \(ProAccess.freeSavedRouteLimit) saved rides, opening a ride someone shared with you, and handing off to Apple Maps or Google Maps stay free.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
 
@@ -121,6 +121,11 @@ struct PaywallView: View {
             .accessibilityIdentifier("paywall.subscribe")
 
             if let product = selectedProduct {
+                if store.isEligibleForTrial {
+                    Text(PaywallCopy.trialReminderPromise)
+                        .font(.caption)
+                        .multilineTextAlignment(.center)
+                }
                 Text(PaywallCopy.disclosure(
                     price: product.displayPrice,
                     period: PaywallCopy.periodNoun(product.id),
@@ -174,6 +179,8 @@ struct PaywallView: View {
 
 /// Paywall wording, kept out of the view so it can be tested.
 enum PaywallCopy {
+    static let trialReminderPromise = "We'll remind you \(BillingReminder.trialLeadDays) days before your trial ends."
+
     static func periodNoun(_ productID: String) -> String {
         productID == ProAccess.monthlyProductID ? "month" : "year"
     }
@@ -252,6 +259,29 @@ private struct PlanRow: View {
     }
 }
 
+/// One row under the ride summary on Pro when a trial ends or a yearly plan
+/// renews soon. Opens Apple's manage-subscription sheet.
+struct BillingReminderRow: View {
+    let text: String
+    let manage: () -> Void
+
+    var body: some View {
+        Button(action: manage) {
+            Label {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(text)
+                    Text("Cancel or change plan")
+                        .font(.caption)
+                        .foregroundStyle(.tint)
+                }
+            } icon: {
+                Image(systemName: "calendar.badge.clock")
+            }
+        }
+        .accessibilityIdentifier("billingReminder")
+    }
+}
+
 /// One row under the ride summary on Free, once a ride is planned: what Pro
 /// adds to this ride. Opens the paywall.
 struct ProUpsellRow: View {
@@ -261,7 +291,7 @@ struct ProUpsellRow: View {
         Button(action: open) {
             Label {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Hotels, rain along the route, and Twisty roads")
+                    Text("Hotels, Twisty roads, and rain alerts")
                     Text("Try Pro free for 7 days")
                         .font(.caption)
                         .foregroundStyle(.secondary)

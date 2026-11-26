@@ -83,6 +83,7 @@ struct ContentView: View {
     @State private var paywallFeature: ProFeature?
     private var proStore = ProStore.shared
     @State private var showingShareRide = false
+    @State private var showingManageSubscription = false
     @State private var showingRiderGroups = false
     /// Full place description. Held here, not on a list row: a `.sheet` inside
     /// a `List` section does not present when the row handles the tap.
@@ -629,6 +630,8 @@ struct ContentView: View {
                 RideSummarySection(viewModel: viewModel)
                 if !proStore.isPro, viewModel.canShareRoute {
                     ProUpsellRow { paywallFeature = .lodging }
+                } else if let reminder = proStore.billingReminderText {
+                    BillingReminderRow(text: reminder) { showingManageSubscription = true }
                 } else {
                     FocusPlaceholderRow()
                 }
@@ -661,7 +664,7 @@ struct ContentView: View {
                     viewModel: viewModel,
                     proUnlocked: proStore.isPro,
                     onLoad: loadSaved,
-                    onLocked: { paywallFeature = .rideHistory }
+                    onLocked: { paywallFeature = .saveAndShare }
                 )
             }
             .accessibilityIdentifier("planningList")
@@ -776,7 +779,7 @@ struct ContentView: View {
                 if viewModel.canShareRoute {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button {
-                            guard proStore.isPro else {
+                            guard ProAccess.canSaveRoute(savedCount: viewModel.savedRoutes.count, isPro: proStore.isPro) else {
                                 paywallFeature = .saveAndShare
                                 return
                             }
@@ -825,6 +828,11 @@ struct ContentView: View {
             }
             .sheet(item: $paywallFeature) { feature in
                 PaywallView(feature: feature)
+            }
+            .manageSubscriptionsSheet(isPresented: $showingManageSubscription)
+            .onChange(of: showingManageSubscription) { _, isShowing in
+                // The rider may have cancelled or changed plan there.
+                if !isShowing { Task { await proStore.refreshEntitlements() } }
             }
             .task { await proStore.start() }
             .onChange(of: proStore.isPro, initial: true) { _, isPro in

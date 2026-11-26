@@ -29,7 +29,13 @@ struct SettingsView: View {
                 Section {
                     if proStore.isPro {
                         Label("Pro is on", systemImage: "checkmark.seal.fill")
-                        Button("Manage Subscription") { showingManageSubscription = true }
+                        if let reminder = proStore.billingReminderText {
+                            Text(reminder)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                        Button("Cancel or Change Plan") { showingManageSubscription = true }
+                            .accessibilityIdentifier("settings.manageSubscription")
                     } else {
                         Button {
                             showingPaywall = true
@@ -105,6 +111,9 @@ struct SettingsView: View {
                 PaywallView(feature: nil)
             }
             .manageSubscriptionsSheet(isPresented: $showingManageSubscription)
+            .onChange(of: showingManageSubscription) { _, isShowing in
+                if !isShowing { Task { await proStore.refreshEntitlements() } }
+            }
             .alert("Restore Purchases", isPresented: Binding(
                 get: { restoreMessage != nil },
                 set: { if !$0 { restoreMessage = nil } }
