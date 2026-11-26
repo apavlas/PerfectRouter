@@ -1,11 +1,15 @@
 import SwiftUI
 import MapKit
+import MessageUI
 
 /// The ride's headline numbers (distance, time), recommended fuel stops with
 /// food paired to each, fuel-gap and rain warnings, and the navigation
 /// hand-off buttons.
 struct RideSummarySection: View {
     let viewModel: RoutePlannerViewModel
+
+    @State private var checkIns = RideCheckInController.shared
+    @State private var checkInText: CheckInText?
 
     var body: some View {
         Section {
@@ -153,6 +157,37 @@ struct RideSummarySection: View {
                 } else {
                     FocusPlaceholderRow()
                 }
+                if !viewModel.riderGroups.isEmpty, checkIns.active == nil {
+                    Picker(selection: checkInGroupBinding) {
+                        Text("Off").tag(UUID?.none)
+                        ForEach(viewModel.riderGroups.filter { !$0.riders.isEmpty }) { group in
+                            Text(group.name).tag(UUID?.some(group.id))
+                        }
+                    } label: {
+                        Label("Safety check-in", systemImage: "person.badge.shield.checkmark")
+                    }
+                    .accessibilityIdentifier("checkIn.group")
+                } else {
+                    FocusPlaceholderRow()
+                }
+            } else {
+                FocusPlaceholderRow()
+            }
+            if let active = checkIns.active {
+                ActiveCheckInRow(
+                    checkIn: active,
+                    onArrived: {
+                        checkInText = CheckInText(recipients: active.recipients, body: active.arrivalMessage(), endsCheckIn: true)
+                    },
+                    onLate: {
+                        checkInText = CheckInText(
+                            recipients: active.recipients,
+                            body: active.lateMessage(location: viewModel.currentLocation),
+                            endsCheckIn: false
+                        )
+                    },
+                    onEnd: { checkIns.finish() }
+                )
             } else {
                 FocusPlaceholderRow()
             }
@@ -173,6 +208,21 @@ struct RideSummarySection: View {
             } else {
                 FocusPlaceholderRow()
             }
+        }
+        .sheet(item: $checkInText) { text in
+            MessageComposer(
+                recipients: text.recipients,
+                body: text.body,
+                onFinish: { finishCheckInText(text) },
+                onResult: { result in
+                    // A start text that never went out is no check-in: the
+                    // group doesn't know to expect anything.
+                    if text.startsCheckIn, result != .sent { checkIns.finish() }
+                    // "I've arrived" ends the check-in only once it's sent.
+                    if text.endsCheckIn, result == .sent { checkIns.finish() }
+                }
+            )
+            .ignoresSafeArea()
         }
     }
 
@@ -203,13 +253,60 @@ struct RideSummarySection: View {
     }
 
     private func launchAppleMaps() {
+        guard !beginCheckIn(then: .apple) else { return }
+        openAppleMaps()
+    }
+
+    private func launchGoogleMaps() {
+        guard !beginCheckIn(then: .google) else { return }
+        openGoogleMaps()
+    }
+
+    private func openAppleMaps() {
         viewModel.logCurrentRide()
         NavigationLauncher.openInAppleMaps(viewModel.waypoints)
     }
 
-    private func launchGoogleMaps() {
+    private func openGoogleMaps() {
         viewModel.logCurrentRide()
         NavigationLauncher.openInGoogleMaps(viewModel.waypoints)
+    }
+
+    private var checkInGroupBinding: Binding<UUID?> {
+        Binding(
+            get: { checkIns.selectedGroup(in: viewModel.riderGroups)?.id },
+            set: { checkIns.selectedGroupID = $0 }
+        )
+    }
+
+    /// With a check-in group picked, opens the start text first and hands
+    /// off to Maps once the composer closes. False when there's nothing to
+    /// check in (no group, or this device can't text), so the caller
+    /// navigates straight away.
+    private func beginCheckIn(then target: CheckInText.Navigation) -> Bool {
+        guard checkIns.active == nil,
+              let group = checkIns.selectedGroup(in: viewModel.riderGroups),
+              MessageComposer.canSendText else { return false }
+        let intermediateStops = max(viewModel.waypoints.count - 2, 0)
+        let checkIn = RideCheckIn.make(
+            group: group,
+            destinationName: viewModel.waypoints.last?.name ?? "my destination",
+            start: Date(),
+            ridingTime: viewModel.totalExpectedTravelTime,
+            stopCount: intermediateStops + viewModel.fuelStops.count
+        )
+        checkIns.start(checkIn)
+        checkInText = CheckInText(recipients: checkIn.recipients, body: checkIn.startMessage(), endsCheckIn: false, then: target)
+        return true
+    }
+
+    private func finishCheckInText(_ text: CheckInText) {
+        checkInText = nil
+        switch text.then {
+        case .apple: openAppleMaps()
+        case .google: openGoogleMaps()
+        case nil: break
+        }
     }
 
     private func formattedDuration(_ seconds: TimeInterval) -> String {
@@ -445,5 +542,54 @@ struct AddedStopUndoBanner: View {
                                      : AccessibilityID.foodUndoButton)
             .accessibilityLabel("Undo")
         }
+    }
+}
+
+/// A text to the check-in group, and where to hand off once it's sent.
+struct CheckInText: Identifiable {
+    enum Navigation { case apple, google }
+
+    let id = UUID()
+    var recipients: [String]
+    var body: String
+    /// Sending this text ends the check-in ("I've arrived").
+    var endsCheckIn: Bool
+    /// This is the start text; if it isn't sent, the check-in is dropped.
+    var startsCheckIn: Bool { then != nil }
+    var then: Navigation? = nil
+}
+
+/// The ride the rider is checked in for, with one-tap texts to the group.
+private struct ActiveCheckInRow: View {
+    let checkIn: RideCheckIn
+    var onArrived: () -> Void
+    var onLate: () -> Void
+    var onEnd: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(statusText, systemImage: "person.badge.shield.checkmark.fill")
+                .foregroundStyle(checkIn.isOverdue() ? .red : .primary)
+                .font(.subheadline.weight(.semibold))
+            HStack {
+                Button("I've arrived", action: onArrived)
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("checkIn.arrived")
+                Button("Running late", action: onLate)
+                    .buttonStyle(.bordered)
+                Spacer()
+                Button("End", role: .cancel, action: onEnd)
+                    .buttonStyle(.borderless)
+            }
+        }
+        .accessibilityIdentifier("checkIn.active")
+    }
+
+    private var statusText: String {
+        let eta = RideCheckIn.clock(checkIn.expectedArrival, relativeTo: Date())
+        if checkIn.isOverdue() {
+            return "You're past your ETA. \(checkIn.groupName) may be worried."
+        }
+        return "Checked in with \(checkIn.groupName). ETA \(eta)."
     }
 }

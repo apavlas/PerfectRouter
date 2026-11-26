@@ -17,12 +17,15 @@ struct MessageComposer: UIViewControllerRepresentable {
     let body: String
     /// Called when the composer is dismissed (sent, cancelled, or failed).
     var onFinish: () -> Void
+    /// Optional: whether the text was sent, cancelled, or failed. Called
+    /// just before `onFinish`.
+    var onResult: ((MessageComposeResult) -> Void)? = nil
 
     /// Whether this device can send a text message at all.
     static var canSendText: Bool { MFMessageComposeViewController.canSendText() }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onFinish: onFinish)
+        Coordinator(onFinish: onFinish, onResult: onResult)
     }
 
     func makeUIViewController(context: Context) -> MFMessageComposeViewController {
@@ -39,13 +42,16 @@ struct MessageComposer: UIViewControllerRepresentable {
 
     final class Coordinator: NSObject, MFMessageComposeViewControllerDelegate {
         private let onFinish: () -> Void
+        private let onResult: ((MessageComposeResult) -> Void)?
 
-        init(onFinish: @escaping () -> Void) {
+        init(onFinish: @escaping () -> Void, onResult: ((MessageComposeResult) -> Void)? = nil) {
             self.onFinish = onFinish
+            self.onResult = onResult
         }
 
         func messageComposeViewController(_ controller: MFMessageComposeViewController,
                                           didFinishWith result: MessageComposeResult) {
+            onResult?(result)
             onFinish()
         }
     }
