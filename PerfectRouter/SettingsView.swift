@@ -26,7 +26,13 @@ struct SettingsView: View {
                 Section {
                     if proStore.isPro {
                         Label("Pro is on", systemImage: "checkmark.seal.fill")
-                        Button("Manage Subscription") { showingManageSubscription = true }
+                        if let reminder = proStore.billingReminderText {
+                            Text(reminder)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                        Button("Cancel or Change Plan") { showingManageSubscription = true }
+                            .accessibilityIdentifier("settings.manageSubscription")
                     } else {
                         Button {
                             showingPaywall = true

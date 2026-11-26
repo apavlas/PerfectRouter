@@ -4,8 +4,8 @@ import SwiftUI
 /// swipe to delete.
 struct SavedRoutesSection: View {
     let viewModel: RoutePlannerViewModel
-    /// Saved rides are Pro. Without it the section is one row that opens the
-    /// paywall; rides saved earlier are kept and come back with Pro.
+    /// Free keeps `ProAccess.freeSavedRouteLimit` saved rides; Pro keeps any
+    /// number. Rides saved earlier always stay listed.
     var proUnlocked = true
     /// Called when the rider taps a saved ride, so the caller can load it and
     /// frame its start on the map.
@@ -14,12 +14,7 @@ struct SavedRoutesSection: View {
 
     var body: some View {
         Section("Saved Routes") {
-            if !proUnlocked {
-                Button(action: onLocked) {
-                    Label("Save rides and reload them later with Pro", systemImage: "lock.fill")
-                }
-                .accessibilityIdentifier("savedRoutes.locked")
-            } else if viewModel.savedRoutes.isEmpty {
+            if viewModel.savedRoutes.isEmpty {
                 Text("Save a ride with the bookmark button to find it here later.")
                     .foregroundStyle(.secondary)
                     .focusable()
@@ -43,6 +38,12 @@ struct SavedRoutesSection: View {
                     .buttonStyle(.plain)
                 }
                 .onDelete { viewModel.deleteSavedRoutes(at: $0) }
+                if !ProAccess.canSaveRoute(savedCount: viewModel.savedRoutes.count, isPro: proUnlocked) {
+                    Button(action: onLocked) {
+                        Label("Free keeps \(ProAccess.freeSavedRouteLimit) saved rides. Save more with Pro.", systemImage: "lock.fill")
+                    }
+                    .accessibilityIdentifier("savedRoutes.locked")
+                }
             }
         }
     }

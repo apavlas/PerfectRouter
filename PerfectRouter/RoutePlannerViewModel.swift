@@ -3572,8 +3572,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
 
     // MARK: - Pro
 
-    /// Whether the plan runs Pro features: hotel search, weather along the
-    /// route, and Twisty. `ContentView` keeps it in step with `ProStore`.
+    /// Whether the plan runs Pro features: hotel search, the rain alert
+    /// notification, and Twisty. The on-screen rain warning is free. `ContentView` keeps it in step with `ProStore`.
     /// Unit tests leave it on.
     var proUnlocked = true {
         didSet {
@@ -3596,9 +3596,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             hotelEvenings = []
             isSearchingHotels = false
             hotelLoadFailed = false
-            weatherTask?.cancel()
-            rainForecast = nil
-            isCheckingWeather = false
+            // Keep the on-screen rain warning; only the alert is Pro.
             let notifier = weatherNotifier
             Task { await notifier.updateRainWarning(nil) }
         }
@@ -4027,7 +4025,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             await weatherNotifier.updateRainWarning(nil)
             return
         }
-        guard RouteWeatherService.isEnabled, proUnlocked else {
+        // The on-screen warning is free. The notification is Pro.
+        guard RouteWeatherService.isEnabled else {
             guard generation == weatherGeneration else { return }
             rainForecast = nil
             await weatherNotifier.updateRainWarning(nil)
@@ -4044,7 +4043,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         rainForecast = forecast
         // Surface the same warning shown on screen as a local notification so
         // the rider is alerted even if they've stopped looking at the app.
-        await weatherNotifier.updateRainWarning(rainWarning)
+        // The alert is Pro; free riders see the warning on screen.
+        await weatherNotifier.updateRainWarning(proUnlocked ? rainWarning : nil)
     }
 
     // MARK: - Gas stations & automatic fuel planning
