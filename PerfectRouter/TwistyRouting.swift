@@ -103,17 +103,26 @@ enum TwistyRouting {
     /// A candidate that rides into a dead end and back never qualifies. With
     /// `pavedOnly` (the default), a candidate Apple flags as unpaved doesn't
     /// either. Fastest itself is never filtered: it is the fallback.
+    ///
+    /// `maximumDistance` is an extra hard cap on a candidate's road
+    /// distance. The planner passes the meters left in the rider's reserve
+    /// on a leg that ends at a fuel stop, so a curvier line cannot push that
+    /// stop past the tank (FUEL-10).
     static func select(
         candidates: [TwistyRouteCandidate],
         fastestID: Int,
-        pavedOnly: Bool = true
+        pavedOnly: Bool = true,
+        maximumDistance: CLLocationDistance? = nil
     ) -> TwistySelection? {
         guard let fastest = candidates.first(where: { $0.id == fastestID }),
               fastest.distance > 100,
               fastest.coordinates.count >= 2 else { return nil }
 
         let fastestCurvature = curvatureRadiansPerKilometer(fastest.coordinates)
-        let distanceLimit = fastest.distance * maximumDistanceFactor
+        var distanceLimit = fastest.distance * maximumDistanceFactor
+        if let maximumDistance, maximumDistance.isFinite {
+            distanceLimit = min(distanceLimit, maximumDistance)
+        }
         var best: (candidate: TwistyRouteCandidate, curvature: Double, separation: CLLocationDistance)?
 
         for candidate in candidates where candidate.id != fastestID {

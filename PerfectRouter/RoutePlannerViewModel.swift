@@ -3549,10 +3549,36 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         var missedTwistyLegs = 0
         let legCount = waypoints.count - 1
         let corridor = plannedCorridor
+        // FUEL-10: road meters since the last fill on the line being built,
+        // and whether that fill is a fuel stop on the route (not the start).
+        let tank = fuelRangeMeters
+        var ridden: CLLocationDistance = 0
+        var hopStartedAtPlacedFill = false
 
         for i in 0..<legCount {
             let origin = waypoints[i]
             let destination = waypoints[i + 1]
+            if i > 0, Self.isTankFill(
+                isGasFill: origin.isGasFill,
+                isOvernight: origin.isOvernight,
+                overnightHasGas: overnightHasGas(at: i)
+            ) {
+                ridden = 0
+                hopStartedAtPlacedFill = true
+            }
+            // A fuel stop Select recommended placed at mile 85 of a 100 mi
+            // tank must not become mile 102 because this leg picked a longer
+            // curvy alternate (build 15, Asheville to Blowing Rock).
+            let legCap = Self.fuelLegDistanceCap(
+                ridden: ridden,
+                endsAtFill: i + 1 < legCount && Self.isTankFill(
+                    isGasFill: destination.isGasFill,
+                    isOvernight: destination.isOvernight,
+                    overnightHasGas: overnightHasGas(at: i + 1)
+                ),
+                startedAtPlacedFill: hopStartedAtPlacedFill,
+                tank: tank
+            )
             guard Self.shouldPublishRoute(
                 generation: calcGen,
                 latestGeneration: calculatingGeneration,
@@ -3569,7 +3595,12 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             )
             do {
                 let outcome: (routes: [MKRoute], usedFastestFallback: Bool)
-                if let cached = legCache[key] {
+                if let cached = legCache[key],
+                   Self.cachedLegFits(
+                       distance: cached.routes.reduce(0) { $0 + $1.distance },
+                       usedFastestFallback: cached.usedFastestFallback,
+                       cap: legCap
+                   ) {
                     outcome = (cached.routes, cached.usedFastestFallback)
                 } else if routeStyle == .twisty {
                     let fastestKey = TwistyRouting.legCacheKey(
@@ -3604,7 +3635,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                         to: destination,
                         avoidHighwayAlternates: plan.avoidHighwayAlternates,
                         probeOffsetVias: plan.offsetVias,
-                        cachedFastest: cachedFastest
+                        cachedFastest: cachedFastest,
+                        maximumDistance: legCap
                     )
                 } else {
                     let routes = try await calculateRoutes(
@@ -3614,7 +3646,11 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                         avoidsTolls: routeStyle.avoidsTolls,
                         alternates: routeStyle.prefersAlternates
                     )
-                    guard let route = Self.preferredRoute(from: routes, style: routeStyle) else {
+                    guard let route = Self.preferredRoute(
+                        from: routes,
+                        style: routeStyle,
+                        maximumDistance: legCap
+                    ) else {
                         guard calcGen == calculatingGeneration, !Task.isCancelled else { return }
                         failRoute(between: origin, and: destination)
                         return
@@ -3636,6 +3672,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 )
                 if outcome.usedFastestFallback { missedTwistyLegs += 1 }
                 newLegs.append(contentsOf: outcome.routes)
+                ridden += outcome.routes.reduce(0) { $0 + $1.distance }
             } catch is CancellationError {
                 return
             } catch {
@@ -3856,11 +3893,55 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// — back-roads detours tend to be the more scenic option. Otherwise we take
     /// MapKit's top recommendation. Twisty does not use this; it scores
     /// curvature in `twistyLeg`.
-    nonisolated static func preferredRoute(from routes: [MKRoute], style: RouteStyle) -> MKRoute? {
+    /// `maximumDistance` (FUEL-10) keeps Scenic's longest-alternate pick
+    /// inside the reserve on a leg to a fuel stop. When no alternate fits,
+    /// MapKit's top route is used.
+    nonisolated static func preferredRoute(
+        from routes: [MKRoute],
+        style: RouteStyle,
+        maximumDistance: CLLocationDistance? = nil
+    ) -> MKRoute? {
         guard style.prefersAlternates else { return routes.first }
-        let withoutHighways = routes.filter { !$0.hasHighways }
-        let candidates = withoutHighways.isEmpty ? routes : withoutHighways
+        let fitting = maximumDistance.map { cap in routes.filter { $0.distance <= cap } } ?? routes
+        guard !fitting.isEmpty else { return routes.first }
+        let withoutHighways = fitting.filter { !$0.hasHighways }
+        let candidates = withoutHighways.isEmpty ? fitting : withoutHighways
         return candidates.max(by: { $0.distance < $1.distance }) ?? routes.first
+    }
+
+    /// FUEL-10: the longest road distance a leg may take so the fuel plan
+    /// still holds on the new line. A leg that ends at a fuel stop keeps the
+    /// hop from the previous fill inside the reserve (tank × 0.85), the same
+    /// window the planner chose that stop in; when even that is used up the
+    /// cap is 0 and the leg rides MapKit's top route. A leg later in a hop
+    /// that began at a fuel stop on the route is held to what the reserve
+    /// has left, or not capped once the reserve is spent (the fuel list then
+    /// plans the next stop on the new line). Legs from the ride start that
+    /// reach no fuel stop are not capped: no stop on them can move.
+    /// `ridden` is road meters since the last fill.
+    nonisolated static func fuelLegDistanceCap(
+        ridden: CLLocationDistance,
+        endsAtFill: Bool,
+        startedAtPlacedFill: Bool,
+        tank: CLLocationDistance,
+        safetyFactor: Double = fuelSafetyFactor
+    ) -> CLLocationDistance? {
+        guard tank > 0, tank.isFinite, ridden.isFinite else { return nil }
+        let left = tank * safetyFactor - max(0, ridden)
+        if endsAtFill { return max(0, left) }
+        if startedAtPlacedFill, left > 0 { return left }
+        return nil
+    }
+
+    /// A cached leg is reused only when it still fits this pass's cap. A
+    /// Fastest fallback always fits: it is what an over-cap leg rides anyway.
+    nonisolated static func cachedLegFits(
+        distance: CLLocationDistance,
+        usedFastestFallback: Bool,
+        cap: CLLocationDistance?
+    ) -> Bool {
+        guard let cap else { return true }
+        return usedFastestFallback || distance <= cap
     }
 
     /// Honest copy when Twisty had to keep Fastest's geometry. `nil` when
@@ -3896,7 +3977,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         to destination: Waypoint,
         avoidHighwayAlternates: Bool,
         probeOffsetVias: Bool,
-        cachedFastest: [MKRoute]?
+        cachedFastest: [MKRoute]?,
+        maximumDistance: CLLocationDistance? = nil
     ) async throws -> (routes: [MKRoute], usedFastestFallback: Bool) {
         // Alternates and offset-via probes start together. A cached Fastest
         // leg is the baseline, so the probes do not wait for that request
@@ -3974,7 +4056,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
             append([route])
         }
 
-        if let chosen = Self.chosenTwisty(in: pool, fastestID: fastestID) {
+        if let chosen = Self.chosenTwisty(in: pool, fastestID: fastestID, maximumDistance: maximumDistance) {
             return (chosen, false)
         }
         guard probeOffsetVias, let viaTask else { return ([baseline], true) }
@@ -3983,7 +4065,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         for stitched in await viaTask.value {
             guard !Task.isCancelled else { throw CancellationError() }
             append(stitched)
-            if let chosen = Self.chosenTwisty(in: pool, fastestID: fastestID) {
+            if let chosen = Self.chosenTwisty(in: pool, fastestID: fastestID, maximumDistance: maximumDistance) {
                 return (chosen, false)
             }
         }
@@ -4145,7 +4227,11 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         )
     }
 
-    private static func chosenTwisty(in pool: [TwistyPoolEntry], fastestID: Int) -> [MKRoute]? {
+    private static func chosenTwisty(
+        in pool: [TwistyPoolEntry],
+        fastestID: Int,
+        maximumDistance: CLLocationDistance? = nil
+    ) -> [MKRoute]? {
         let selection = TwistyRouting.select(
             candidates: pool.map {
                 TwistyRouteCandidate(
@@ -4156,7 +4242,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 )
             },
             fastestID: fastestID,
-            pavedOnly: AppSettings.twistyPavedOnly
+            pavedOnly: AppSettings.twistyPavedOnly,
+            maximumDistance: maximumDistance
         )
         guard let selection else { return nil }
         return pool.first { $0.id == selection.candidateID }?.routes

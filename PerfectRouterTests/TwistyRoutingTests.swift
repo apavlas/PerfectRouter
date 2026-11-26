@@ -47,6 +47,25 @@ final class TwistyRoutingTests: XCTestCase {
         )
     }
 
+    /// FUEL-10: a curvier line longer than the reserve left on a leg to a
+    /// fuel stop is not picked, so the leg rides Fastest instead.
+    func testCurvierCorridorOverTheFuelCapIsNotPicked() {
+        let snake = curvyCorridor()
+        let fastest = straight(from: snake[0], to: snake[snake.count - 1])
+        let fastestLength = TwistyRouting.pathLength(fastest)
+        let snakeLength = TwistyRouting.pathLength(snake)
+        let candidates = [
+            TwistyRouteCandidate(id: 0, coordinates: fastest, distance: fastestLength),
+            TwistyRouteCandidate(id: 1, coordinates: snake, distance: snakeLength),
+        ]
+
+        XCTAssertEqual(
+            TwistyRouting.select(candidates: candidates, fastestID: 0, maximumDistance: snakeLength + 1)?.candidateID,
+            1
+        )
+        XCTAssertNil(TwistyRouting.select(candidates: candidates, fastestID: 0, maximumDistance: snakeLength - 1))
+    }
+
     func testGentleBowAloneIsNotTwisty() {
         let bowEndpoints = gentleArc()
         let fastest = straight(from: bowEndpoints[0], to: bowEndpoints[bowEndpoints.count - 1])
