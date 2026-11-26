@@ -67,7 +67,7 @@ struct SplashScreenView: View {
                     .animation(.easeOut(duration: 0.5).delay(0.2), value: animate)
 
                 // The rider, sweeping in from the left along the road.
-                Image(systemName: "figure.outdoor.cycle")
+                Image(systemName: RiderSymbol.name)
                     .resizable()
                     .scaledToFit()
                     .symbolRenderingMode(.hierarchical)
