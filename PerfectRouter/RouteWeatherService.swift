@@ -36,38 +36,72 @@ struct RouteWeatherService {
     }
 
     /// Number of points sampled along the route. Kept small — each is a
-    /// separate WeatherKit request.
-    var sampleCount = 5
+    /// separate WeatherKit request. Eight gives the map's rain colours a
+    /// stretch roughly every eighth of the ride.
+    var sampleCount = 8
 
     func rainForecast(alongLegs legs: [MKRoute], departure: Date) async -> RouteRainForecast? {
+        await rainProfile(alongLegs: legs, departure: departure)?.forecast(departure: departure)
+    }
+
+    /// Hourly forecasts at points along the route, each tagged with how long
+    /// after departure the rider reaches it. One fetch covers any departure
+    /// in the forecast range, so the departure suggestion and map colours
+    /// need no further WeatherKit calls.
+    func rainProfile(alongLegs legs: [MKRoute], departure: Date) async -> RouteRainProfile? {
         guard Self.isEnabled else { return nil }
 
         let samples = sampledPoints(alongLegs: legs, departure: departure, count: sampleCount)
         guard !samples.isEmpty else { return nil }
 
         let service = WeatherService.shared
-        var best: (chance: Double, distance: CLLocationDistance)?
-
+        // Ask for every hour the departure search can reach: up to six hours
+        // either side of the picked time, plus the ride itself.
+        let window = RouteRainTiming.searchWindow + 3_600
+        let rideTime = samples.map { $0.eta.timeIntervalSince(departure) }.max() ?? 0
+        let start = max(Date(), departure.addingTimeInterval(-window))
+        let end = departure.addingTimeInterval(rideTime + window)
+        var profileSamples: [RouteRainSample] = []
         for sample in samples {
+            guard !Task.isCancelled else { return nil }
             let location = CLLocation(latitude: sample.coordinate.latitude,
                                       longitude: sample.coordinate.longitude)
             // Missing entitlement, network, or WeatherKit outage: skip the
             // sample rather than failing the ride plan.
-            guard let weather = try? await service.weather(for: location) else { continue }
+            guard let hourly = try? await service.weather(for: location, including: .hourly(startDate: start, endDate: end)) else { continue }
+            profileSamples.append(RouteRainSample(
+                coordinate: sample.coordinate,
+                distanceAlongRoute: sample.distanceAlongRoute,
+                offsetFromDeparture: sample.eta.timeIntervalSince(departure),
+                hourly: hourly.forecast.map {
+                    HourlyRainChance(date: $0.date, chance: $0.precipitationChance)
+                }
+            ))
+        }
+        guard !profileSamples.isEmpty else { return nil }
+        return RouteRainProfile(samples: profileSamples)
+    }
 
-            // The hourly entry closest to when the rider passes this point.
-            let hour = weather.hourlyForecast.min {
-                abs($0.date.timeIntervalSince(sample.eta)) < abs($1.date.timeIntervalSince(sample.eta))
-            }
-            guard let hour else { continue }
-
-            if best == nil || hour.precipitationChance > best!.chance {
-                best = (hour.precipitationChance, sample.distanceAlongRoute)
+    /// Every leg's polyline as one path with running distance, for drawing
+    /// the rain colours along the line.
+    static func routePath(alongLegs legs: [MKRoute]) -> [(coordinate: CLLocationCoordinate2D, distance: CLLocationDistance)] {
+        var path: [(coordinate: CLLocationCoordinate2D, distance: CLLocationDistance)] = []
+        var cumulative: CLLocationDistance = 0
+        for route in legs {
+            let polyline = route.polyline
+            let n = polyline.pointCount
+            guard n > 0 else { continue }
+            var coords = [CLLocationCoordinate2D](repeating: .init(), count: n)
+            polyline.getCoordinates(&coords, range: NSRange(location: 0, length: n))
+            for coordinate in coords {
+                if let previous = path.last?.coordinate {
+                    cumulative += CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
+                        .distance(from: CLLocation(latitude: previous.latitude, longitude: previous.longitude))
+                }
+                path.append((coordinate, cumulative))
             }
         }
-
-        guard let best else { return nil }
-        return RouteRainForecast(maxChance: best.chance, distanceOfMaxChance: best.distance)
+        return path
     }
 
     // MARK: - Sampling
@@ -86,24 +120,7 @@ struct RouteWeatherService {
         let totalTime = legs.reduce(0) { $0 + $1.expectedTravelTime }
         guard totalDistance > 0, count > 0 else { return [] }
 
-        // Flatten every leg's polyline into a path of (coordinate, cumulative distance).
-        var path: [(coordinate: CLLocationCoordinate2D, distance: CLLocationDistance)] = []
-        var cumulative: CLLocationDistance = 0
-        for route in legs {
-            let polyline = route.polyline
-            let n = polyline.pointCount
-            guard n > 0 else { continue }
-            var coords = [CLLocationCoordinate2D](repeating: .init(), count: n)
-            polyline.getCoordinates(&coords, range: NSRange(location: 0, length: n))
-            for i in 0..<n {
-                if i > 0 {
-                    let prev = CLLocation(latitude: coords[i - 1].latitude, longitude: coords[i - 1].longitude)
-                    let curr = CLLocation(latitude: coords[i].latitude, longitude: coords[i].longitude)
-                    cumulative += curr.distance(from: prev)
-                }
-                path.append((coords[i], cumulative))
-            }
-        }
+        let path = Self.routePath(alongLegs: legs)
         guard let first = path.first else { return [] }
         guard path.count >= 2 else {
             return [WeatherSample(coordinate: first.coordinate, distanceAlongRoute: 0, eta: departure)]

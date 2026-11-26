@@ -47,6 +47,43 @@ struct WeatherNotificationService {
         try? await center.add(request)
     }
 
+    /// Identifier for the timed "rain ahead" alert. Separate from the plan-time
+    /// warning so each can be replaced on its own.
+    private let rainAheadNotificationID = "moto.route.rain-ahead"
+
+    /// How long before the rider reaches the first wet stretch the alert fires.
+    static let rainAheadLeadTime: TimeInterval = 20 * 60
+
+    /// A timed alert for the first wet stretch of the ride.
+    struct RainAhead: Equatable {
+        var fireDate: Date
+        var message: String
+    }
+
+    /// Schedules (or replaces) the timed rain-ahead alert, or removes it when
+    /// `alert` is nil. The trigger lives with the system, so it fires while
+    /// the app is suspended or closed during the ride. A fire date already
+    /// past is skipped: the plan-time warning has covered it.
+    func scheduleRainAhead(_ alert: RainAhead?, now: Date = Date()) async {
+        center.removePendingNotificationRequests(withIdentifiers: [rainAheadNotificationID])
+        guard let alert else { return }
+        let interval = alert.fireDate.timeIntervalSince(now)
+        guard interval >= 60 else { return }
+        guard await isAuthorized() else { return }
+
+        let content = UNMutableNotificationContent()
+        content.title = "Rain ahead on your ride"
+        content.body = Self.body(for: alert.message)
+        content.sound = .default
+
+        let request = UNNotificationRequest(
+            identifier: rainAheadNotificationID,
+            content: content,
+            trigger: UNTimeIntervalNotificationTrigger(timeInterval: interval, repeats: false)
+        )
+        try? await center.add(request)
+    }
+
     /// Notifications can't show the Apple Weather mark, so the body names the
     /// data source in text instead (WeatherKit attribution).
     static let sourceLine = "Source: Apple Weather"

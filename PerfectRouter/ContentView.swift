@@ -341,13 +341,27 @@ struct ContentView: View {
             }
 
             // Route polylines, one per leg
+            // When the rain check has run, the same line is drawn in stretches
+            // coloured by rain chance at the time the rider passes.
             if !viewModel.legs.isEmpty {
-                ForEach(viewModel.legs, id: \.self) { leg in
-                    MapPolyline(leg.polyline)
-                        .stroke(
-                            viewModel.dimsRouteLine ? Color.blue.opacity(0.35) : Color.blue,
-                            lineWidth: 5
-                        )
+                if viewModel.visibleRainSegments.isEmpty {
+                    ForEach(viewModel.legs, id: \.self) { leg in
+                        MapPolyline(leg.polyline)
+                            .stroke(
+                                viewModel.dimsRouteLine ? Color.blue.opacity(0.35) : Color.blue,
+                                lineWidth: 5
+                            )
+                    }
+                } else {
+                    ForEach(viewModel.visibleRainSegments) { segment in
+                        MapPolyline(coordinates: segment.coordinates)
+                            .stroke(
+                                viewModel.dimsRouteLine
+                                    ? segment.band.routeColor.opacity(0.35)
+                                    : segment.band.routeColor,
+                                lineWidth: 5
+                            )
+                    }
                 }
             }
 
@@ -1583,4 +1597,16 @@ private final class MapFitFrameProbe: UIView {
 
 #Preview {
     ContentView()
+}
+
+extension RainBand {
+    /// Route line colour: the usual blue when dry, orange for possible rain
+    /// (30%+), red for likely rain (60%+).
+    var routeColor: Color {
+        switch self {
+        case .dry: .blue
+        case .possible: .orange
+        case .likely: .red
+        }
+    }
 }
