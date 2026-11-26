@@ -13,7 +13,7 @@ struct FirstRunView: View {
             VStack(spacing: 0) {
                 ScrollView {
                     VStack(spacing: 24) {
-                        Image(systemName: "figure.outdoor.cycle")
+                        Image(systemName: RiderSymbol.name)
                             .font(.system(size: 56))
                             .symbolRenderingMode(.hierarchical)
                             .foregroundStyle(.tint)
