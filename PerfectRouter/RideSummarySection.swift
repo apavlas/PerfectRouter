@@ -1,6 +1,5 @@
 import SwiftUI
 import MapKit
-import MessageUI
 
 /// The ride's headline numbers (distance, time), recommended fuel stops with
 /// food paired to each, fuel-gap and rain warnings, and the navigation
@@ -9,7 +8,6 @@ struct RideSummarySection: View {
     let viewModel: RoutePlannerViewModel
 
     @State private var checkIns = RideCheckInController.shared
-    @State private var checkInText: CheckInText?
 
     var body: some View {
         Section {
@@ -177,14 +175,10 @@ struct RideSummarySection: View {
                 ActiveCheckInRow(
                     checkIn: active,
                     onArrived: {
-                        checkInText = CheckInText(recipients: active.recipients, body: active.arrivalMessage(), endsCheckIn: true)
+                        checkIns.compose(active.arrivalMessage(), endsCheckIn: true)
                     },
                     onLate: {
-                        checkInText = CheckInText(
-                            recipients: active.recipients,
-                            body: active.lateMessage(location: viewModel.currentLocation),
-                            endsCheckIn: false
-                        )
+                        checkIns.compose(active.lateMessage(location: viewModel.currentLocation), endsCheckIn: false)
                     },
                     onEnd: { checkIns.finish() }
                 )
@@ -208,21 +202,6 @@ struct RideSummarySection: View {
             } else {
                 FocusPlaceholderRow()
             }
-        }
-        .sheet(item: $checkInText) { text in
-            MessageComposer(
-                recipients: text.recipients,
-                body: text.body,
-                onFinish: { finishCheckInText(text) },
-                onResult: { result in
-                    // A start text that never went out is no check-in: the
-                    // group doesn't know to expect anything.
-                    if text.startsCheckIn, result != .sent { checkIns.finish() }
-                    // "I've arrived" ends the check-in only once it's sent.
-                    if text.endsCheckIn, result == .sent { checkIns.finish() }
-                }
-            )
-            .ignoresSafeArea()
         }
     }
 
@@ -295,18 +274,8 @@ struct RideSummarySection: View {
             ridingTime: viewModel.totalExpectedTravelTime,
             stopCount: intermediateStops + viewModel.fuelStops.count
         )
-        checkIns.start(checkIn)
-        checkInText = CheckInText(recipients: checkIn.recipients, body: checkIn.startMessage(), endsCheckIn: false, then: target)
+        checkIns.propose(checkIn, then: target)
         return true
-    }
-
-    private func finishCheckInText(_ text: CheckInText) {
-        checkInText = nil
-        switch text.then {
-        case .apple: openAppleMaps()
-        case .google: openGoogleMaps()
-        case nil: break
-        }
     }
 
     private func formattedDuration(_ seconds: TimeInterval) -> String {

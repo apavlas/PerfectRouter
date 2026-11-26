@@ -1,5 +1,6 @@
 import CoreLocation
 import Foundation
+import MessageUI
 import Observation
 import UserNotifications
 
@@ -210,13 +211,52 @@ final class RideCheckInController {
         return group
     }
 
-    func start(_ checkIn: RideCheckIn) {
+    /// The text to the group being composed. Presented from the planning
+    /// List in `ContentView`: a sheet on a List section doesn't present when
+    /// its row handles the tap.
+    var composing: CheckInText?
+
+    /// A check-in waiting for its start text to be sent. Not saved and no
+    /// reminders until then, so a cancelled text or a killed app leaves no
+    /// check-in the group never heard about.
+    private var pending: RideCheckIn?
+
+    /// Opens the start text for `checkIn`; the ride hands off to `then` once
+    /// the composer closes.
+    func propose(_ checkIn: RideCheckIn, then target: CheckInText.Navigation) {
+        pending = checkIn
+        composing = CheckInText(
+            recipients: checkIn.recipients,
+            body: checkIn.startMessage(),
+            endsCheckIn: false,
+            then: target
+        )
+    }
+
+    /// Opens a text to the active check-in's group.
+    func compose(_ body: String, endsCheckIn: Bool) {
+        guard let active else { return }
+        composing = CheckInText(recipients: active.recipients, body: body, endsCheckIn: endsCheckIn)
+    }
+
+    /// The composer's result. A sent start text activates the check-in; a
+    /// sent "I've arrived" ends it.
+    func composerFinished(_ text: CheckInText, result: MessageComposeResult) {
+        if text.startsCheckIn {
+            if result == .sent, let pending { start(pending) }
+            pending = nil
+        }
+        if text.endsCheckIn, result == .sent { finish() }
+    }
+
+    private func start(_ checkIn: RideCheckIn) {
         active = checkIn
         store.save(checkIn)
         Task { await notifier.schedule(checkIn) }
     }
 
     func finish() {
+        pending = nil
         active = nil
         store.save(nil)
         notifier.cancel()
