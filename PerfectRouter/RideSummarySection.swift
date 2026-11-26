@@ -150,7 +150,14 @@ struct RideSummarySection: View {
                     Button {
                         launchGoogleMaps()
                     } label: {
-                        Label("Open in Google Maps", systemImage: "location.north.line.fill")
+                        VStack(alignment: .leading, spacing: 2) {
+                            Label("Open in Google Maps", systemImage: "location.north.line.fill")
+                            if NavigationLauncher.googleMapsDropsStops(viewModel.waypoints) {
+                                Text("Google Maps takes \(NavigationLauncher.googleMapsMaxWaypoints) stops, so only the first \(NavigationLauncher.googleMapsMaxWaypoints) go across. Apple Maps keeps them all.")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                     }
                 } else {
                     FocusPlaceholderRow()
@@ -243,12 +250,12 @@ struct RideSummarySection: View {
 
     private func openAppleMaps() {
         viewModel.logCurrentRide()
-        NavigationLauncher.openInAppleMaps(viewModel.waypoints)
+        NavigationLauncher.openInAppleMaps(viewModel.waypoints, legs: viewModel.legs, style: viewModel.routeStyle)
     }
 
     private func openGoogleMaps() {
         viewModel.logCurrentRide()
-        NavigationLauncher.openInGoogleMaps(viewModel.waypoints)
+        NavigationLauncher.openInGoogleMaps(viewModel.waypoints, legs: viewModel.legs, style: viewModel.routeStyle)
     }
 
     private var checkInGroupBinding: Binding<UUID?> {

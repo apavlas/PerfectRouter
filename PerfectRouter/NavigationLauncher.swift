@@ -70,28 +70,165 @@ enum NavigationLauncher {
         UIApplication.shared.open(url)
     }
 
-    /// A `comgooglemaps://` directions URL for the route, or nil if invalid.
+    /// Most intermediate stops Google Maps takes from a directions link.
+    static let googleMapsMaxWaypoints = 9
+
+    /// Google's documented cross-platform directions link. It opens the
+    /// Google Maps app when installed and keeps up to 9 middle stops, in
+    /// order. The old `comgooglemaps://` scheme has no documented stops
+    /// parameter, so Google could drop every middle stop.
+    ///
+    /// More than 9 middle stops: the first 9 are kept, and
+    /// `googleMapsDropsStops` tells the summary to say so.
     static func googleMapsURL(_ waypoints: [Waypoint]) -> URL? {
         guard waypoints.count >= 2,
               let origin = waypoints.first,
               let destination = waypoints.last else { return nil }
-
-        let intermediate = waypoints.dropFirst().dropLast()
-            .map { "\($0.coordinate.latitude),\($0.coordinate.longitude)" }
-            .joined(separator: "|")
-
-        var components = URLComponents()
-        components.scheme = "comgooglemaps"
-        components.host = ""
-        components.queryItems = [
-            URLQueryItem(name: "saddr", value: "\(origin.coordinate.latitude),\(origin.coordinate.longitude)"),
-            URLQueryItem(name: "daddr", value: "\(destination.coordinate.latitude),\(destination.coordinate.longitude)"),
-            URLQueryItem(name: "directionsmode", value: "driving"),
-        ]
-        if !intermediate.isEmpty {
-            components.queryItems?.append(URLQueryItem(name: "waypoints", value: intermediate))
+        let text = { (waypoint: Waypoint) in
+            "\(waypoint.coordinate.latitude),\(waypoint.coordinate.longitude)"
         }
-        return components.url
+        let middle = waypoints.dropFirst().dropLast().prefix(googleMapsMaxWaypoints).map(text)
+
+        var components = URLComponents(string: "https://www.google.com/maps/dir/")
+        var items = [
+            URLQueryItem(name: "api", value: "1"),
+            URLQueryItem(name: "origin", value: text(origin)),
+            URLQueryItem(name: "destination", value: text(destination)),
+            URLQueryItem(name: "travelmode", value: "driving"),
+        ]
+        if !middle.isEmpty {
+            items.append(URLQueryItem(name: "waypoints", value: middle.joined(separator: "|")))
+        }
+        components?.queryItems = items
+        return components?.url
+    }
+
+    /// True when a Google hand-off has to leave out some of the rider's stops.
+    static func googleMapsDropsStops(_ waypoints: [Waypoint]) -> Bool {
+        waypoints.count - 2 > googleMapsMaxWaypoints
+    }
+
+    // MARK: - Keeping the planned line
+
+    /// Most stops, start and destination included, sent to Apple Maps.
+    /// Apple's multi-stop routes take 15; one is kept spare.
+    static let appleMapsMaxStops = 14
+
+    /// Most shaping points added to one hand-off. Apple and Google treat each
+    /// as a stop ("Arrived"), so a few keep the line without a prompt every
+    /// few miles.
+    static let maxShapingPoints = 6
+
+    /// Legs shorter than this get no shaping point: the nav app's own route
+    /// between two close stops is the same road.
+    static let minimumShapedLegMeters: CLLocationDistance = 5_000
+
+    /// The stops to hand off so the navigation app follows the planned line,
+    /// not its own fastest route. Every rider stop is kept, in order. Spare
+    /// stop slots (up to `maxTotal`) go to points on the planned line,
+    /// shared between legs by length and spaced evenly along each.
+    ///
+    /// Fastest needs none: the nav app would pick the same line. For other
+    /// styles the points come from the planned geometry, so they sit on the
+    /// roads PerfectRouter chose.
+    static func handoffWaypoints(
+        _ waypoints: [Waypoint],
+        line: [CLLocationCoordinate2D],
+        style: RouteStyle,
+        maxTotal: Int
+    ) -> [Waypoint] {
+        guard style != .fastest,
+              waypoints.count >= 2,
+              line.count >= 2,
+              maxTotal > waypoints.count else { return waypoints }
+
+        // Running distance along the line, and where each rider stop sits on
+        // it. Stops are matched in order so a loop's start and end don't
+        // swap places.
+        var cumulative: [CLLocationDistance] = [0]
+        cumulative.reserveCapacity(line.count)
+        for index in 1..<line.count {
+            cumulative.append(cumulative[index - 1] + meters(line[index - 1], line[index]))
+        }
+        var stopIndices: [Int] = []
+        var searchFrom = 0
+        for (position, waypoint) in waypoints.enumerated() {
+            if position == waypoints.count - 1 {
+                stopIndices.append(line.count - 1)
+                break
+            }
+            if position == 0 {
+                stopIndices.append(0)
+                continue
+            }
+            var best = searchFrom
+            var bestDistance = CLLocationDistance.greatestFiniteMagnitude
+            for index in searchFrom..<line.count {
+                let distance = meters(line[index], waypoint.coordinate)
+                if distance < bestDistance {
+                    bestDistance = distance
+                    best = index
+                }
+            }
+            stopIndices.append(best)
+            searchFrom = best
+        }
+
+        let legLengths = zip(stopIndices, stopIndices.dropFirst()).map { cumulative[$1] - cumulative[$0] }
+        let shapedTotal = legLengths.filter { $0 >= minimumShapedLegMeters }.reduce(0, +)
+        let spare = min(maxTotal - waypoints.count, maxShapingPoints)
+        guard shapedTotal > 0, spare > 0 else { return waypoints }
+
+        // Share the spare slots by length, largest remainders first.
+        var counts = legLengths.map { $0 >= minimumShapedLegMeters ? Int(Double(spare) * $0 / shapedTotal) : 0 }
+        var left = spare - counts.reduce(0, +)
+        let byRemainder = legLengths.indices
+            .filter { legLengths[$0] >= minimumShapedLegMeters }
+            .sorted {
+                let a = Double(spare) * legLengths[$0] / shapedTotal - Double(counts[$0])
+                let b = Double(spare) * legLengths[$1] / shapedTotal - Double(counts[$1])
+                return a > b
+            }
+        for leg in byRemainder where left > 0 {
+            counts[leg] += 1
+            left -= 1
+        }
+
+        var result: [Waypoint] = []
+        for leg in legLengths.indices {
+            result.append(waypoints[leg])
+            let start = cumulative[stopIndices[leg]]
+            let length = legLengths[leg]
+            let n = counts[leg]
+            guard n > 0 else { continue }
+            for k in 1...n {
+                let target = start + length * Double(k) / Double(n + 1)
+                // A vertex of the planned line, so the point is on its road.
+                var index = stopIndices[leg]
+                while index < stopIndices[leg + 1], cumulative[index] < target { index += 1 }
+                result.append(Waypoint(name: "Via", coordinate: line[index]))
+            }
+        }
+        result.append(waypoints[waypoints.count - 1])
+        return result
+    }
+
+    /// Opens the ride in Apple Maps so it follows the planned line.
+    static func openInAppleMaps(_ waypoints: [Waypoint], legs: [MKRoute], style: RouteStyle) {
+        let line = legs.flatMap { RouteGeometry.coordinates(of: $0.polyline) }
+        openInAppleMaps(handoffWaypoints(waypoints, line: line, style: style, maxTotal: appleMapsMaxStops))
+    }
+
+    /// Opens the ride in Google Maps so it follows the planned line. Rider
+    /// stops come first; shaping points only use slots they leave free.
+    static func openInGoogleMaps(_ waypoints: [Waypoint], legs: [MKRoute], style: RouteStyle) {
+        let line = legs.flatMap { RouteGeometry.coordinates(of: $0.polyline) }
+        openInGoogleMaps(handoffWaypoints(waypoints, line: line, style: style, maxTotal: googleMapsMaxWaypoints + 2))
+    }
+
+    private static func meters(_ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D) -> CLLocationDistance {
+        CLLocation(latitude: a.latitude, longitude: a.longitude)
+            .distance(from: CLLocation(latitude: b.latitude, longitude: b.longitude))
     }
 
     /// A shareable Apple Maps web link for a one-shot location share.
