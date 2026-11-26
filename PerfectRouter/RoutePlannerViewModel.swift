@@ -22,6 +22,8 @@ private struct TwistyPoolEntry {
 private struct CachedLeg {
     var routes: [MKRoute]
     var usedFastestFallback: Bool
+    /// FUEL-10: the fuel cap this leg was chosen under, nil when uncapped.
+    var cap: CLLocationDistance? = nil
 }
 
 /// One station or waypoint to measure along the route. File-level so the
@@ -3558,24 +3560,23 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         for i in 0..<legCount {
             let origin = waypoints[i]
             let destination = waypoints[i + 1]
-            if i > 0, Self.isTankFill(
-                isGasFill: origin.isGasFill,
-                isOvernight: origin.isOvernight,
-                overnightHasGas: overnightHasGas(at: i)
-            ) {
+            // An overnight starts a new day. Whether it has gas is measured
+            // on the published legs, which still describe the old waypoint
+            // list during this pass, so it neither caps nor anchors a hop.
+            if i > 0, origin.isGasFill {
                 ridden = 0
                 hopStartedAtPlacedFill = true
+            } else if i > 0, origin.isOvernight {
+                ridden = 0
+                hopStartedAtPlacedFill = false
             }
             // A fuel stop Select recommended placed at mile 85 of a 100 mi
             // tank must not become mile 102 because this leg picked a longer
             // curvy alternate (build 15, Asheville to Blowing Rock).
             let legCap = Self.fuelLegDistanceCap(
                 ridden: ridden,
-                endsAtFill: i + 1 < legCount && Self.isTankFill(
-                    isGasFill: destination.isGasFill,
-                    isOvernight: destination.isOvernight,
-                    overnightHasGas: overnightHasGas(at: i + 1)
-                ),
+                endsAtFill: i + 1 < legCount && destination.isGasFill,
+                endsDay: i + 1 < legCount && destination.isOvernight,
                 startedAtPlacedFill: hopStartedAtPlacedFill,
                 tank: tank
             )
@@ -3599,6 +3600,7 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                    Self.cachedLegFits(
                        distance: cached.routes.reduce(0) { $0 + $1.distance },
                        usedFastestFallback: cached.usedFastestFallback,
+                       cachedCap: cached.cap,
                        cap: legCap
                    ) {
                     outcome = (cached.routes, cached.usedFastestFallback)
@@ -3668,7 +3670,8 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
                 }
                 legCache[key] = CachedLeg(
                     routes: outcome.routes,
-                    usedFastestFallback: outcome.usedFastestFallback
+                    usedFastestFallback: outcome.usedFastestFallback,
+                    cap: legCap
                 )
                 if outcome.usedFastestFallback { missedTwistyLegs += 1 }
                 newLegs.append(contentsOf: outcome.routes)
@@ -3916,12 +3919,14 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
     /// cap is 0 and the leg rides MapKit's top route. A leg later in a hop
     /// that began at a fuel stop on the route is held to what the reserve
     /// has left, or not capped once the reserve is spent (the fuel list then
-    /// plans the next stop on the new line). Legs from the ride start that
-    /// reach no fuel stop are not capped: no stop on them can move.
-    /// `ridden` is road meters since the last fill.
+    /// plans the next stop on the new line). A leg into an overnight is not
+    /// capped: the day ends there. Legs from the ride start that reach no
+    /// fuel stop are not capped: no stop on them can move.
+    /// `ridden` is road meters since the last fill or overnight.
     nonisolated static func fuelLegDistanceCap(
         ridden: CLLocationDistance,
         endsAtFill: Bool,
+        endsDay: Bool = false,
         startedAtPlacedFill: Bool,
         tank: CLLocationDistance,
         safetyFactor: Double = fuelSafetyFactor
@@ -3929,17 +3934,25 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         guard tank > 0, tank.isFinite, ridden.isFinite else { return nil }
         let left = tank * safetyFactor - max(0, ridden)
         if endsAtFill { return max(0, left) }
+        if endsDay { return nil }
         if startedAtPlacedFill, left > 0 { return left }
         return nil
     }
 
-    /// A cached leg is reused only when it still fits this pass's cap. A
-    /// Fastest fallback always fits: it is what an over-cap leg rides anyway.
+    /// A cached leg is reused only when this pass would make the same pick.
+    /// It must fit this pass's cap (a Fastest fallback always fits: it is
+    /// what an over-cap leg rides anyway). A leg chosen under a cap is
+    /// routed again once the cap grows or goes away, so removing a fuel stop
+    /// lets the next leg take the curvier line it lost to that cap.
     nonisolated static func cachedLegFits(
         distance: CLLocationDistance,
         usedFastestFallback: Bool,
+        cachedCap: CLLocationDistance? = nil,
         cap: CLLocationDistance?
     ) -> Bool {
+        if let cachedCap {
+            guard let cap, cap <= cachedCap else { return false }
+        }
         guard let cap else { return true }
         return usedFastestFallback || distance <= cap
     }

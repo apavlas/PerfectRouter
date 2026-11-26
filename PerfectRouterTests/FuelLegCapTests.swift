@@ -80,4 +80,30 @@ final class FuelLegCapTests: XCTestCase {
         XCTAssertTrue(RoutePlannerViewModel.cachedLegFits(distance: 84 * mile, usedFastestFallback: false, cap: 85 * mile))
         XCTAssertTrue(RoutePlannerViewModel.cachedLegFits(distance: 102 * mile, usedFastestFallback: true, cap: 85 * mile))
     }
+
+    func testLegIntoAnOvernightIsNotCapped() {
+        XCTAssertNil(RoutePlannerViewModel.fuelLegDistanceCap(
+            ridden: 10 * mile,
+            endsAtFill: false,
+            endsDay: true,
+            startedAtPlacedFill: true,
+            tank: 100 * mile
+        ))
+    }
+
+    func testLegChosenUnderACapIsRoutedAgainWhenTheCapGrowsOrGoes() {
+        // Fastest fallback picked under an 85 mi cap.
+        XCTAssertTrue(RoutePlannerViewModel.cachedLegFits(
+            distance: 80 * mile, usedFastestFallback: true, cachedCap: 85 * mile, cap: 85 * mile
+        ))
+        XCTAssertTrue(RoutePlannerViewModel.cachedLegFits(
+            distance: 80 * mile, usedFastestFallback: true, cachedCap: 85 * mile, cap: 60 * mile
+        ))
+        XCTAssertFalse(RoutePlannerViewModel.cachedLegFits(
+            distance: 80 * mile, usedFastestFallback: true, cachedCap: 85 * mile, cap: nil
+        ))
+        XCTAssertFalse(RoutePlannerViewModel.cachedLegFits(
+            distance: 80 * mile, usedFastestFallback: true, cachedCap: 85 * mile, cap: 95 * mile
+        ))
+    }
 }
