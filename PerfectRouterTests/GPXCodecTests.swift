@@ -60,20 +60,21 @@ final class GPXCodecTests: XCTestCase {
             waypoint("A", lat: 33.0, lon: -82.0),
             waypoint("B", lat: 34.0, lon: -81.0),
         ]
+        // The middle point is well off the A→B line, so thinning keeps it.
         let track = [
             CLLocationCoordinate2D(latitude: 33.0, longitude: -82.0),
-            CLLocationCoordinate2D(latitude: 33.5, longitude: -81.5),
+            CLLocationCoordinate2D(latitude: 33.8, longitude: -81.5),
             CLLocationCoordinate2D(latitude: 34.0, longitude: -81.0),
         ]
         let data = GPXCodec.encode(waypoints: waypoints, trackCoordinates: track, name: "Ride")
         let xml = String(decoding: data, as: UTF8.self)
         XCTAssertTrue(xml.contains("<trk>"))
-        XCTAssertTrue(xml.contains("<trkpt lat=\"33.5\" lon=\"-81.5\">"))
+        XCTAssertTrue(xml.contains("<trkpt lat=\"33.8\" lon=\"-81.5\">"))
 
         let decoded = try GPXCodec.decode(data)
         XCTAssertEqual(decoded.waypoints.count, 2)
         XCTAssertEqual(decoded.trackCoordinates.count, 3)
-        XCTAssertEqual(decoded.trackCoordinates[1].latitude, 33.5, accuracy: 0.0001)
+        XCTAssertEqual(decoded.trackCoordinates[1].latitude, 33.8, accuracy: 0.0001)
     }
 
     func testEncodeEscapesXMLSpecialCharacters() {
@@ -179,5 +180,77 @@ final class GPXCodecTests: XCTestCase {
         // A later normal import clears the old notice.
         XCTAssertTrue(viewModel.importGPX(data: GPXCodec.encode(waypoints: manyStops(3))))
         XCTAssertNil(viewModel.importNotice)
+    }
+
+    // MARK: - Route section and thinning
+
+    func testEncodeWritesStopsAsAnOrderedRouteBeforeTheTrack() {
+        let waypoints = [
+            waypoint("Start", lat: 33.0, lon: -82.0),
+            waypoint("Gas", lat: 33.5, lon: -81.6),
+            waypoint("End", lat: 34.0, lon: -81.0),
+        ]
+        let track = [
+            CLLocationCoordinate2D(latitude: 33.0, longitude: -82.0),
+            CLLocationCoordinate2D(latitude: 33.8, longitude: -81.5),
+            CLLocationCoordinate2D(latitude: 34.0, longitude: -81.0),
+        ]
+        let xml = String(decoding: GPXCodec.encode(waypoints: waypoints, trackCoordinates: track, name: "Ride"), as: UTF8.self)
+        guard let lastWpt = xml.range(of: "</wpt>", options: .backwards),
+              let rte = xml.range(of: "<rte>"),
+              let trk = xml.range(of: "<trk>") else {
+            return XCTFail("missing wpt, rte or trk")
+        }
+        // GPX 1.1 order: wpt*, rte*, trk*.
+        XCTAssertLessThan(lastWpt.upperBound, rte.lowerBound)
+        XCTAssertLessThan(rte.upperBound, trk.lowerBound)
+        XCTAssertEqual(xml.components(separatedBy: "<rtept ").count - 1, 3)
+        let start = xml.range(of: "<rtept lat=\"33.0\"")!
+        let gas = xml.range(of: "<rtept lat=\"33.5\"")!
+        let end = xml.range(of: "<rtept lat=\"34.0\"")!
+        XCTAssertLessThan(start.lowerBound, gas.lowerBound)
+        XCTAssertLessThan(gas.lowerBound, end.lowerBound)
+    }
+
+    func testDecodeFallsBackToRoutePoints() throws {
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <gpx version="1.1" creator="Garmin" xmlns="http://www.topografix.com/GPX/1/1">
+          <rte>
+            <name>Loop</name>
+            <rtept lat="40.0" lon="-74.0"><name>Home</name></rtept>
+            <rtept lat="40.5" lon="-73.5"></rtept>
+            <rtept lat="41.0" lon="-73.0"><name>Diner</name></rtept>
+          </rte>
+        </gpx>
+        """
+        let decoded = try GPXCodec.decode(Data(xml.utf8))
+        XCTAssertEqual(decoded.waypoints.map(\.name), ["Home", "Stop 2", "Diner"])
+        XCTAssertNil(decoded.name, "a route's name is not the file's metadata name")
+    }
+
+    func testThinningDropsPointsOnAStraightLine() {
+        let line = (0...1_000).map { CLLocationCoordinate2D(latitude: 35, longitude: -100 + Double($0) * 0.001) }
+        let thinned = GPXCodec.thinned(line)
+        XCTAssertLessThanOrEqual(thinned.count, 3, "only the ends (and chunk joins) remain")
+        XCTAssertEqual(thinned.first?.longitude, line.first?.longitude)
+        XCTAssertEqual(thinned.last?.longitude, line.last?.longitude)
+    }
+
+    func testThinningKeepsCurves() {
+        // A zigzag 200 m either side of the axis: every corner must stay.
+        let zigzag = (0...20).map {
+            CLLocationCoordinate2D(latitude: 35 + ($0 % 2 == 0 ? 0 : 0.0018), longitude: -100 + Double($0) * 0.01)
+        }
+        XCTAssertEqual(GPXCodec.thinned(zigzag).count, zigzag.count)
+    }
+
+    func testThinningRespectsThePointCap() {
+        let zigzag = (0..<6_000).map {
+            CLLocationCoordinate2D(latitude: 35 + ($0 % 2 == 0 ? 0 : 0.001), longitude: -100 + Double($0) * 0.0005)
+        }
+        let thinned = GPXCodec.thinned(zigzag, maxPoints: 1_000)
+        XCTAssertLessThanOrEqual(thinned.count, 1_000)
+        XCTAssertGreaterThanOrEqual(thinned.count, 2)
     }
 }

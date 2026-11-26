@@ -2,9 +2,11 @@ import Foundation
 import CoreLocation
 
 /// Encodes and decodes GPS Exchange Format (GPX 1.1) snapshots of a planned
-/// ride. Export always writes plan stops as `<wpt>`; when a route polyline is
-/// available it also writes a `<trk>`. Import maps `<wpt>` (falling back to
-/// track start/end) into waypoints the planner can route.
+/// ride. Export writes plan stops as `<wpt>`, the same stops in ride order as
+/// one `<rte>` (what Garmin and TomTom units import as a route or trip), and,
+/// when a route polyline is available, the line as a thinned `<trk>`. Import
+/// maps `<wpt>` (falling back to `<rte>` points, then track start/end) into
+/// waypoints the planner can route.
 enum GPXCodec {
 
     /// A decoded GPX document: named waypoints plus an optional track line.
@@ -44,6 +46,94 @@ enum GPXCodec {
             let index = (Double(slot) * step).rounded()
             return waypoints[Int(index)]
         }
+    }
+
+    /// Most points written to the exported `<trk>`. Older Garmin units keep
+    /// 10,000 points per track and drop or refuse the rest; a raw MapKit line
+    /// for a long ride can be several times that.
+    static let maxTrackPoints = 10_000
+
+    /// Starting tolerance for thinning the exported line. Points closer than
+    /// this to the simplified line are dropped; 10 m is under a lane's width
+    /// of drift at road scale, so curves keep their shape.
+    static let trackToleranceMeters: CLLocationDistance = 10
+
+    /// Douglas–Peucker simplification. Keeps the first and last point and
+    /// every point more than `toleranceMeters` off the simplified line. If
+    /// the result is still over `maxPoints`, the tolerance doubles until it
+    /// fits.
+    static func thinned(
+        _ coordinates: [CLLocationCoordinate2D],
+        toleranceMeters: CLLocationDistance = trackToleranceMeters,
+        maxPoints: Int = maxTrackPoints
+    ) -> [CLLocationCoordinate2D] {
+        guard coordinates.count > 2 else { return coordinates }
+        // Local flat projection around the first point, in meters. Good to
+        // well under a meter per kilometer at ride scale.
+        let origin = coordinates[0]
+        let metersPerDegreeLat = 111_132.0
+        let metersPerDegreeLon = 111_320.0 * cos(origin.latitude * .pi / 180)
+        let points = coordinates.map {
+            (x: ($0.longitude - origin.longitude) * metersPerDegreeLon,
+             y: ($0.latitude - origin.latitude) * metersPerDegreeLat)
+        }
+
+        let chunkSize = 2_000
+        func simplify(tolerance: Double) -> [CLLocationCoordinate2D] {
+            var keep = [Bool](repeating: false, count: points.count)
+            // Simplify in chunks of `chunkSize` points, keeping each chunk's
+            // ends. Plain Douglas–Peucker can go quadratic on a long, evenly
+            // wiggly line; chunks cap the cost on a multi-day ride.
+            var stack: [(Int, Int)] = []
+            var chunkStart = 0
+            while chunkStart < points.count - 1 {
+                let chunkEnd = min(chunkStart + chunkSize, points.count - 1)
+                keep[chunkStart] = true
+                keep[chunkEnd] = true
+                stack.append((chunkStart, chunkEnd))
+                chunkStart = chunkEnd
+            }
+            while let (first, last) = stack.popLast() {
+                guard last - first > 1 else { continue }
+                let a = points[first]
+                let b = points[last]
+                let dx = b.x - a.x
+                let dy = b.y - a.y
+                let lengthSquared = dx * dx + dy * dy
+                var farthest = first
+                var farthestDistance = 0.0
+                for index in (first + 1)..<last {
+                    let p = points[index]
+                    let distance: Double
+                    if lengthSquared == 0 {
+                        distance = ((p.x - a.x) * (p.x - a.x) + (p.y - a.y) * (p.y - a.y)).squareRoot()
+                    } else {
+                        let t = max(0, min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / lengthSquared))
+                        let cx = a.x + t * dx - p.x
+                        let cy = a.y + t * dy - p.y
+                        distance = (cx * cx + cy * cy).squareRoot()
+                    }
+                    if distance > farthestDistance {
+                        farthestDistance = distance
+                        farthest = index
+                    }
+                }
+                if farthestDistance > tolerance {
+                    keep[farthest] = true
+                    stack.append((first, farthest))
+                    stack.append((farthest, last))
+                }
+            }
+            return coordinates.indices.compactMap { keep[$0] ? coordinates[$0] : nil }
+        }
+
+        var tolerance = max(toleranceMeters, 0.1)
+        var result = simplify(tolerance: tolerance)
+        while result.count > max(maxPoints, 2) {
+            tolerance *= 2
+            result = simplify(tolerance: tolerance)
+        }
+        return result
     }
 
     // MARK: - Filename
@@ -103,9 +193,26 @@ enum GPXCodec {
             """
         }
 
-        let track = trackCoordinates.filter(\.isValidLocation)
+        let routeName = name.flatMap { $0.isEmpty ? nil : $0 } ?? "Route"
+
+        // The stops again, in ride order, as a route. GPX 1.1 requires
+        // `<rte>` after every `<wpt>` and before any `<trk>`.
+        let stops = waypoints.filter { $0.coordinate.isValidLocation }
+        if stops.count >= 2 {
+            xml += "  <rte>\n"
+            xml += "    <name>\(escape(routeName))</name>\n"
+            for stop in stops {
+                let coord = stop.coordinate
+                xml += "    <rtept lat=\"\(coord.latitude)\" lon=\"\(coord.longitude)\">\n"
+                xml += "      <name>\(escape(stop.name))</name>\n"
+                xml += "    </rtept>\n"
+            }
+            xml += "  </rte>\n"
+        }
+
+        let track = thinned(trackCoordinates.filter(\.isValidLocation))
         if !track.isEmpty {
-            let trackName = name.flatMap { $0.isEmpty ? nil : $0 } ?? "Route"
+            let trackName = routeName
             xml += "  <trk>\n"
             xml += "    <name>\(escape(trackName))</name>\n"
             xml += "    <trkseg>\n"
@@ -135,6 +242,12 @@ enum GPXCodec {
 
         var waypoints = parser.waypoints.filter { $0.coordinate.isValidLocation }
         let track = parser.trackCoordinates.filter(\.isValidLocation)
+
+        // A file from a GPS unit or another planner may carry its stops only
+        // as a route.
+        if waypoints.isEmpty {
+            waypoints = parser.routePoints.filter { $0.coordinate.isValidLocation }
+        }
 
         if waypoints.isEmpty {
             if let first = track.first, let last = track.last, track.count >= 2 {
@@ -181,9 +294,13 @@ private final class Parser: NSObject, XMLParserDelegate {
     var metadataName: String?
     var waypoints: [Waypoint] = []
     var trackCoordinates: [CLLocationCoordinate2D] = []
+    /// `<rtept>` points from the first `<rte>` only, in order.
+    var routePoints: [Waypoint] = []
 
     private var inMetadata = false
     private var inWPT = false
+    private var inRoutePoint = false
+    private var routeCount = 0
     private var currentLat: Double?
     private var currentLon: Double?
     private var currentName = ""
@@ -203,6 +320,13 @@ private final class Parser: NSObject, XMLParserDelegate {
             inMetadata = true
         case "wpt":
             inWPT = true
+            currentLat = Double(attributeDict["lat"] ?? "")
+            currentLon = Double(attributeDict["lon"] ?? "")
+            currentName = ""
+        case "rte":
+            routeCount += 1
+        case "rtept":
+            inRoutePoint = routeCount == 1
             currentLat = Double(attributeDict["lat"] ?? "")
             currentLon = Double(attributeDict["lon"] ?? "")
             currentName = ""
@@ -238,13 +362,25 @@ private final class Parser: NSObject, XMLParserDelegate {
             inMetadata = false
         case "name":
             let value = textBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
-            if inWPT {
+            if inWPT || inRoutePoint {
                 currentName = value
             } else if inMetadata, metadataName == nil {
                 metadataName = value
             }
             collectingName = false
             textBuffer = ""
+        case "rtept":
+            if inRoutePoint, let lat = currentLat, let lon = currentLon {
+                let coord = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+                if coord.isValidLocation {
+                    let label = currentName.isEmpty ? "Stop \(routePoints.count + 1)" : currentName
+                    routePoints.append(Waypoint(name: label, coordinate: coord))
+                }
+            }
+            inRoutePoint = false
+            currentLat = nil
+            currentLon = nil
+            currentName = ""
         case "wpt":
             if let lat = currentLat, let lon = currentLon {
                 let coord = CLLocationCoordinate2D(latitude: lat, longitude: lon)
