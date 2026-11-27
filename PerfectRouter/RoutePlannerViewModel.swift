@@ -434,6 +434,10 @@ final class RoutePlannerViewModel: NSObject, CLLocationManagerDelegate {
         }
     }
 
+    /// The legs to hand to Apple or Google Maps. Empty while a replan runs,
+    /// so edited stops are never shaped along the old line.
+    var handoffLegs: [MKRoute] { isCalculating ? [] : legs }
+
     /// Polyline length and drive time for the current legs. Rebuilt when
     /// `legs` changes. Row captions read this instead of walking the polyline.
     private var cachedDriveLegs: [FuelStopRidingTime.Leg] = []
