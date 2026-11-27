@@ -988,15 +988,24 @@ private struct FuelSelectionSpinnerSlot: View {
 }
 
 /// One tap checks every recommended fuel stop, in ride order, and adds
-/// them. Sits at the top of the buffered gas rows.
+/// them. Sits at the top of the buffered gas rows, styled like Navigate so
+/// a rider scrolling the plan doesn't miss it among the station rows.
 private struct SelectRecommendedFuelButton: View {
     let viewModel: RoutePlannerViewModel
 
     var body: some View {
-        Button(viewModel.selectRecommendedButtonTitle) {
+        Button {
             viewModel.startRecommendedFuelSelection()
+        } label: {
+            Label(viewModel.selectRecommendedButtonTitle, systemImage: "fuelpump.fill")
+                .frame(maxWidth: .infinity)
+                .font(.headline)
         }
+        .buttonStyle(.borderedProminent)
         .accessibilityIdentifier(AccessibilityID.selectRecommended)
+        .accessibilityLabel(viewModel.selectRecommendedButtonTitle)
+        .listRowInsets(EdgeInsets())
+        .listRowBackground(Color.clear)
     }
 }
 
