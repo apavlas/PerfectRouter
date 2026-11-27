@@ -108,6 +108,14 @@ struct RideSummarySection: View {
                 } else {
                     FocusPlaceholderRow()
                 }
+                // Fuel comes before the hand-off: Select recommended sits
+                // above the style row and Navigate, with its spinner below it.
+                if viewModel.showsSelectRecommendedFuelButton {
+                    SelectRecommendedFuelButton(viewModel: viewModel)
+                } else {
+                    FocusPlaceholderRow()
+                }
+                FuelSelectionSpinnerSlot(viewModel: viewModel)
                 // Active style sits immediately above Navigate so the rider
                 // can see which line they're about to hand off. The element
                 // is only the style name: a combined label includes the
