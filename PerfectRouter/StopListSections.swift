@@ -42,12 +42,6 @@ struct GasStationsSection: View {
 
     var body: some View {
         Section("Recommended fuel") {
-                if !viewModel.selectableRecommendedFuelStops.isEmpty {
-                    SelectRecommendedFuelButton(viewModel: viewModel)
-                } else {
-                    FocusPlaceholderRow()
-                }
-                FuelSelectionSpinnerSlot(viewModel: viewModel)
                 if !viewModel.bufferedGasStops.isEmpty {
                     BufferedGasApplyRow(viewModel: viewModel)
                 } else {
@@ -533,12 +527,6 @@ struct SuggestionsSection: View {
         // another property becomes one cell, and the header stops toggling.
         Section {
             if viewModel.selectedCategory == .gas {
-                if viewModel.showsSelectRecommendedFuelButton {
-                    SelectRecommendedFuelButton(viewModel: viewModel)
-                } else {
-                    FocusPlaceholderRow()
-                }
-                FuelSelectionSpinnerSlot(viewModel: viewModel)
                 if !viewModel.bufferedGasStops.isEmpty {
                     BufferedGasApplyRow(viewModel: viewModel)
                 } else {
@@ -975,7 +963,7 @@ struct GasLoadFailedButton: View {
 
 /// Spinner row. This is the only view that reads the selecting flag, so
 /// the tap can paint it without rebuilding every fuel and suggestion label.
-private struct FuelSelectionSpinnerSlot: View {
+struct FuelSelectionSpinnerSlot: View {
     let viewModel: RoutePlannerViewModel
 
     var body: some View {
@@ -988,10 +976,11 @@ private struct FuelSelectionSpinnerSlot: View {
 }
 
 /// One tap checks every recommended fuel stop, in ride order, and adds
-/// them. Sits at the top of the buffered gas rows as a full-width tinted
-/// button, so a rider scrolling the plan doesn't miss it among the station
-/// rows. Bordered, not filled: Navigate stays the one prominent button.
-private struct SelectRecommendedFuelButton: View {
+/// them. Sits in the ride summary just above Navigate, as a full-width
+/// tinted button, so the rider adds fuel before handing off instead of
+/// scrolling past it in the station list. Bordered, not filled: Navigate
+/// stays the one prominent button.
+struct SelectRecommendedFuelButton: View {
     let viewModel: RoutePlannerViewModel
 
     var body: some View {
