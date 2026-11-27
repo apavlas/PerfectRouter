@@ -988,8 +988,9 @@ private struct FuelSelectionSpinnerSlot: View {
 }
 
 /// One tap checks every recommended fuel stop, in ride order, and adds
-/// them. Sits at the top of the buffered gas rows, styled like Navigate so
-/// a rider scrolling the plan doesn't miss it among the station rows.
+/// them. Sits at the top of the buffered gas rows as a full-width tinted
+/// button, so a rider scrolling the plan doesn't miss it among the station
+/// rows. Bordered, not filled: Navigate stays the one prominent button.
 private struct SelectRecommendedFuelButton: View {
     let viewModel: RoutePlannerViewModel
 
@@ -1001,7 +1002,8 @@ private struct SelectRecommendedFuelButton: View {
                 .frame(maxWidth: .infinity)
                 .font(.headline)
         }
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(.bordered)
+        .tint(.accentColor)
         .accessibilityIdentifier(AccessibilityID.selectRecommended)
         .accessibilityLabel(viewModel.selectRecommendedButtonTitle)
         .listRowInsets(EdgeInsets())
